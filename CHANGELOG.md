@@ -6,6 +6,29 @@ the changelog generator (git-cliff).
 
 ---
 
+## [0.1.3] - 2025-03-31
+### Features
+- *(assets)* Move default implementation to [Default] trait
+- *(pdf)* Implement before_spacing as breaks
+- *(config)* Parse before_spacing and add in the example file
+- *(styling)* Add before_spacing field to BasicTextStyle
+
+### Bug Fixes
+- *(markdown)* Enhance image parsing to handle invalid syntax gracefully
+- *(lib/markdown)* Improve example doc codes
+- *(markdown)* Use shorthanded struct initialization for emphasis init
+
+### Documentation
+- *(readme)* Expand library integration guide
+
+### Testing
+- *(markdown)* Add tests for standalone exclamation and image parsing
+- *(lib)* Covert both success and error cases
+- *(pdf)* Cover most cases except 'genpdfi' imports
+- *(markdown)* Cover all possible cases of lexer
+- *(styling)* Cover all cases in styling
+- *(config)* Add tests for each method except reading from config file
+
 ## [0.1.2] - 2024-12-01
 ### Features
 - *(cli)* Add URL input support for remote markdown files
