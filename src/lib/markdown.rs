@@ -206,7 +206,14 @@ impl Lexer {
                 }
             }
             '[' => self.parse_link()?,
-            '!' => self.parse_image()?,
+            '!' => {
+                // Check if this is a valid image start (! followed by [)
+                if self.position + 1 < self.input.len() && self.input[self.position + 1] == '[' {
+                    self.parse_image()?
+                } else {
+                    self.parse_text()?
+                }
+            }
             '<' if self.is_html_comment_start() => self.parse_html_comment()?,
             '\n' => self.parse_newline()?,
             _ => self.parse_text()?,
@@ -344,8 +351,10 @@ impl Lexer {
 
     /// Parses an image token, extracting alt text and URL
     fn parse_image(&mut self) -> Result<Token, LexerError> {
+        let start_pos = self.position;
         self.advance();
-        if self.current_char() == '[' {
+
+        if self.position < self.input.len() && self.current_char() == '[' {
             self.advance();
             let alt_text = self.read_until_char(']');
             self.advance(); // skip ']'
@@ -358,7 +367,9 @@ impl Lexer {
                 Err(LexerError::UnknownToken(alt_text))
             }
         } else {
-            Err(LexerError::UnknownToken("!".to_string()))
+            // If '!' is not followed by '[', treat it as regular text
+            self.position = start_pos;
+            self.parse_text()
         }
     }
 
@@ -480,7 +491,14 @@ impl Lexer {
     fn is_start_of_special_token(&self) -> bool {
         let ch = self.current_char();
         match ch {
-            '#' | '*' | '_' | '`' | '[' | '!' => true,
+            '#' | '*' | '_' | '`' | '[' => true,
+            '!' => {
+                if self.position + 1 < self.input.len() {
+                    self.input[self.position + 1] == '['
+                } else {
+                    false
+                }
+            }
             '<' => self.is_html_comment_start(),
             _ => false,
         }
