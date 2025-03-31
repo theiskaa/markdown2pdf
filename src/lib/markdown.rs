@@ -1035,4 +1035,25 @@ A paragraph with `code` and [link](url).
             assert_eq!(parse(input), expected);
         }
     }
+
+    #[test]
+    fn test_standalone_exclamation() {
+        let tokens = parse("Hello! World");
+        assert_eq!(tokens, vec![Token::Text("Hello! World".to_string())]);
+
+        let tokens = parse("This is exciting!");
+        assert_eq!(tokens, vec![Token::Text("This is exciting!".to_string())]);
+
+        let tokens = parse("Multiple marks!!");
+        assert_eq!(tokens, vec![Token::Text("Multiple marks!!".to_string())]);
+
+        let tokens = parse("![Alt text](image.png)");
+        assert_eq!(
+            tokens,
+            vec![Token::Image(
+                "Alt text".to_string(),
+                "image.png".to_string()
+            )]
+        );
+    }
 }
