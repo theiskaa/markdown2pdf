@@ -59,9 +59,9 @@ impl Pdf {
     /// determine the complete visual appearance and layout characteristics of the final generated
     /// PDF document.
     pub fn new(input: Vec<Token>, style: StyleMatch) -> Self {
-        let font_family = MdPdfFont::load_font_family(style.text.font_family)
+        let font_family = MdPdfFont::load_minimal_font_family(style.text.font_family, &style)
             .expect("Failed to load font family");
-        let code_font_family = MdPdfFont::load_font_family(style.code.font_family)
+        let code_font_family = MdPdfFont::load_minimal_font_family(style.code.font_family, &style)
             .expect("Failed to load code font family");
 
         Self {
