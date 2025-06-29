@@ -569,9 +569,9 @@ dependencies = [
 
 [[package]]
 name = "genpdfi"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "631d4da2e97f85b6cbbd4105d5a011d2645355b26fd35798e277c5ce6cde2b33"
+checksum = "199b58fd4cd43dccc9aac1fe0b6ccea12fd7bfaa98541a97eedd5233ce3daa39"
 dependencies = [
  "derive_more",
  "lopdf 0.26.0",

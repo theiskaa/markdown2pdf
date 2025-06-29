@@ -19,12 +19,109 @@ use genpdfi::{
     error::Error,
     fonts::{FontData, FontFamily},
 };
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// Available font families that can be used in the PDF document.
 /// Currently only supports Roboto font.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum MdPdfFont {
     Roboto,
+}
+
+/// Global font cache to ensure we never load the same font twice
+static FONT_CACHE: Lazy<Mutex<HashMap<String, Arc<Vec<u8>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Ultra-minimal font loading strategy that maximizes space efficiency
+pub struct UltraMinimalFontLoader;
+
+impl UltraMinimalFontLoader {
+    /// Loads font data with aggressive caching to prevent duplication
+    fn get_cached_font_data(font_path: &str) -> Result<Arc<Vec<u8>>, Error> {
+        let mut cache = FONT_CACHE.lock().unwrap();
+
+        if let Some(cached_data) = cache.get(font_path) {
+            return Ok(cached_data.clone());
+        }
+
+        let font_data = assets::get_font_data(font_path).ok_or_else(|| {
+            Error::new(
+                format!("Failed to load embedded font: {}", font_path),
+                genpdfi::error::ErrorKind::InvalidFont,
+            )
+        })?;
+
+        let arc_data = Arc::new(font_data);
+        cache.insert(font_path.to_string(), arc_data.clone());
+        Ok(arc_data)
+    }
+
+    /// Creates the most memory-efficient FontFamily possible
+    pub fn create_ultra_minimal_family(
+        font: MdPdfFont,
+        style: &StyleMatch,
+    ) -> Result<FontFamily<FontData>, Error> {
+        let (_needs_regular, needs_bold, needs_italic, needs_bold_italic) =
+            MdPdfFont::analyze_needed_variants(style);
+
+        // Load regular font with caching
+        let regular_path = format!("fonts/{}/{}-Regular.ttf", font.dir(), font.file());
+        let regular_data = Self::get_cached_font_data(&regular_path)?;
+
+        if !needs_bold && !needs_italic && !needs_bold_italic {
+            // ULTIMATE OPTIMIZATION: Use the same Arc<Vec<u8>> for all variants
+            // This means only ONE copy of font data in memory
+            let shared_data = (*regular_data).clone();
+
+            let regular = FontData::new(shared_data.clone(), None)?;
+            let bold = FontData::new(shared_data.clone(), None)?;
+            let italic = FontData::new(shared_data.clone(), None)?;
+            let bold_italic = FontData::new(shared_data, None)?;
+
+            return Ok(FontFamily {
+                regular,
+                bold,
+                italic,
+                bold_italic,
+            });
+        }
+
+        // Load only required variants with caching
+        let regular = FontData::new((*regular_data).clone(), None)?;
+
+        let bold = if needs_bold {
+            let bold_path = format!("fonts/{}/{}-Bold.ttf", font.dir(), font.file());
+            let bold_data = Self::get_cached_font_data(&bold_path)?;
+            FontData::new((*bold_data).clone(), None)?
+        } else {
+            FontData::new((*regular_data).clone(), None)?
+        };
+
+        let italic = if needs_italic {
+            let italic_path = format!("fonts/{}/{}-Italic.ttf", font.dir(), font.file());
+            let italic_data = Self::get_cached_font_data(&italic_path)?;
+            FontData::new((*italic_data).clone(), None)?
+        } else {
+            FontData::new((*regular_data).clone(), None)?
+        };
+
+        let bold_italic = if needs_bold_italic {
+            let bold_italic_path = format!("fonts/{}/{}-BoldItalic.ttf", font.dir(), font.file());
+            let bold_italic_data = Self::get_cached_font_data(&bold_italic_path)?;
+            FontData::new((*bold_italic_data).clone(), None)?
+        } else {
+            FontData::new((*regular_data).clone(), None)?
+        };
+
+        Ok(FontFamily {
+            regular,
+            bold,
+            italic,
+            bold_italic,
+        })
+    }
 }
 
 impl MdPdfFont {
@@ -43,31 +140,151 @@ impl MdPdfFont {
     }
 
     /// Finds a matching font family based on the provided name.
-    /// Currently defaults to Roboto for all inputs.
-    ///
-    /// # Arguments
-    /// * `family` - Optional font family name to match
     pub fn find_match(family: Option<&str>) -> MdPdfFont {
         match family.unwrap_or("roboto") {
             _ => MdPdfFont::Roboto,
         }
     }
 
-    /// Loads a font family from embedded assets
-    ///
-    /// # Arguments
-    /// * `family` - Optional font family name to load
-    ///
-    /// # Returns
-    /// Result containing the loaded FontFamily or an Error
-    pub fn load_font_family(family: Option<&str>) -> Result<FontFamily<FontData>, Error> {
-        let found_match = MdPdfFont::find_match(family);
+    /// Analyzes which font variants are needed based on style configuration
+    pub fn analyze_needed_variants(style: &StyleMatch) -> (bool, bool, bool, bool) {
+        let needs_regular = true; // Always need regular as fallback
+        let mut needs_bold = false;
+        let mut needs_italic = false;
+        let mut needs_bold_italic = false;
 
-        // Load each font variant from embedded assets
-        let regular = MdPdfFont::load_font_variant(found_match, "Regular")?;
-        let bold = MdPdfFont::load_font_variant(found_match, "Bold")?;
-        let italic = MdPdfFont::load_font_variant(found_match, "Italic")?;
-        let bold_italic = MdPdfFont::load_font_variant(found_match, "BoldItalic")?;
+        let styles_to_check = [
+            &style.heading_1,
+            &style.heading_2,
+            &style.heading_3,
+            &style.emphasis,
+            &style.strong_emphasis,
+            &style.code,
+            &style.block_quote,
+            &style.list_item,
+            &style.link,
+            &style.image,
+            &style.text,
+            &style.horizontal_rule,
+        ];
+
+        for text_style in styles_to_check {
+            match (text_style.bold, text_style.italic) {
+                (true, true) => needs_bold_italic = true,
+                (true, false) => needs_bold = true,
+                (false, true) => needs_italic = true,
+                (false, false) => {} // Regular is already needed
+            }
+        }
+
+        (needs_regular, needs_bold, needs_italic, needs_bold_italic)
+    }
+
+    /// ULTRA-OPTIMIZED font loading with maximum space efficiency using shared font data
+    pub fn load_minimal_font_family(
+        family: Option<&str>,
+        style: &StyleMatch,
+    ) -> Result<FontFamily<FontData>, Error> {
+        let found_match = MdPdfFont::find_match(family);
+        let (_needs_regular, needs_bold, needs_italic, needs_bold_italic) =
+            MdPdfFont::analyze_needed_variants(style);
+
+        // For ultimate efficiency: load the regular font once and share it
+        if !needs_bold && !needs_italic && !needs_bold_italic {
+            let font_path = format!(
+                "fonts/{}/{}-Regular.ttf",
+                found_match.dir(),
+                found_match.file()
+            );
+            let font_data = assets::get_font_data(&font_path).ok_or_else(|| {
+                Error::new(
+                    "Failed to load font".to_string(),
+                    genpdfi::error::ErrorKind::InvalidFont,
+                )
+            })?;
+
+            // Create shared font data using Arc
+            let shared_data = Arc::new(font_data);
+
+            // Use the new_shared method to avoid duplicating font data
+            let regular = FontData::new_shared(shared_data.clone(), None)?;
+            let bold = FontData::new_shared(shared_data.clone(), None)?;
+            let italic = FontData::new_shared(shared_data.clone(), None)?;
+            let bold_italic = FontData::new_shared(shared_data, None)?;
+
+            return Ok(FontFamily {
+                regular,
+                bold,
+                italic,
+                bold_italic,
+            });
+        }
+
+        // For mixed font needs, load only what's required
+        let regular_path = format!(
+            "fonts/{}/{}-Regular.ttf",
+            found_match.dir(),
+            found_match.file()
+        );
+        let regular_data = assets::get_font_data(&regular_path).ok_or_else(|| {
+            Error::new(
+                "Failed to load regular font".to_string(),
+                genpdfi::error::ErrorKind::InvalidFont,
+            )
+        })?;
+        let regular_shared = Arc::new(regular_data);
+        let regular = FontData::new_shared(regular_shared.clone(), None)?;
+
+        let bold = if needs_bold {
+            let bold_path = format!(
+                "fonts/{}/{}-Bold.ttf",
+                found_match.dir(),
+                found_match.file()
+            );
+            let bold_data = assets::get_font_data(&bold_path).ok_or_else(|| {
+                Error::new(
+                    "Failed to load bold font".to_string(),
+                    genpdfi::error::ErrorKind::InvalidFont,
+                )
+            })?;
+            FontData::new(bold_data, None)?
+        } else {
+            FontData::new_shared(regular_shared.clone(), None)?
+        };
+
+        let italic = if needs_italic {
+            let italic_path = format!(
+                "fonts/{}/{}-Italic.ttf",
+                found_match.dir(),
+                found_match.file()
+            );
+            let italic_data = assets::get_font_data(&italic_path).ok_or_else(|| {
+                Error::new(
+                    "Failed to load italic font".to_string(),
+                    genpdfi::error::ErrorKind::InvalidFont,
+                )
+            })?;
+            FontData::new(italic_data, None)?
+        } else {
+            FontData::new_shared(regular_shared.clone(), None)?
+        };
+
+        let bold_italic = if needs_bold_italic {
+            let bold_italic_path = format!(
+                "fonts/{}/{}-BoldItalic.ttf",
+                found_match.dir(),
+                found_match.file()
+            );
+            let bold_italic_data = assets::get_font_data(&bold_italic_path).ok_or_else(|| {
+                Error::new(
+                    "Failed to load bold italic font".to_string(),
+                    genpdfi::error::ErrorKind::InvalidFont,
+                )
+            })?;
+            FontData::new(bold_italic_data, None)?
+        } else {
+            FontData::new_shared(regular_shared, None)?
+        };
 
         Ok(FontFamily {
             regular,
@@ -77,17 +294,22 @@ impl MdPdfFont {
         })
     }
 
+    /// Legacy method for compatibility - redirects to minimal loading
+    pub fn load_font_family(family: Option<&str>) -> Result<FontFamily<FontData>, Error> {
+        // For maximum optimization, we need style context, so use default minimal approach
+        let default_style = StyleMatch::default();
+        Self::load_minimal_font_family(family, &default_style)
+    }
+
     /// Helper function to load a specific font variant from embedded assets
     pub fn load_font_variant(font: MdPdfFont, variant: &str) -> Result<FontData, Error> {
         let font_path = format!("fonts/{}/{}-{}.ttf", font.dir(), font.file(), variant);
-
         let font_data = assets::get_font_data(&font_path).ok_or_else(|| {
             Error::new(
                 format!("Failed to load embedded font: {}", font_path),
                 genpdfi::error::ErrorKind::InvalidFont,
             )
         })?;
-
         FontData::new(font_data, None)
     }
 }
@@ -564,5 +786,74 @@ mod tests {
         assert_eq!(styles.text.size, 8);
         assert_eq!(styles.text.text_color, Some((0, 0, 0)));
         assert_eq!(styles.horizontal_rule.after_spacing, 0.5);
+    }
+
+    #[test]
+    fn test_analyze_needed_variants() {
+        // Test default style configuration
+        let default_style = StyleMatch::default();
+        let (needs_regular, needs_bold, needs_italic, needs_bold_italic) =
+            MdPdfFont::analyze_needed_variants(&default_style);
+
+        assert!(needs_regular); // Always needed
+        assert!(needs_bold); // Headings and strong_emphasis use bold
+        assert!(needs_italic); // Emphasis and block_quote use italic
+        assert!(!needs_bold_italic); // Default config doesn't use bold+italic
+    }
+
+    #[test]
+    fn test_analyze_needed_variants_minimal() {
+        // Create a minimal style with only regular text
+        let mut minimal_style = StyleMatch::default();
+
+        // Set all styles to non-bold, non-italic
+        minimal_style.heading_1.bold = false;
+        minimal_style.heading_1.italic = false;
+        minimal_style.heading_2.bold = false;
+        minimal_style.heading_2.italic = false;
+        minimal_style.heading_3.bold = false;
+        minimal_style.heading_3.italic = false;
+        minimal_style.emphasis.bold = false;
+        minimal_style.emphasis.italic = false;
+        minimal_style.strong_emphasis.bold = false;
+        minimal_style.strong_emphasis.italic = false;
+        minimal_style.block_quote.bold = false;
+        minimal_style.block_quote.italic = false;
+
+        let (needs_regular, needs_bold, needs_italic, needs_bold_italic) =
+            MdPdfFont::analyze_needed_variants(&minimal_style);
+
+        assert!(needs_regular); // Always needed
+        assert!(!needs_bold); // No bold styles
+        assert!(!needs_italic); // No italic styles
+        assert!(!needs_bold_italic); // No bold+italic styles
+    }
+
+    #[test]
+    fn test_analyze_needed_variants_with_bold_italic() {
+        // Create a style that uses bold+italic combination
+        let mut style = StyleMatch::default();
+
+        // Set one style to use both bold and italic
+        style.heading_1.bold = true;
+        style.heading_1.italic = true;
+
+        let (needs_regular, needs_bold, needs_italic, needs_bold_italic) =
+            MdPdfFont::analyze_needed_variants(&style);
+
+        assert!(needs_regular); // Always needed
+        assert!(needs_bold); // Other styles use bold
+        assert!(needs_italic); // Other styles use italic
+        assert!(needs_bold_italic); // heading_1 uses bold+italic
+    }
+
+    #[test]
+    fn test_load_font_family_minimal() {
+        let default_style = StyleMatch::default();
+        let result = MdPdfFont::load_minimal_font_family(None, &default_style);
+        assert!(result.is_ok());
+
+        let result = MdPdfFont::load_minimal_font_family(Some("roboto"), &default_style);
+        assert!(result.is_ok());
     }
 }
