@@ -23,13 +23,18 @@ rustls-tls = ["reqwest/rustls-tls"]
 native-tls = ["reqwest/native-tls"]
 
 [dependencies]
-genpdfi = "0.2.2"
+genpdfi = { git = "https://github.com/theiskaa/genpdfi", branch = "main" }
 dirs = "4.0.0"
 toml = "0.8.19"
 once_cell = "1.20.2"
 rust-embed = "8.5.0"
 clap = { version = "4.0", features = ["derive"] }
-reqwest = { version = "0.12.9", features = ["blocking"], default-features = false }
+reqwest = { version = "0.12.9", features = [
+    "blocking",
+], default-features = false }
+fontdb = "0.15"
+printpdf = "0.7.0"
+rusttype = "0.8"
 
 [profile.release]
 lto = "thin"
