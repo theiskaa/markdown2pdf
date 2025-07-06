@@ -16,10 +16,7 @@
 //! The module is designed to be both robust for production use and flexible enough to accommodate various document structures
 //! and styling needs.
 
-use crate::{
-    styling::{MdPdfFont, StyleMatch},
-    Token,
-};
+use crate::{styling::StyleMatch, Token};
 use genpdfi::{
     fonts::{FontData, FontFamily},
     Document,
@@ -59,9 +56,30 @@ impl Pdf {
     /// determine the complete visual appearance and layout characteristics of the final generated
     /// PDF document.
     pub fn new(input: Vec<Token>, style: StyleMatch) -> Self {
-        let font_family = MdPdfFont::load_minimal_font_family(style.text.font_family, &style)
-            .expect("Failed to load font family");
-        let code_font_family = MdPdfFont::load_minimal_font_family(style.code.font_family, &style)
+        let family_name = style.text.font_family.unwrap_or("helvetica");
+
+        // Decide whether to use one of the PDF base-14 fonts or embed a system font.
+        let font_family = match family_name.to_lowercase().as_str() {
+            "helvetica" | "arial" | "sans" | "sans-serif" | "times" | "timesnewroman"
+            | "times new roman" | "serif" | "courier" | "monospace" => {
+                crate::fonts::load_builtin_font_family(family_name)
+                    .expect("Failed to load built-in font family")
+            }
+            _ => crate::fonts::load_system_font_family_simple(family_name).unwrap_or_else(
+                |_| {
+                    // Fall back to Helvetica if the system font cannot be loaded.
+                    eprintln!(
+                        "Warning: could not load system font '{}', falling back to Helvetica",
+                        family_name
+                    );
+                    crate::fonts::load_builtin_font_family("helvetica")
+                        .expect("Failed to load fallback font family")
+                },
+            ),
+        };
+
+        // For code blocks we prefer a monospace font.
+        let code_font_family = crate::fonts::load_builtin_font_family("courier")
             .expect("Failed to load code font family");
 
         Self {
