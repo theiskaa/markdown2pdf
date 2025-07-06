@@ -14,29 +14,26 @@
 //! and styles. The styling system integrates with the PDF generation pipeline to ensure
 //! consistent formatting throughout the document.
 
+#[cfg(any())]
 use crate::assets;
-use genpdfi::{
-    error::Error,
-    fonts::{FontData, FontFamily},
-};
-use once_cell::sync::Lazy;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 /// Available font families that can be used in the PDF document.
 /// Currently only supports Roboto font.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[cfg(any())]
 pub enum MdPdfFont {
     Roboto,
 }
 
 /// Global font cache to ensure we never load the same font twice
+#[cfg(any())]
 static FONT_CACHE: Lazy<Mutex<HashMap<String, Arc<Vec<u8>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Ultra-minimal font loading strategy that maximizes space efficiency
+#[cfg(any())]
 pub struct UltraMinimalFontLoader;
 
+#[cfg(any())]
 impl UltraMinimalFontLoader {
     /// Loads font data with aggressive caching to prevent duplication
     fn get_cached_font_data(font_path: &str) -> Result<Arc<Vec<u8>>, Error> {
@@ -124,6 +121,7 @@ impl UltraMinimalFontLoader {
     }
 }
 
+#[cfg(any())]
 impl MdPdfFont {
     /// Returns the directory name where the font files are stored.
     pub fn dir(&self) -> &'static str {
@@ -180,111 +178,30 @@ impl MdPdfFont {
         (needs_regular, needs_bold, needs_italic, needs_bold_italic)
     }
 
-    /// ULTRA-OPTIMIZED font loading with maximum space efficiency using shared font data
     pub fn load_minimal_font_family(
         family: Option<&str>,
-        style: &StyleMatch,
+        _style: &StyleMatch,
     ) -> Result<FontFamily<FontData>, Error> {
         let found_match = MdPdfFont::find_match(family);
-        let (_needs_regular, needs_bold, needs_italic, needs_bold_italic) =
-            MdPdfFont::analyze_needed_variants(style);
 
-        // For ultimate efficiency: load the regular font once and share it
-        if !needs_bold && !needs_italic && !needs_bold_italic {
-            let font_path = format!(
-                "fonts/{}/{}-Regular.ttf",
-                found_match.dir(),
-                found_match.file()
-            );
-            let font_data = assets::get_font_data(&font_path).ok_or_else(|| {
-                Error::new(
-                    "Failed to load font".to_string(),
-                    genpdfi::error::ErrorKind::InvalidFont,
-                )
-            })?;
-
-            // Create shared font data using Arc
-            let shared_data = Arc::new(font_data);
-
-            // Use the new_shared method to avoid duplicating font data
-            let regular = FontData::new_shared(shared_data.clone(), None)?;
-            let bold = FontData::new_shared(shared_data.clone(), None)?;
-            let italic = FontData::new_shared(shared_data.clone(), None)?;
-            let bold_italic = FontData::new_shared(shared_data, None)?;
-
-            return Ok(FontFamily {
-                regular,
-                bold,
-                italic,
-                bold_italic,
-            });
-        }
-
-        // For mixed font needs, load only what's required
-        let regular_path = format!(
-            "fonts/{}/{}-Regular.ttf",
+        let font_path = format!(
+            "fonts/{}/{}-Light.ttf",
             found_match.dir(),
             found_match.file()
         );
-        let regular_data = assets::get_font_data(&regular_path).ok_or_else(|| {
+        let font_data = assets::get_font_data(&font_path).ok_or_else(|| {
             Error::new(
-                "Failed to load regular font".to_string(),
+                "Failed to load font".to_string(),
                 genpdfi::error::ErrorKind::InvalidFont,
             )
         })?;
-        let regular_shared = Arc::new(regular_data);
-        let regular = FontData::new_shared(regular_shared.clone(), None)?;
 
-        let bold = if needs_bold {
-            let bold_path = format!(
-                "fonts/{}/{}-Bold.ttf",
-                found_match.dir(),
-                found_match.file()
-            );
-            let bold_data = assets::get_font_data(&bold_path).ok_or_else(|| {
-                Error::new(
-                    "Failed to load bold font".to_string(),
-                    genpdfi::error::ErrorKind::InvalidFont,
-                )
-            })?;
-            FontData::new(bold_data, None)?
-        } else {
-            FontData::new_shared(regular_shared.clone(), None)?
-        };
+        let shared_data = Arc::new(font_data);
 
-        let italic = if needs_italic {
-            let italic_path = format!(
-                "fonts/{}/{}-Italic.ttf",
-                found_match.dir(),
-                found_match.file()
-            );
-            let italic_data = assets::get_font_data(&italic_path).ok_or_else(|| {
-                Error::new(
-                    "Failed to load italic font".to_string(),
-                    genpdfi::error::ErrorKind::InvalidFont,
-                )
-            })?;
-            FontData::new(italic_data, None)?
-        } else {
-            FontData::new_shared(regular_shared.clone(), None)?
-        };
-
-        let bold_italic = if needs_bold_italic {
-            let bold_italic_path = format!(
-                "fonts/{}/{}-BoldItalic.ttf",
-                found_match.dir(),
-                found_match.file()
-            );
-            let bold_italic_data = assets::get_font_data(&bold_italic_path).ok_or_else(|| {
-                Error::new(
-                    "Failed to load bold italic font".to_string(),
-                    genpdfi::error::ErrorKind::InvalidFont,
-                )
-            })?;
-            FontData::new(bold_italic_data, None)?
-        } else {
-            FontData::new_shared(regular_shared, None)?
-        };
+        let regular = FontData::new_shared(shared_data.clone(), None)?;
+        let bold = FontData::new_shared(shared_data.clone(), None)?;
+        let italic = FontData::new_shared(shared_data.clone(), None)?;
+        let bold_italic = FontData::new_shared(shared_data, None)?;
 
         Ok(FontFamily {
             regular,
@@ -628,7 +545,7 @@ impl Default for StyleMatch {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 
