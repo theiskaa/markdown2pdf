@@ -1,5 +1,4 @@
 use clap::{Arg, Command};
-use markdown2pdf::assets;
 use reqwest::blocking::Client;
 use std::fs;
 use std::path::PathBuf;
@@ -92,8 +91,7 @@ fn main() {
 
     if !matches.contains_id("path") && !matches.contains_id("string") && !matches.contains_id("url")
     {
-        let help_text = assets::get_text_asset("help").unwrap();
-        println!("{}", help_text);
+        println!("Error: Please provide either --path, --string or --url to specify the markdown input.\nUse --help for detailed usage information.");
         process::exit(1);
     }
 
