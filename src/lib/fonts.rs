@@ -13,7 +13,7 @@ use rusttype::Font;
 ///
 /// The function supports the three standard PDF font families:
 /// * Helvetica  (fallback name: "Arial")
-/// * Times      (fallback names: "Times New Roman", "Times") 
+/// * Times      (fallback names: "Times New Roman", "Times")
 /// * Courier    (fallback name: "Courier New")
 ///
 /// Built-in PDF fonts use standardized Adobe Font Metrics (AFM) and do not require
@@ -32,10 +32,10 @@ pub fn load_builtin_font_family(name: &str) -> Result<FontFamily<FontData>, Erro
     // This provides metrics but the actual font rendering uses PDF built-in fonts
     let candidates = match builtin_variants {
         BuiltinVariants::Times => &["Times New Roman", "Times", "Liberation Serif"],
-        BuiltinVariants::Courier => &["Courier New", "Courier", "Liberation Mono"], 
+        BuiltinVariants::Courier => &["Courier New", "Courier", "Liberation Mono"],
         BuiltinVariants::Helvetica => &["Helvetica", "Arial", "Liberation Sans"],
     };
-    
+
     let font_bytes = Arc::new(load_system_font_bytes_fallback(candidates)?);
 
     // Helper that maps the base family + style to the correct `BuiltinFont`
@@ -121,7 +121,7 @@ fn load_system_font_bytes_fallback(candidates: &[&str]) -> Result<Vec<u8>, Error
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_lowercase();
-        
+
         if candidates
             .iter()
             .any(|cand| file_name.contains(&cand.to_lowercase()))
@@ -174,7 +174,6 @@ fn load_system_font_bytes_fallback(candidates: &[&str]) -> Result<Vec<u8>, Error
 /// If the requested family cannot be found, an `InvalidFont` error is returned so that the caller
 /// can decide how to proceed (e.g. fall back to a built-in font).
 pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>, Error> {
-    // Try to find a matching face in the system font database -----------------------------------------------------
     let mut db = Database::new();
     db.load_system_fonts();
 
@@ -188,7 +187,6 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
             _ => continue,
         };
 
-        // Skip collections (.ttc) – rusttype can't read them directly.
         if path
             .extension()
             .and_then(|s| s.to_str())
@@ -228,9 +226,7 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
 
     let shared = Arc::new(bytes);
 
-    // Helper that embeds the *same* font file for every style ------------------------------------------------------
     let mk = || FontData::new_shared(shared.clone(), None);
-
     Ok(FontFamily {
         regular: mk()?,
         bold: mk()?,

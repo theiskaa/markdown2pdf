@@ -104,7 +104,6 @@ fn parse_style(value: Option<&Value>, default: BasicTextStyle) -> BasicTextStyle
             style.background_color = Some(bg_color);
         }
 
-        // Parse text properties
         if let Some(alignment) = parse_alignment(style_config.get("alignment")) {
             style.alignment = Some(alignment);
         }
@@ -113,7 +112,6 @@ fn parse_style(value: Option<&Value>, default: BasicTextStyle) -> BasicTextStyle
             style.font_family = map_font_family(font);
         }
 
-        // Parse boolean flags
         if let Some(bold) = style_config.get("bold").and_then(|v| v.as_bool()) {
             style.bold = bold;
         }
@@ -156,10 +154,7 @@ pub fn load_config() -> StyleMatch {
         Err(_) => return StyleMatch::default(),
     };
 
-    // Get default style to use for missing values
     let default_style = StyleMatch::default();
-
-    // Parse margins
     let margins = if let Some(margins) = config.get("margin") {
         Margins {
             top: margins.get("top").and_then(|v| v.as_float()).unwrap_or(8.0) as f32,
