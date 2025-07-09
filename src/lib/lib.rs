@@ -102,8 +102,8 @@
 //! +---------------+     +------------------+     +--------------+
 //! ```
 
-pub mod assets;
 pub mod config;
+pub mod fonts;
 pub mod markdown;
 pub mod pdf;
 pub mod styling;

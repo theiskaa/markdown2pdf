@@ -1,5 +1,4 @@
 use clap::{Arg, Command};
-use markdown2pdf::assets;
 use reqwest::blocking::Client;
 use std::fs;
 use std::path::PathBuf;
@@ -54,7 +53,7 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
 }
 
 fn main() {
-    let matches = Command::new("markdown2pdf")
+    let mut cmd = Command::new("markdown2pdf")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Convert Markdown files or strings to PDF")
         .arg(
@@ -87,13 +86,13 @@ fn main() {
                 .long("output")
                 .value_name("OUTPUT_PATH")
                 .help("Path to the output PDF file (defaults to ./output.pdf)"),
-        )
-        .get_matches();
+        );
 
+    let matches = cmd.clone().get_matches();
     if !matches.contains_id("path") && !matches.contains_id("string") && !matches.contains_id("url")
     {
-        let help_text = assets::get_text_asset("help").unwrap();
-        println!("{}", help_text);
+        cmd.print_help().unwrap();
+        println!();
         process::exit(1);
     }
 

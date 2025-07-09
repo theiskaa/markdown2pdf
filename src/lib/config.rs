@@ -28,7 +28,7 @@
 //! A complete example configuration file can be found in markdown2pdfrc.example.toml which
 //! demonstrates all available styling options.
 
-use crate::styling::{BasicTextStyle, Margins, MdPdfFont, StyleMatch, TextAlignment};
+use crate::styling::{BasicTextStyle, Margins, StyleMatch, TextAlignment};
 use std::fs;
 use std::path::Path;
 use toml::Value;
@@ -70,7 +70,9 @@ fn parse_alignment(value: Option<&Value>) -> Option<TextAlignment> {
 /// font file. Returns the path to the font file if found, or None if the
 /// specified font is not available in the system.
 fn map_font_family(font: &str) -> Option<&'static str> {
-    Some(MdPdfFont::find_match(Some(font)).file())
+    // Leak the provided font family string to obtain a 'static lifetime reference.
+    // This is safe for the lifetime of the running process and avoids embedding any font data.
+    Some(Box::leak(font.to_string().into_boxed_str()))
 }
 
 /// Parses a complete text style configuration from TOML.
@@ -102,7 +104,6 @@ fn parse_style(value: Option<&Value>, default: BasicTextStyle) -> BasicTextStyle
             style.background_color = Some(bg_color);
         }
 
-        // Parse text properties
         if let Some(alignment) = parse_alignment(style_config.get("alignment")) {
             style.alignment = Some(alignment);
         }
@@ -111,7 +112,6 @@ fn parse_style(value: Option<&Value>, default: BasicTextStyle) -> BasicTextStyle
             style.font_family = map_font_family(font);
         }
 
-        // Parse boolean flags
         if let Some(bold) = style_config.get("bold").and_then(|v| v.as_bool()) {
             style.bold = bold;
         }
@@ -154,10 +154,7 @@ pub fn load_config() -> StyleMatch {
         Err(_) => return StyleMatch::default(),
     };
 
-    // Get default style to use for missing values
     let default_style = StyleMatch::default();
-
-    // Parse margins
     let margins = if let Some(margins) = config.get("margin") {
         Margins {
             top: margins.get("top").and_then(|v| v.as_float()).unwrap_or(8.0) as f32,

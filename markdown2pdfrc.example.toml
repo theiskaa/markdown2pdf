@@ -31,7 +31,7 @@ textcolor = { r = 0, g = 0, b = 0 }
 beforespacing = 0.8
 afterspacing = 0.5
 alignment = "center"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = true
 italic = false
 underline = false
@@ -45,7 +45,7 @@ textcolor = { r = 0, g = 0, b = 0 }
 beforespacing = 0.8
 afterspacing = 0.5
 alignment = "left"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = true
 italic = false
 underline = false
@@ -59,7 +59,7 @@ textcolor = { r = 0, g = 0, b = 0 }
 beforespacing = 0.8
 afterspacing = 0.5
 alignment = "left"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = true
 italic = false
 underline = false
@@ -73,7 +73,7 @@ textcolor = { r = 0, g = 0, b = 0 }
 beforespacing = 0.0
 afterspacing = 0.0
 alignment = "left"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = false
 italic = true
 underline = false
@@ -87,7 +87,7 @@ textcolor = { r = 0, g = 0, b = 0 }
 beforespacing = 0.0
 afterspacing = 0.0
 alignment = "left"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = true
 italic = false
 underline = false
@@ -101,7 +101,7 @@ textcolor = { r = 128, g = 128, b = 128 }
 beforespacing = 0.4
 afterspacing = 0.4
 alignment = "left"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = false
 italic = false
 underline = false
@@ -115,7 +115,7 @@ textcolor = { r = 128, g = 128, b = 128 }
 beforespacing = 0.0
 afterspacing = 0.0
 alignment = "left"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = false
 italic = true
 underline = false
@@ -129,7 +129,7 @@ textcolor = { r = 0, g = 0, b = 0 }
 beforespacing = 0.0
 afterspacing = 0.5
 alignment = "left"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = false
 italic = false
 underline = false
@@ -142,7 +142,7 @@ size = 8
 textcolor = { r = 128, g = 128, b = 128 }
 afterspacing = 0.0
 alignment = "left"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = false
 italic = false
 underline = true
@@ -155,7 +155,7 @@ size = 8
 textcolor = { r = 0, g = 0, b = 0 }
 afterspacing = 0.0
 alignment = "center"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = false
 italic = false
 underline = false
@@ -169,7 +169,7 @@ textcolor = { r = 0, g = 0, b = 0 }
 beforespacing = 0.0
 afterspacing = 0.0
 alignment = "left"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = false
 italic = false
 underline = false
@@ -183,7 +183,7 @@ textcolor = { r = 0, g = 0, b = 0 }
 beforespacing = 0.0
 afterspacing = 0.5
 alignment = "left"
-fontfamily = "roboto"
+fontfamily = "helvetica"
 bold = false
 italic = false
 underline = false
