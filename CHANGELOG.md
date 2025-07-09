@@ -6,6 +6,40 @@ the changelog generator (git-cliff).
 
 ---
 
+## [0.1.4] - 2025-07-09
+
+### Features
+- *(fonts)* Add comprehensive font loading functionality with built-in and system font support
+- *(fonts)* Implement ultra-minimal font loading with caching and variant analysis
+
+### Bug Fixes
+- *(main)* Update error handling to provide clearer user guidance for markdown input requirements
+
+### Other
+- *(cargo)* Remove thiserror module
+
+### Refactor
+- *(lib)* Update parse function to accept an optional configuration path for improved flexibility
+- *(main)* Improve command handling and error messaging for markdown input
+- *(lib)* Remove commented sections and unused font loading logic
+- *(styling)* Remove unused font references and optimize font loading logic for efficiency
+- *(pdf)* Enhance font loading logic to support system fonts and fallback options
+- *(pdf)* Replace font loading methods with minimal variants for improved efficiency
+
+### Documentation
+- *(readme)* Enhance configuration section to include custom config file path and error handling details
+
+### Miscellaneous Tasks
+- *(dependencies)* Update genpdfi source from github to registry (version 0.2.3  )
+- *(dependencies)* Update package versions and add new dependencies for font handling and PDF generation
+- *(lib)* Remove embedded assets including help text and Roboto font files to streamline the project and reduce binary size.
+- Fix some advisory issues
+- Make it possible to compile without openssl
+- *(dependencies)* Bump genpdfi version to 0.2.2 in Cargo.toml and Cargo.lock
+
+## New Contributors
+* @nicolasburtey made their first contribution
+
 ## [0.1.3] - 2025-03-31
 ### Features
 - *(assets)* Move default implementation to [Default] trait
