@@ -92,13 +92,30 @@ let document = pdf.render_into_document();
 Finally, the `Document` object can be rendered to a PDF file using the `Pdf::render()` function. This function handles the actual PDF generation, applying all the styling rules and formatting defined earlier. It takes the output path as a parameter and returns a `Result` indicating success or any errors that occurred during rendering:
 
 ## Configuration
-The `markdown2pdf` tool supports customization through a TOML configuration file. You can configure various styling options for the generated PDFs by creating a `markdown2pdfrc.toml` file in your home directory.
+The `markdown2pdf` tool supports customization through a TOML configuration file. You can configure various styling options for the generated PDFs by creating a `markdown2pdfrc.toml` file in your home directory, or by specifying a custom configuration file path.
 
 Under the hood the file is translated to the `StyleMatch` instance which determines how different Markdown elements will be rendered in the final PDF. When using the library, you can load custom styling configurations using `config::load_config()` or create a custom `StyleMatch` implementation. For direct binary usage, the tool automatically looks for a configuration file in your home directory.
 
 The configuration file supports customization of fonts, colors, spacing, and other visual properties for all Markdown elements. When using the library, you can also programmatically override these settings by modifying the `StyleMatch` instance before passing it to the PDF renderer.
 
-To get started with configuration:
+### Custom Configuration Path
+When using `markdown2pdf` as a library, you can specify a custom configuration file path. This is particularly useful for library usage, project-specific configurations, or when you want to maintain multiple configuration files:
+
+Use custom config path - supports both relative and absolute paths
+```rust
+markdown2pdf::parse(markdown, "output.pdf", Some("../config.toml"))?;
+markdown2pdf::parse(markdown, "output.pdf", Some("/home/user/configs/style.toml"))?;
+```
+
+Use default config (~/markdown2pdfrc.toml or ./markdown2pdfrc.toml)
+```rust
+markdown2pdf::parse(markdown, "output.pdf", None)?;
+```
+
+**Error Handling:**
+If the specified configuration file cannot be found or contains invalid syntax, the library will gracefully fall back to default styling without crashing. This ensures that PDF generation always succeeds, even with configuration issues.
+
+### Getting Started with Configuration for binary
 1. Create the config file:
    ```bash
    touch ~/markdown2pdfrc.toml

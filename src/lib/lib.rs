@@ -14,7 +14,7 @@
 //! // Convert Markdown string to PDF with proper error handling
 //! fn example() -> Result<(), Box<dyn Error>> {
 //!     let markdown = "# Hello World\nThis is a test.".to_string();
-//!     markdown2pdf::parse(markdown, "output.pdf")?;
+//!     markdown2pdf::parse(markdown, "output.pdf", None)?;
 //!     Ok(())
 //! }
 //! ```
@@ -29,7 +29,7 @@
 //! // Read markdown file with proper error handling
 //! fn example_with_styling() -> Result<(), Box<dyn Error>> {
 //!     let markdown = fs::read_to_string("input.md")?;
-//!     markdown2pdf::parse(markdown, "styled-output.pdf")?;
+//!     markdown2pdf::parse(markdown, "styled-output.pdf", None)?;
 //!     Ok(())
 //! }
 //! ```
@@ -48,7 +48,7 @@
 //!     See our [website](https://example.com) for more info.
 //!     "#.to_string();
 //!
-//!     markdown2pdf::parse(markdown, "doc-with-images.pdf")?;
+//!     markdown2pdf::parse(markdown, "doc-with-images.pdf", None)?;
 //!     Ok(())
 //! }
 //! ```
@@ -143,6 +143,7 @@ impl fmt::Display for MdpError {
 /// # Arguments
 /// * `markdown` - The Markdown content to convert
 /// * `path` - Where to save the generated PDF file
+/// * `config_path` - Optional path to custom configuration file
 ///
 /// # Returns
 /// * `Ok(())` on successful conversion
@@ -156,17 +157,17 @@ impl fmt::Display for MdpError {
 /// // Convert a Markdown file to PDF with custom styling
 /// fn example() -> Result<(), Box<dyn Error>> {
 ///     let markdown = fs::read_to_string("input.md")?;
-///     markdown2pdf::parse(markdown, "output.pdf")?;
+///     markdown2pdf::parse(markdown, "output.pdf", None)?;
 ///     Ok(())
 /// }
 /// ```
-pub fn parse(markdown: String, path: &str) -> Result<(), MdpError> {
+pub fn parse(markdown: String, path: &str, config_path: Option<&str>) -> Result<(), MdpError> {
     let mut lexer = Lexer::new(markdown);
     let tokens = lexer
         .parse()
         .map_err(|e| MdpError::ParseError(format!("Failed to parse markdown: {:?}", e)))?;
 
-    let style = config::load_config();
+    let style = config::load_config(config_path);
     let pdf = Pdf::new(tokens, style);
     let document = pdf.render_into_document();
 
@@ -185,7 +186,7 @@ mod tests {
     #[test]
     fn test_basic_markdown_conversion() {
         let markdown = "# Test\nHello world".to_string();
-        let result = parse(markdown, "test_output.pdf");
+        let result = parse(markdown, "test_output.pdf", None);
         assert!(result.is_ok());
         fs::remove_file("test_output.pdf").unwrap();
     }
@@ -193,14 +194,14 @@ mod tests {
     #[test]
     fn test_invalid_markdown() {
         let markdown = "![Invalid".to_string();
-        let result = parse(markdown, "error_output.pdf");
+        let result = parse(markdown, "error_output.pdf", None);
         assert!(matches!(result, Err(MdpError::ParseError(_))));
     }
 
     #[test]
     fn test_invalid_output_path() {
         let markdown = "# Test".to_string();
-        let result = parse(markdown, "/nonexistent/directory/output.pdf");
+        let result = parse(markdown, "/nonexistent/directory/output.pdf", None);
         assert!(matches!(result, Err(MdpError::PdfError(_))));
     }
 }

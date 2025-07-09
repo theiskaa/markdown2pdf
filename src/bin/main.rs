@@ -45,7 +45,7 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         .to_str()
         .ok_or_else(|| AppError::PathError("Invalid output path".to_string()))?;
 
-    markdown2pdf::parse(markdown, output_path_str)
+    markdown2pdf::parse(markdown, output_path_str, None)
         .map_err(|e| AppError::ConversionError(e.to_string()))?;
 
     println!("[✓] Successfully saved PDF to {}", output_path_str);

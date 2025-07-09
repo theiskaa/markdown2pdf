@@ -135,14 +135,17 @@ fn parse_style(value: Option<&Value>, default: BasicTextStyle) -> BasicTextStyle
 /// to the current directory. If no config file is found or if parsing fails,
 /// returns default styles. The function processes all style sections and
 /// returns a complete StyleMatch object containing the full configuration.
-pub fn load_config() -> StyleMatch {
-    // Try to read config from home directory first, fall back to current directory
-    let config_path = dirs::home_dir()
-        .map(|mut path| {
-            path.push("markdown2pdfrc.toml");
-            path
-        })
-        .unwrap_or_else(|| Path::new("markdown2pdfrc.toml").to_path_buf());
+pub fn load_config(path: Option<&str>) -> StyleMatch {
+    let config_path = if let Some(custom_path) = path {
+        Path::new(custom_path).to_path_buf()
+    } else {
+        dirs::home_dir()
+            .map(|mut path| {
+                path.push("markdown2pdfrc.toml");
+                path
+            })
+            .unwrap_or_else(|| Path::new("markdown2pdfrc.toml").to_path_buf())
+    };
 
     let config_str = match fs::read_to_string(config_path) {
         Ok(s) => s,
