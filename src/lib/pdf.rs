@@ -65,17 +65,15 @@ impl Pdf {
                 crate::fonts::load_builtin_font_family(family_name)
                     .expect("Failed to load built-in font family")
             }
-            _ => crate::fonts::load_system_font_family_simple(family_name).unwrap_or_else(
-                |_| {
-                    // Fall back to Helvetica if the system font cannot be loaded.
-                    eprintln!(
-                        "Warning: could not load system font '{}', falling back to Helvetica",
-                        family_name
-                    );
-                    crate::fonts::load_builtin_font_family("helvetica")
-                        .expect("Failed to load fallback font family")
-                },
-            ),
+            _ => crate::fonts::load_system_font_family_simple(family_name).unwrap_or_else(|_| {
+                // Fall back to Helvetica if the system font cannot be loaded.
+                eprintln!(
+                    "Warning: could not load system font '{}', falling back to Helvetica",
+                    family_name
+                );
+                crate::fonts::load_builtin_font_family("helvetica")
+                    .expect("Failed to load fallback font family")
+            }),
         };
 
         // For code blocks we prefer a monospace font.
@@ -97,6 +95,37 @@ impl Pdf {
         match document.render_to_file(path) {
             Ok(_) => None,
             Err(err) => Some(err.to_string()),
+        }
+    }
+
+    /// Renders the processed document to bytes and returns the PDF data as a Vec<u8>.
+    /// This method provides the same PDF generation as `render` but returns the content
+    /// directly as bytes instead of writing to a file, making it suitable for cases
+    /// where you need to handle the PDF data in memory or send it over a network.
+    ///
+    /// # Arguments
+    /// * `document` - The generated PDF document to render
+    ///
+    /// # Returns
+    /// * `Ok(Vec<u8>)` containing the PDF data on successful rendering
+    /// * `Err(String)` with error message if rendering fails
+    ///
+    /// # Example
+    /// ```rust
+    /// // This example shows the basic usage pattern, but render_to_bytes
+    /// // is typically called internally by parse_into_bytes
+    /// use markdown2pdf::parse_into_bytes;
+    ///
+    /// let markdown = "# Test\nSome content".to_string();
+    /// let pdf_bytes = parse_into_bytes(markdown, None).unwrap();
+    /// // Use the bytes as needed (save, send, etc.)
+    /// assert!(!pdf_bytes.is_empty());
+    /// ```
+    pub fn render_to_bytes(document: genpdfi::Document) -> Result<Vec<u8>, String> {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        match document.render(&mut buffer) {
+            Ok(_) => Ok(buffer.into_inner()),
+            Err(err) => Err(err.to_string()),
         }
     }
 
@@ -567,5 +596,69 @@ mod tests {
         let doc = pdf.render_into_document();
         let result = Pdf::render(doc, "/nonexistent/path/file.pdf");
         assert!(result.is_some()); // Should return an error message
+    }
+
+    #[test]
+    fn test_render_to_bytes() {
+        let tokens = vec![
+            Token::Heading(vec![Token::Text("Test Document".to_string())], 1),
+            Token::Text("This is a test paragraph.".to_string()),
+        ];
+        let pdf = create_test_pdf(tokens);
+        let doc = pdf.render_into_document();
+        let result = Pdf::render_to_bytes(doc);
+
+        assert!(result.is_ok());
+        let pdf_bytes = result.unwrap();
+        assert!(!pdf_bytes.is_empty());
+        // PDF files should start with "%PDF-"
+        assert!(pdf_bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn test_render_to_bytes_empty_document() {
+        let pdf = create_test_pdf(vec![]);
+        let doc = pdf.render_into_document();
+        let result = Pdf::render_to_bytes(doc);
+
+        assert!(result.is_ok());
+        let pdf_bytes = result.unwrap();
+        assert!(!pdf_bytes.is_empty());
+        assert!(pdf_bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn test_render_to_bytes_complex_content() {
+        let tokens = vec![
+            Token::Heading(vec![Token::Text("Main Title".to_string())], 1),
+            Token::Text("Introduction paragraph.".to_string()),
+            Token::Heading(vec![Token::Text("Section 1".to_string())], 2),
+            Token::ListItem {
+                content: vec![Token::Text("First item".to_string())],
+                ordered: false,
+                number: None,
+            },
+            Token::ListItem {
+                content: vec![Token::Text("Second item".to_string())],
+                ordered: false,
+                number: None,
+            },
+            Token::Code(
+                "rust".to_string(),
+                "fn main() {\n    println!(\"Hello\");\n}".to_string(),
+            ),
+            Token::Link(
+                "Example Link".to_string(),
+                "https://example.com".to_string(),
+            ),
+        ];
+        let pdf = create_test_pdf(tokens);
+        let doc = pdf.render_into_document();
+        let result = Pdf::render_to_bytes(doc);
+
+        assert!(result.is_ok());
+        let pdf_bytes = result.unwrap();
+        assert!(!pdf_bytes.is_empty());
+        assert!(pdf_bytes.starts_with(b"%PDF-"));
     }
 }

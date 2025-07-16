@@ -74,7 +74,21 @@ To use the `markdown2pdf` tool, you can either specify a Markdown file path, pro
 - If no output file is specified with `-o`, the default output file will be 'output.pdf'.
 
 ## Using as Library
-The library exposes a high-level `parse()` function that orchestrates the entire conversion process. This function accepts raw Markdown text and an output path, handling all intermediate processing steps internally. Under the hood, it leverages the lexer to build an abstract syntax tree, applies styling rules from configuration, and renders the final PDF output. For basic usage, simply pass your Markdown content as a string to `parse()`.
+The library exposes two high-level functions that orchestrate the entire conversion process: `parse_into_file()` and `parse_into_bytes()`. Both functions accept raw Markdown text and handle all intermediate processing steps internally. Under the hood, they leverage the lexer to build an abstract syntax tree, apply styling rules from configuration, and render the final PDF output.
+
+The `parse_into_file()` function is perfect for basic usage where you want to save the PDF directly to a file - simply pass your Markdown content as a string along with the desired output path. For scenarios where you need more flexibility, such as web services, API responses, or network transmission, the `parse_into_bytes()` function returns the PDF data as a byte vector that you can manipulate in memory before saving, streaming, or transmitting.
+
+```rust
+use markdown2pdf::{parse_into_file, parse_into_bytes};
+
+// Direct file output
+parse_into_file(markdown, "output.pdf", None)?;
+
+// Get PDF as bytes for flexible handling
+let pdf_bytes = parse_into_bytes(markdown, None)?;
+// Use bytes as needed: save, send over network, etc.
+std::fs::write("output.pdf", &pdf_bytes)?;
+```
 
 For more advanced usage, you can work directly with the lexer and PDF generation components. First, create a lexer instance to parse your Markdown content into tokens
 ```rust
@@ -84,12 +98,12 @@ let tokens = lexer.parse().unwrap(); // handle errors
 
 Next, you'll need to create a PDF renderer to transform the tokens into a formatted document. Before initializing the renderer, you'll need to define styling rules through a `StyleMatch` instance. See the [Configuration](#configuration) section below for details on customizing the styling rules.
 ```rust
-let style = config::load_config();
+let style = config::load_config(None);
 let pdf = Pdf::new(tokens, style);
 let document = pdf.render_into_document();
 ```
 
-Finally, the `Document` object can be rendered to a PDF file using the `Pdf::render()` function. This function handles the actual PDF generation, applying all the styling rules and formatting defined earlier. It takes the output path as a parameter and returns a `Result` indicating success or any errors that occurred during rendering:
+Finally, the `Document` object can be rendered to a PDF file using the `Pdf::render()` function, or converted to bytes using `Pdf::render_to_bytes()`. These functions handle the actual PDF generation, applying all the styling rules and formatting defined earlier:
 
 ## Configuration
 The `markdown2pdf` tool supports customization through a TOML configuration file. You can configure various styling options for the generated PDFs by creating a `markdown2pdfrc.toml` file in your home directory, or by specifying a custom configuration file path.
@@ -103,13 +117,22 @@ When using `markdown2pdf` as a library, you can specify a custom configuration f
 
 Use custom config path - supports both relative and absolute paths
 ```rust
-markdown2pdf::parse(markdown, "output.pdf", Some("../config.toml"))?;
-markdown2pdf::parse(markdown, "output.pdf", Some("/home/user/configs/style.toml"))?;
+// For file output
+markdown2pdf::parse_into_file(markdown, "output.pdf", Some("../config.toml"))?;
+markdown2pdf::parse_into_file(markdown, "output.pdf", Some("/home/user/configs/style.toml"))?;
+
+// For bytes output
+let pdf_bytes = markdown2pdf::parse_into_bytes(markdown, Some("../config.toml"))?;
+let pdf_bytes = markdown2pdf::parse_into_bytes(markdown, Some("/home/user/configs/style.toml"))?;
 ```
 
 Use default config (~/markdown2pdfrc.toml or ./markdown2pdfrc.toml)
 ```rust
-markdown2pdf::parse(markdown, "output.pdf", None)?;
+// For file output
+markdown2pdf::parse_into_file(markdown, "output.pdf", None)?;
+
+// For bytes output
+let pdf_bytes = markdown2pdf::parse_into_bytes(markdown, None)?;
 ```
 
 **Error Handling:**

@@ -14,7 +14,7 @@
 //! // Convert Markdown string to PDF with proper error handling
 //! fn example() -> Result<(), Box<dyn Error>> {
 //!     let markdown = "# Hello World\nThis is a test.".to_string();
-//!     markdown2pdf::parse(markdown, "output.pdf", None)?;
+//!     markdown2pdf::parse_into_file(markdown, "output.pdf", None)?;
 //!     Ok(())
 //! }
 //! ```
@@ -29,7 +29,7 @@
 //! // Read markdown file with proper error handling
 //! fn example_with_styling() -> Result<(), Box<dyn Error>> {
 //!     let markdown = fs::read_to_string("input.md")?;
-//!     markdown2pdf::parse(markdown, "styled-output.pdf", None)?;
+//!     markdown2pdf::parse_into_file(markdown, "styled-output.pdf", None)?;
 //!     Ok(())
 //! }
 //! ```
@@ -48,7 +48,7 @@
 //!     See our [website](https://example.com) for more info.
 //!     "#.to_string();
 //!
-//!     markdown2pdf::parse(markdown, "doc-with-images.pdf", None)?;
+//!     markdown2pdf::parse_into_file(markdown, "doc-with-images.pdf", None)?;
 //!     Ok(())
 //! }
 //! ```
@@ -157,11 +157,15 @@ impl fmt::Display for MdpError {
 /// // Convert a Markdown file to PDF with custom styling
 /// fn example() -> Result<(), Box<dyn Error>> {
 ///     let markdown = fs::read_to_string("input.md")?;
-///     markdown2pdf::parse(markdown, "output.pdf", None)?;
+///     markdown2pdf::parse_into_file(markdown, "output.pdf", None)?;
 ///     Ok(())
 /// }
 /// ```
-pub fn parse(markdown: String, path: &str, config_path: Option<&str>) -> Result<(), MdpError> {
+pub fn parse_into_file(
+    markdown: String,
+    path: &str,
+    config_path: Option<&str>,
+) -> Result<(), MdpError> {
     let mut lexer = Lexer::new(markdown);
     let tokens = lexer
         .parse()
@@ -178,6 +182,50 @@ pub fn parse(markdown: String, path: &str, config_path: Option<&str>) -> Result<
     Ok(())
 }
 
+/// Transforms Markdown content into a styled PDF document and returns the PDF data as bytes.
+/// This function provides the same conversion pipeline as `parse_into_file` but returns
+/// the PDF content directly as a byte vector instead of writing to a file.
+///
+/// The process begins by parsing the Markdown content into a structured token representation.
+/// It then applies styling rules, either from a configuration file if present or using defaults.
+/// Finally, it generates the PDF document with the appropriate styling and structure.
+///
+/// # Arguments
+/// * `markdown` - The Markdown content to convert
+/// * `config_path` - Optional path to custom configuration file
+///
+/// # Returns
+/// * `Ok(Vec<u8>)` containing the PDF data on successful conversion
+/// * `Err(MdpError)` if errors occur during parsing or PDF generation
+///
+/// # Example
+/// ```rust
+/// use std::fs;
+/// use std::error::Error;
+///
+/// // Convert a Markdown string to PDF bytes
+/// fn example() -> Result<(), Box<dyn Error>> {
+///     let markdown = "# Hello World\nThis is a test.".to_string();
+///     let pdf_bytes = markdown2pdf::parse_into_bytes(markdown, None)?;
+///
+///     // Save to file or send over network
+///     fs::write("output.pdf", pdf_bytes)?;
+///     Ok(())
+/// }
+/// ```
+pub fn parse_into_bytes(markdown: String, config_path: Option<&str>) -> Result<Vec<u8>, MdpError> {
+    let mut lexer = Lexer::new(markdown);
+    let tokens = lexer
+        .parse()
+        .map_err(|e| MdpError::ParseError(format!("Failed to parse markdown: {:?}", e)))?;
+
+    let style = config::load_config(config_path);
+    let pdf = Pdf::new(tokens, style);
+    let document = pdf.render_into_document();
+
+    Pdf::render_to_bytes(document).map_err(|err| MdpError::PdfError(err))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,7 +234,7 @@ mod tests {
     #[test]
     fn test_basic_markdown_conversion() {
         let markdown = "# Test\nHello world".to_string();
-        let result = parse(markdown, "test_output.pdf", None);
+        let result = parse_into_file(markdown, "test_output.pdf", None);
         assert!(result.is_ok());
         fs::remove_file("test_output.pdf").unwrap();
     }
@@ -194,14 +242,79 @@ mod tests {
     #[test]
     fn test_invalid_markdown() {
         let markdown = "![Invalid".to_string();
-        let result = parse(markdown, "error_output.pdf", None);
+        let result = parse_into_file(markdown, "error_output.pdf", None);
         assert!(matches!(result, Err(MdpError::ParseError(_))));
     }
 
     #[test]
     fn test_invalid_output_path() {
         let markdown = "# Test".to_string();
-        let result = parse(markdown, "/nonexistent/directory/output.pdf", None);
+        let result = parse_into_file(markdown, "/nonexistent/directory/output.pdf", None);
         assert!(matches!(result, Err(MdpError::PdfError(_))));
+    }
+
+    #[test]
+    fn test_basic_markdown_to_bytes() {
+        let markdown = "# Test\nHello world".to_string();
+        let result = parse_into_bytes(markdown, None);
+        assert!(result.is_ok());
+        let pdf_bytes = result.unwrap();
+        assert!(!pdf_bytes.is_empty());
+        // PDF files should start with "%PDF-"
+        assert!(pdf_bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn test_complex_markdown_to_bytes() {
+        let markdown = r#"
+# Document Title
+
+This is a paragraph with **bold** and *italic* text.
+
+## Subheading
+
+- List item 1
+- List item 2
+  - Nested item
+
+1. Ordered item 1
+2. Ordered item 2
+
+```rust
+fn hello() {
+    println!("Hello, world!");
+}
+```
+
+[Link example](https://example.com)
+
+---
+
+Final paragraph.
+        "#
+        .to_string();
+
+        let result = parse_into_bytes(markdown, None);
+        assert!(result.is_ok());
+        let pdf_bytes = result.unwrap();
+        assert!(!pdf_bytes.is_empty());
+        assert!(pdf_bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn test_empty_markdown_to_bytes() {
+        let markdown = "".to_string();
+        let result = parse_into_bytes(markdown, None);
+        assert!(result.is_ok());
+        let pdf_bytes = result.unwrap();
+        assert!(!pdf_bytes.is_empty());
+        assert!(pdf_bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn test_invalid_markdown_to_bytes() {
+        let markdown = "![Invalid".to_string();
+        let result = parse_into_bytes(markdown, None);
+        assert!(matches!(result, Err(MdpError::ParseError(_))));
     }
 }
