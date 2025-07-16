@@ -6,6 +6,19 @@ the changelog generator (git-cliff).
 
 ---
 
+## [0.1.5] - 2025-07-16
+
+### Features
+- *(lib)* Rename parse function to parse_into_file and add parse_into_bytes for in-memory PDF generation
+- *(pdf)* Add render_to_bytes method for in-memory PDF generation and corresponding tests
+
+### Documentation
+- *(readme)* Update documentation to reflect new parse_into_file and parse_into_bytes functions for PDF generation
+- *(readme)* Update version from 0.1.3 to 0.1.4 in readme
+
+### Miscellaneous Tasks
+- *(app)* Remove Makefile at all
+
 ## [0.1.4] - 2025-07-09
 
 ### Features
