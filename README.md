@@ -1,4 +1,14 @@
-# markdown2pdf
+<img width="600px" src="https://github.com/user-attachments/assets/fe2e96b8-a0bd-43b4-9360-e6cce43693f2">
+
+<p align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/markdown2pdf)](https://crates.io/crates/markdown2pdf)
+[![Documentation](https://img.shields.io/docsrs/markdown2pdf)](https://docs.rs/markdown2pdf)
+[![License](https://img.shields.io/crates/l/markdown2pdf)](LICENSE)
+[![Downloads](https://img.shields.io/crates/d/markdown2pdf)](https://crates.io/crates/markdown2pdf)
+[![GitHub Stars](https://img.shields.io/github/stars/theiskaa/markdown2pdf)](https://github.com/theiskaa/markdown2pdf/stargazers)
+
+</p>
 
 markdown2pdf is a command-line tool and library for converting Markdown content into styled PDF documents. It uses a lexical analyzer to parse Markdown and a PDF module to generate documents based on the parsed tokens.
 
