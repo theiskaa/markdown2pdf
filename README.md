@@ -43,7 +43,7 @@ cargo add markdown2pdf
 Or add to your Cargo.toml:
 
 ```toml
-markdown2pdf = "0.1.5"
+markdown2pdf = "0.1.6"
 ```
 
 ## Usage

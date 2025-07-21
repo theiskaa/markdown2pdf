@@ -6,6 +6,22 @@ the changelog generator (git-cliff).
 
 ---
 
+## [0.1.6] - 2025-07-21
+
+### Features
+- *(config)* Add ConfigSource enum and refactor configuration loading functions to support default, file, and embedded sources
+
+### Bug Fixes
+- *(main)* Update parse_into_file call to use ConfigSource::Default for improved configuration handling
+
+### Refactor
+- *(lib)* Update parse_into_file and parse_into_bytes functions to use ConfigSource for configuration handling
+
+### Documentation
+- *(readme)* Add new logo and some cool badges
+- *(readme)* Revise README for clarity and update configuration handling details, including embedded support and usage examples
+
+
 ## [0.1.5] - 2025-07-16
 
 ### Features
