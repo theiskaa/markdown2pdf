@@ -1,153 +1,112 @@
-# markdown2pdf
-markdown2pdf is a versatile command-line tool and library designed to convert Markdown content into pre-styled PDF documents. It uses a lexical analyzer to parse the Markdown and a PDF module to generate PDF documents based on the parsed tokens.
+<img width="600px" src="https://github.com/user-attachments/assets/fe2e96b8-a0bd-43b4-9360-e6cce43693f2">
 
-The library employs a pipeline that first tokenizes Markdown text into semantic elements (like headings, emphasis, code blocks, and lists), then processes these tokens through a styling module that applies configurable visual formatting. The styling engine supports extensive customization of fonts, colors, spacing, and other typographic properties through a TOML configuration file. For more information on how to configure the styling rules, please refer to the [Configuration](#configuration) section down below.
+<p align="center">
 
-This project includes both a binary and a library:
-- **Binary (cli)**: A command-line interface that provides an easy way to convert Markdown files, URLs, or direct string input into styled PDF documents. Supports custom styling through configuration files.
-- **Library (lib)**: A robust Rust library that can be integrated into your projects for programmatic Markdown parsing and PDF generation. Offers fine-grained control over the conversion process, styling rules, and document formatting.
+[![Crates.io](https://img.shields.io/crates/v/markdown2pdf)](https://crates.io/crates/markdown2pdf)
+[![Documentation](https://img.shields.io/docsrs/markdown2pdf)](https://docs.rs/markdown2pdf)
+[![License](https://img.shields.io/crates/l/markdown2pdf)](LICENSE)
+[![Downloads](https://img.shields.io/crates/d/markdown2pdf)](https://crates.io/crates/markdown2pdf)
+[![GitHub Stars](https://img.shields.io/github/stars/theiskaa/markdown2pdf)](https://github.com/theiskaa/markdown2pdf/stargazers)
 
----
+</p>
 
-> **Note:** This project is under active development and welcomes community contributions!
-> We're continuously adding new features and improvements. If you have suggestions, find bugs, or want to contribute:
-> - Open an [issue](https://github.com/theiskaa/markdown2pdf/issues) for bugs or feature requests
-> - Submit a [pull request](https://github.com/theiskaa/markdown2pdf/pulls) to help improve the project
-> - Check our [CONTRIBUTING.md](CONTRIBUTING.md) guide for development guidelines
+markdown2pdf is a command-line tool and library for converting Markdown content into styled PDF documents. It uses a lexical analyzer to parse Markdown and a PDF module to generate documents based on the parsed tokens.
+
+The library employs a pipeline that tokenizes Markdown text into semantic elements, then processes these tokens through a styling module that applies configurable visual formatting. The styling engine supports customization of fonts, colors, spacing, and other typographic properties through TOML configuration. For containerized deployments and self-contained binaries, configurations can be embedded directly at compile time, eliminating runtime file dependencies.
+
+This project includes both a binary and a library. The binary provides a command-line interface for converting Markdown files, URLs, or direct string input into styled PDF documents. The library offers programmatic Markdown parsing and PDF generation with fine-grained control over the conversion process, styling rules, and document formatting, including embedded configuration support for Docker, Nix, and containerized deployments.
+
+The library is fast and reliable, built in Rust for performance and memory safety. It handles comprehensive Markdown syntax including headings, lists, code blocks, links, and images. Configuration is flexible through TOML files that can be loaded from disk or embedded at compile time. The library supports multiple input sources and can generate files or return PDF bytes for in-memory processing.
 
 ## Install
 
-You can install the `markdown2pdf` binary globally using cargo by running:
+Install the binary globally using cargo:
+
 ```bash
 cargo install markdown2pdf
 ```
 
-If you want to install the latest git version:
+For the latest git version:
+
 ```bash
 cargo install --git https://github.com/theiskaa/markdown2pdf
 ```
 
 ## Install as library
 
-Run the following Cargo command in your project directory:
+Add to your project:
+
 ```bash
 cargo add markdown2pdf
 ```
 
-Or add the following line to your Cargo.toml:
+Or add to your Cargo.toml:
+
 ```toml
 markdown2pdf = "0.1.5"
 ```
 
 ## Usage
-To use the `markdown2pdf` tool, you can either specify a Markdown file path, provide Markdown content directly, or set the output PDF path.
-### Options
-- `-p`, `--path`: Specify the path to the Markdown file to convert.
-- `-s`, `--string`: Provide Markdown content directly as a string.
-- `-u`, `--url`: Specify a URL to fetch Markdown content from.
-- `-o`, `--output`: Specify the output file path for the generated PDF.
 
-### Examples
-1. Convert a Markdown file to a PDF:
-   ```bash
-   markdown2pdf -p "docs/resume.md" -o "resume.pdf"
-   ```
+The markdown2pdf tool accepts Markdown file paths, direct content strings, or URLs as input. Options include `-p` for file paths, `-s` for direct string content, `-u` for URLs, and `-o` for output file specification. If multiple input options are provided, precedence follows: path > url > string. Default output is 'output.pdf' if not specified.
 
-   Convert the 'resume.md' file in the 'docs' folder to 'resume.pdf'.
-
-2. Convert Markdown content provided as a string:
-   ```bash
-   markdown2pdf -s "**bold text** *italic text*." -o "output.pdf"
-   ```
-
-   Convert the provided Markdown string to 'output.pdf'.
-
-3. Convert Markdown from a URL:
-   ```bash
-   markdown2pdf -u "https://raw.githubusercontent.com/user/repo/main/README.md" -o "readme.pdf"
-   ```
-
-   Convert the Markdown content from the URL to 'readme.pdf'.
-
-### Notes
-- If multiple input options (-p, -s, -u) are provided, only one will be used in this order: path > url > string
-- If no output file is specified with `-o`, the default output file will be 'output.pdf'.
-
-## Using as Library
-The library exposes two high-level functions that orchestrate the entire conversion process: `parse_into_file()` and `parse_into_bytes()`. Both functions accept raw Markdown text and handle all intermediate processing steps internally. Under the hood, they leverage the lexer to build an abstract syntax tree, apply styling rules from configuration, and render the final PDF output.
-
-The `parse_into_file()` function is perfect for basic usage where you want to save the PDF directly to a file - simply pass your Markdown content as a string along with the desired output path. For scenarios where you need more flexibility, such as web services, API responses, or network transmission, the `parse_into_bytes()` function returns the PDF data as a byte vector that you can manipulate in memory before saving, streaming, or transmitting.
-
-```rust
-use markdown2pdf::{parse_into_file, parse_into_bytes};
-
-// Direct file output
-parse_into_file(markdown, "output.pdf", None)?;
-
-// Get PDF as bytes for flexible handling
-let pdf_bytes = parse_into_bytes(markdown, None)?;
-// Use bytes as needed: save, send over network, etc.
-std::fs::write("output.pdf", &pdf_bytes)?;
+Convert a Markdown file:
+```bash
+markdown2pdf -p "docs/resume.md" -o "resume.pdf"
 ```
 
-For more advanced usage, you can work directly with the lexer and PDF generation components. First, create a lexer instance to parse your Markdown content into tokens
-```rust
-let mut lexer = Lexer::new(markdown);
-let tokens = lexer.parse().unwrap(); // handle errors
+Convert string content:
+```bash
+markdown2pdf -s "**bold text** *italic text*." -o "output.pdf"
 ```
 
-Next, you'll need to create a PDF renderer to transform the tokens into a formatted document. Before initializing the renderer, you'll need to define styling rules through a `StyleMatch` instance. See the [Configuration](#configuration) section below for details on customizing the styling rules.
-```rust
-let style = config::load_config(None);
-let pdf = Pdf::new(tokens, style);
-let document = pdf.render_into_document();
+Convert from URL:
+```bash
+markdown2pdf -u "https://raw.githubusercontent.com/user/repo/main/README.md" -o "readme.pdf"
 ```
 
-Finally, the `Document` object can be rendered to a PDF file using the `Pdf::render()` function, or converted to bytes using `Pdf::render_to_bytes()`. These functions handle the actual PDF generation, applying all the styling rules and formatting defined earlier:
+## Library Usage
+
+The library exposes two main functions: `parse_into_file()` and `parse_into_bytes()`. Both accept raw Markdown text and handle all intermediate processing steps internally. They leverage the lexer to build an abstract syntax tree, apply styling rules from configuration, and render the final PDF output.
+
+The `parse_into_file()` function saves the PDF directly to a file. The `parse_into_bytes()` function returns the PDF data as a byte vector for scenarios requiring more flexibility, such as web services, API responses, or network transmission.
+
+The library uses a `ConfigSource` enum to specify how styling configuration should be loaded. This supports three approaches: default built-in styling, file-based configuration loaded at runtime, or embedded configuration compiled directly into the binary.
+
+Configuration sources include `ConfigSource::Default` for built-in styling with no external dependencies, `ConfigSource::File("path")` for runtime loading from TOML files, and `ConfigSource::Embedded(content)` for compile-time embedded configuration strings.
+
+```rust
+use markdown2pdf::{parse_into_file, config::ConfigSource};
+
+// Default styling
+parse_into_file(markdown, "output.pdf", ConfigSource::Default)?;
+
+// File-based configuration
+parse_into_file(markdown, "output.pdf", ConfigSource::File("config.toml"))?;
+
+// Embedded configuration
+const CONFIG: &str = include_str!("../config.toml");
+parse_into_file(markdown, "output.pdf", ConfigSource::Embedded(CONFIG))?;
+```
+
+For embedded configuration, TOML content can be included at compile time using `include_str!()` or defined as string literals. This approach eliminates runtime file dependencies and creates truly portable executables suitable for containerized deployments.
+
+For advanced usage, you can work directly with the lexer and PDF generation components. Create a lexer instance to parse Markdown content into tokens, then create a PDF renderer with styling rules through a `StyleMatch` instance loaded via `load_config_from_source()`. Finally, render the document to a file or convert to bytes.
 
 ## Configuration
-The `markdown2pdf` tool supports customization through a TOML configuration file. You can configure various styling options for the generated PDFs by creating a `markdown2pdfrc.toml` file in your home directory, or by specifying a custom configuration file path.
 
-Under the hood the file is translated to the `StyleMatch` instance which determines how different Markdown elements will be rendered in the final PDF. When using the library, you can load custom styling configurations using `config::load_config()` or create a custom `StyleMatch` implementation. For direct binary usage, the tool automatically looks for a configuration file in your home directory.
+The markdown2pdf tool and library support extensive customization through TOML configuration. Configuration can be provided through three methods: default built-in styles, file-based configuration loaded at runtime, or embedded configuration compiled into the binary.
 
-The configuration file supports customization of fonts, colors, spacing, and other visual properties for all Markdown elements. When using the library, you can also programmatically override these settings by modifying the `StyleMatch` instance before passing it to the PDF renderer.
+The configuration is translated to a `StyleMatch` instance which determines how different Markdown elements are rendered in the final PDF. Configuration supports customization of fonts, colors, spacing, and other visual properties for all Markdown elements.
 
-### Custom Configuration Path
-When using `markdown2pdf` as a library, you can specify a custom configuration file path. This is particularly useful for library usage, project-specific configurations, or when you want to maintain multiple configuration files:
+Default configuration uses built-in styling with sensible defaults and requires no external files. File-based configuration loads TOML files at runtime and supports both relative and absolute paths. Embedded configuration compiles TOML content directly into the binary, creating self-contained executables perfect for Docker, Nix, and containerized environments.
 
-Use custom config path - supports both relative and absolute paths
-```rust
-// For file output
-markdown2pdf::parse_into_file(markdown, "output.pdf", Some("../config.toml"))?;
-markdown2pdf::parse_into_file(markdown, "output.pdf", Some("/home/user/configs/style.toml"))?;
+Embedded configuration provides several advantages: self-contained binaries with no external dependencies, container compatibility with no filesystem concerns, version control integration where configuration changes are tracked with code, compile-time validation where errors are caught early, and production reliability that eliminates missing file errors.
 
-// For bytes output
-let pdf_bytes = markdown2pdf::parse_into_bytes(markdown, Some("../config.toml"))?;
-let pdf_bytes = markdown2pdf::parse_into_bytes(markdown, Some("/home/user/configs/style.toml"))?;
-```
+Error handling is graceful - if a specified configuration file cannot be found or contains invalid syntax, the library falls back to default styling without crashing, ensuring PDF generation always succeeds.
 
-Use default config (~/markdown2pdfrc.toml or ./markdown2pdfrc.toml)
-```rust
-// For file output
-markdown2pdf::parse_into_file(markdown, "output.pdf", None)?;
-
-// For bytes output
-let pdf_bytes = markdown2pdf::parse_into_bytes(markdown, None)?;
-```
-
-**Error Handling:**
-If the specified configuration file cannot be found or contains invalid syntax, the library will gracefully fall back to default styling without crashing. This ensures that PDF generation always succeeds, even with configuration issues.
-
-### Getting Started with Configuration for binary
-1. Create the config file:
-   ```bash
-   touch ~/markdown2pdfrc.toml
-   ```
-
-2. Copy the example configuration:
-   - View the example config at [markdown2pdfrc.example.toml](markdown2pdfrc.example.toml)
-   - Copy the contents to your `~/markdown2pdfrc.toml` file
-   - Modify the values according to your preferences
+For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the example configuration from `markdown2pdfrc.example.toml`. For library usage with embedded config, create your configuration file and embed it using `include_str!()` or define it as a string literal, then use it with `ConfigSource::Embedded(content)`.
 
 ## Contributing
+
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.

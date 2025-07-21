@@ -33,6 +33,18 @@ use std::fs;
 use std::path::Path;
 use toml::Value;
 
+/// Configuration source for styling configuration.
+/// Determines where the TOML configuration should be loaded from.
+#[derive(Debug, Clone)]
+pub enum ConfigSource<'a> {
+    /// Use default built-in styling configuration
+    Default,
+    /// Load configuration from a file path
+    File(&'a str),
+    /// Use embedded TOML configuration string (compile-time embedded)
+    Embedded(&'a str),
+}
+
 /// Parses an RGB color from a TOML configuration value.
 ///
 /// The value parameter provides an optional TOML value containing a color object.
@@ -128,31 +140,39 @@ fn parse_style(value: Option<&Value>, default: BasicTextStyle) -> BasicTextStyle
     style
 }
 
-/// Loads and parses the complete styling configuration.
+/// Parses a TOML configuration string and returns a complete StyleMatch.
 ///
-/// Attempts to read styling configuration from the markdown2pdfrc.toml file.
-/// First checks the user's home directory for the config file, then falls back
-/// to the current directory. If no config file is found or if parsing fails,
-/// returns default styles. The function processes all style sections and
-/// returns a complete StyleMatch object containing the full configuration.
-pub fn load_config(path: Option<&str>) -> StyleMatch {
-    let config_path = if let Some(custom_path) = path {
-        Path::new(custom_path).to_path_buf()
-    } else {
-        dirs::home_dir()
-            .map(|mut path| {
-                path.push("markdown2pdfrc.toml");
-                path
-            })
-            .unwrap_or_else(|| Path::new("markdown2pdfrc.toml").to_path_buf())
-    };
-
-    let config_str = match fs::read_to_string(config_path) {
-        Ok(s) => s,
-        Err(_) => return StyleMatch::default(),
-    };
-
-    let config: Value = match toml::from_str(&config_str) {
+/// This function handles the core TOML parsing logic and can be used with both
+/// embedded configuration strings (via include_str!) and runtime-loaded files.
+/// It processes all style sections and returns a complete StyleMatch object
+/// containing the full configuration.
+///
+/// # Arguments
+/// * `config_str` - The TOML configuration content as a string
+///
+/// # Returns
+/// A complete StyleMatch with parsed configuration, or default values if parsing fails
+///
+/// # Example
+/// ```rust
+/// use markdown2pdf::config::{ConfigSource, load_config_from_source};
+///
+/// // Use default configuration
+/// let style = load_config_from_source(ConfigSource::Default);
+///
+/// // Load from file
+/// let style = load_config_from_source(ConfigSource::File("config.toml"));
+///
+/// // Use embedded configuration
+/// const EMBEDDED: &str = r#"
+///     [heading.1]
+///     size = 18
+///     bold = true
+/// "#;
+/// let style = load_config_from_source(ConfigSource::Embedded(EMBEDDED));
+/// ```
+pub fn parse_config_string(config_str: &str) -> StyleMatch {
+    let config: Value = match toml::from_str(config_str) {
         Ok(v) => v,
         Err(_) => return StyleMatch::default(),
     };
@@ -201,6 +221,51 @@ pub fn load_config(path: Option<&str>) -> StyleMatch {
         image: parse_style(config.get("image"), default_style.image),
         text: parse_style(config.get("text"), default_style.text),
         horizontal_rule: parse_style(config.get("horizontal_rule"), default_style.horizontal_rule),
+    }
+}
+
+/// Loads and parses the complete styling configuration based on the provided source.
+///
+/// This function handles different configuration sources: default styles, file-based
+/// configuration, or embedded TOML strings. It processes all style sections and
+/// returns a complete StyleMatch object containing the full configuration.
+///
+/// # Arguments
+/// * `source` - The configuration source (Default, File, or Embedded)
+///
+/// # Returns
+/// A complete StyleMatch with the appropriate configuration applied
+///
+/// # Examples
+/// ```rust
+/// use markdown2pdf::config::{ConfigSource, load_config_from_source};
+///
+/// // Use default configuration
+/// let style = load_config_from_source(ConfigSource::Default);
+///
+/// // Load from file
+/// let style = load_config_from_source(ConfigSource::File("config.toml"));
+///
+/// // Use embedded configuration
+/// const EMBEDDED: &str = r#"
+///     [heading.1]
+///     size = 18
+///     bold = true
+/// "#;
+/// let style = load_config_from_source(ConfigSource::Embedded(EMBEDDED));
+/// ```
+pub fn load_config_from_source(source: ConfigSource) -> StyleMatch {
+    match source {
+        ConfigSource::Default => StyleMatch::default(),
+        ConfigSource::File(path) => {
+            let config_path = Path::new(path).to_path_buf();
+            let config_str = match fs::read_to_string(config_path) {
+                Ok(s) => s,
+                Err(_) => return StyleMatch::default(),
+            };
+            parse_config_string(&config_str)
+        }
+        ConfigSource::Embedded(content) => parse_config_string(content),
     }
 }
 
@@ -377,5 +442,112 @@ mod tests {
         assert_eq!(parsed_style.size, default_style.size);
         assert_eq!(parsed_style.before_spacing, default_style.before_spacing);
         assert_eq!(parsed_style.bold, default_style.bold);
+    }
+
+    #[test]
+    fn test_parse_config_string() {
+        let config_str = r#"
+            [margin]
+            top = 10.0
+            right = 12.0
+            bottom = 10.0
+            left = 12.0
+
+            [heading.1]
+            size = 16
+            bold = true
+            textcolor = { r = 50, g = 50, b = 50 }
+
+            [text]
+            size = 12
+            alignment = "justify"
+        "#;
+
+        let style = parse_config_string(config_str);
+
+        assert_eq!(style.margins.top, 10.0);
+        assert_eq!(style.margins.right, 12.0);
+        assert_eq!(style.margins.bottom, 10.0);
+        assert_eq!(style.margins.left, 12.0);
+
+        assert_eq!(style.heading_1.size, 16);
+        assert!(style.heading_1.bold);
+        assert_eq!(style.heading_1.text_color, Some((50, 50, 50)));
+
+        assert_eq!(style.text.size, 12);
+        assert_eq!(style.text.alignment, Some(TextAlignment::Justify));
+    }
+
+    #[test]
+    fn test_parse_config_string_invalid_toml() {
+        let invalid_config = "this is not valid toml {{{";
+        let style = parse_config_string(invalid_config);
+
+        let default_style = StyleMatch::default();
+        assert_eq!(style.margins.top, default_style.margins.top);
+        assert_eq!(style.heading_1.size, default_style.heading_1.size);
+    }
+
+    #[test]
+    fn test_load_config() {
+        let style = load_config_from_source(ConfigSource::Default);
+        let default_style = StyleMatch::default();
+        assert_eq!(style.margins.top, default_style.margins.top);
+        assert_eq!(style.heading_1.size, default_style.heading_1.size);
+        assert_eq!(style.text.size, default_style.text.size);
+
+        let style = load_config_from_source(ConfigSource::File("nonexistent.toml"));
+        assert_eq!(style.margins.top, default_style.margins.top);
+        assert_eq!(style.heading_1.size, default_style.heading_1.size);
+        assert_eq!(style.text.size, default_style.text.size);
+    }
+
+    #[test]
+    fn test_config_source_default() {
+        let style = load_config_from_source(ConfigSource::Default);
+        let default_style = StyleMatch::default();
+
+        assert_eq!(style.margins.top, default_style.margins.top);
+        assert_eq!(style.heading_1.size, default_style.heading_1.size);
+        assert_eq!(style.text.size, default_style.text.size);
+    }
+
+    #[test]
+    fn test_config_source_embedded() {
+        const EMBEDDED_CONFIG: &str = r#"
+            [margin]
+            top = 20.0
+            right = 25.0
+            bottom = 20.0
+            left = 25.0
+
+            [heading.1]
+            size = 22
+            bold = true
+            textcolor = { r = 100, g = 0, b = 0 }
+
+            [text]
+            size = 13
+            alignment = "justify"
+        "#;
+
+        let style = load_config_from_source(ConfigSource::Embedded(EMBEDDED_CONFIG));
+
+        assert_eq!(style.margins.top, 20.0);
+        assert_eq!(style.margins.right, 25.0);
+        assert_eq!(style.heading_1.size, 22);
+        assert!(style.heading_1.bold);
+        assert_eq!(style.heading_1.text_color, Some((100, 0, 0)));
+        assert_eq!(style.text.size, 13);
+        assert_eq!(style.text.alignment, Some(TextAlignment::Justify));
+    }
+
+    #[test]
+    fn test_config_source_file_nonexistent() {
+        let style = load_config_from_source(ConfigSource::File("nonexistent.toml"));
+        let default_style = StyleMatch::default();
+
+        assert_eq!(style.margins.top, default_style.margins.top);
+        assert_eq!(style.heading_1.size, default_style.heading_1.size);
     }
 }

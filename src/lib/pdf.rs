@@ -114,10 +114,10 @@ impl Pdf {
     /// ```rust
     /// // This example shows the basic usage pattern, but render_to_bytes
     /// // is typically called internally by parse_into_bytes
-    /// use markdown2pdf::parse_into_bytes;
+    /// use markdown2pdf::{parse_into_bytes, config::ConfigSource};
     ///
     /// let markdown = "# Test\nSome content".to_string();
-    /// let pdf_bytes = parse_into_bytes(markdown, None).unwrap();
+    /// let pdf_bytes = parse_into_bytes(markdown, ConfigSource::Default).unwrap();
     /// // Use the bytes as needed (save, send, etc.)
     /// assert!(!pdf_bytes.is_empty());
     /// ```
