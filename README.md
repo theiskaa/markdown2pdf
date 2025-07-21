@@ -108,5 +108,7 @@ Error handling is graceful - if a specified configuration file cannot be found o
 For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the example configuration from `markdown2pdfrc.example.toml`. For library usage with embedded config, create your configuration file and embed it using `include_str!()` or define it as a string literal, then use it with `ConfigSource::Embedded(content)`.
 
 ## Contributing
-
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.
+
+## Donations
+For information regarding donations please refer to [DONATE.md](DONATE.md)
