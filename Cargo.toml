@@ -1,6 +1,6 @@
 [package]
 name = "markdown2pdf"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 authors = ["Ismael Sh <me@theiskaa.com>"]
 description = "Create PDF with Markdown files (a md to pdf transpiler)"
@@ -40,3 +40,8 @@ rusttype = "0.8"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
