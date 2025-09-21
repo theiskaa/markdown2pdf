@@ -1045,7 +1045,7 @@ checksum = "7d947cbb889ed21c2a84be6ffbaebf5b4e0f4340638cba0444907e38b56be084"
 
 [[package]]
 name = "markdown2pdf"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "clap",
  "dirs",
