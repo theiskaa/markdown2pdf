@@ -6,6 +6,21 @@ the changelog generator (git-cliff).
 
 ---
 
+## [0.1.7] - 2025-09-21
+
+### Documentation
+- *(readme)* Update readme to include homebrew and prebuilt install variants
+
+## [0.1.7] - 2025-09-21
+
+### Documentation
+- *(funding)* Add github funding file
+- *(donate)* Add donation information and link to DONATE.md in README
+
+### Miscellaneous Tasks
+
+- *(ci)* Add GitHub Actions workflow for release automation and configure dist settings in Cargo.toml and new dist-workspace.toml
+
 ## [0.1.6] - 2025-07-21
 
 ### Features
