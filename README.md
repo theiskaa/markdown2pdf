@@ -18,7 +18,15 @@ This project includes both a binary and a library. The binary provides a command
 
 The library is fast and reliable, built in Rust for performance and memory safety. It handles comprehensive Markdown syntax including headings, lists, code blocks, links, and images. Configuration is flexible through TOML files that can be loaded from disk or embedded at compile time. The library supports multiple input sources and can generate files or return PDF bytes for in-memory processing.
 
-## Install
+## Install binary
+
+### Homebrew
+
+```sh
+brew install theiskaa/tap/markdown2pdf
+```
+
+### Cargo
 
 Install the binary globally using cargo:
 
@@ -31,6 +39,18 @@ For the latest git version:
 ```bash
 cargo install --git https://github.com/theiskaa/markdown2pdf
 ```
+
+### Prebuilt binaries
+
+Prebuilt versions are available in our [GitHub releases](https://github.com/theiskaa/markdown2pdf/releases/latest):
+
+|  File  | Platform | Checksum |
+|--------|----------|----------|
+| [markdown2pdf-aarch64-apple-darwin.tar.xz](https://github.com/theiskaa/markdown2pdf/releases/latest/download/markdown2pdf-aarch64-apple-darwin.tar.xz) | Apple Silicon macOS | [checksum](https://github.com/theiskaa/markdown2pdf/releases/latest/download/markdown2pdf-aarch64-apple-darwin.tar.xz.sha256) |
+| [markdown2pdf-x86_64-apple-darwin.tar.xz](https://github.com/theiskaa/markdown2pdf/releases/latest/download/markdown2pdf-x86_64-apple-darwin.tar.xz) | Intel macOS | [checksum](https://github.com/theiskaa/markdown2pdf/releases/latest/download/markdown2pdf-x86_64-apple-darwin.tar.xz.sha256) |
+| [markdown2pdf-x86_64-pc-windows-msvc.zip](https://github.com/theiskaa/markdown2pdf/releases/latest/download/markdown2pdf-x86_64-pc-windows-msvc.zip) | x64 Windows | [checksum](https://github.com/theiskaa/markdown2pdf/releases/latest/download/markdown2pdf-x86_64-pc-windows-msvc.zip.sha256) |
+| [markdown2pdf-aarch64-unknown-linux-gnu.tar.xz](https://github.com/theiskaa/markdown2pdf/releases/latest/download/markdown2pdf-aarch64-unknown-linux-gnu.tar.xz) | ARM64 Linux | [checksum](https://github.com/theiskaa/markdown2pdf/releases/latest/download/markdown2pdf-aarch64-unknown-linux-gnu.tar.xz.sha256) |
+| [markdown2pdf-x86_64-unknown-linux-gnu.tar.xz](https://github.com/theiskaa/markdown2pdf/releases/latest/download/markdown2pdf-x86_64-unknown-linux-gnu.tar.xz) | x64 Linux | [checksum](https://github.com/theiskaa/markdown2pdf/releases/latest/download/markdown2pdf-x86_64-unknown-linux-gnu.tar.xz.sha256) |
 
 ## Install as library
 
