@@ -6,12 +6,24 @@ the changelog generator (git-cliff).
 
 ---
 
+## [0.1.8] - 2025-10-07
+
+### Features
+- *(markdown)* Improve list parsing and add is_list_marker method for better list item handling
+- *(debug)* Add functionality to save tokens as JSON for visualization
+
+### Bug Fixes
+- *(markdown)* Remove the token visualization json generator call
+
+### Documentation
+
+- *(changelog)* Update changelog with 0.1.7 commits
+- *(readme)* Update readme to include homebrew and prebuilt install variants
+
 ## [0.1.7] - 2025-09-21
 
 ### Documentation
 - *(readme)* Update readme to include homebrew and prebuilt install variants
-
-## [0.1.7] - 2025-09-21
 
 ### Documentation
 - *(funding)* Add github funding file
