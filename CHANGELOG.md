@@ -7,7 +7,6 @@ the changelog generator (git-cliff).
 ---
 
 ## [0.1.8] - 2025-10-07
-
 ### Features
 - *(markdown)* Improve list parsing and add is_list_marker method for better list item handling
 - *(debug)* Add functionality to save tokens as JSON for visualization
