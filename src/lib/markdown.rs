@@ -117,8 +117,6 @@ impl Lexer {
             }
         }
 
-        let _ = Token::save_to_json_file(tokens.clone(), "tokens.json");
-
         Ok(tokens)
     }
 
