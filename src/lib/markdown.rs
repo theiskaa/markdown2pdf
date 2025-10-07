@@ -151,6 +151,12 @@ impl Lexer {
                                 continue;
                             }
                         }
+                        '*' => {
+                            if self.is_list_marker('*') {
+                                content.push(self.parse_list_item(false, current_indent)?);
+                                continue;
+                            }
+                        }
                         '0'..='9' => {
                             if self.check_ordered_list_marker().is_some() {
                                 content.push(self.parse_list_item(true, current_indent)?);
@@ -188,6 +194,7 @@ impl Lexer {
 
         let token = match current_char {
             '#' if is_line_start => self.parse_heading()?,
+            '*' if is_line_start && self.is_list_marker('*') => self.parse_list_item(false, 0)?,
             '*' | '_' => self.parse_emphasis()?,
             '`' => self.parse_code()?,
             '>' if is_line_start => self.parse_blockquote()?,
@@ -601,6 +608,13 @@ impl Lexer {
                         content.push(self.parse_list_item(false, current_indent)?);
                     }
                 }
+                '*' => {
+                    if self.is_list_marker('*') {
+                        content.push(self.parse_list_item(false, current_indent)?);
+                    } else {
+                        break;
+                    }
+                }
                 '0'..='9' => {
                     if self.check_ordered_list_marker().is_some() {
                         content.push(self.parse_list_item(true, current_indent)?);
@@ -631,6 +645,21 @@ impl Lexer {
             pos += 1;
         }
         count
+    }
+
+    /// Checks if the given character at the current position is a list marker
+    /// A list marker is followed by whitespace (space or tab)
+    fn is_list_marker(&self, marker: char) -> bool {
+        if self.current_char() != marker {
+            return false;
+        }
+
+        if self.position + 1 < self.input.len() {
+            let next_char = self.input[self.position + 1];
+            next_char == ' ' || next_char == '\t'
+        } else {
+            false
+        }
     }
 }
 

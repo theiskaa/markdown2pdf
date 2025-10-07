@@ -106,6 +106,7 @@
 //! ```
 
 pub mod config;
+mod debug;
 pub mod fonts;
 pub mod markdown;
 pub mod pdf;
