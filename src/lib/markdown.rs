@@ -78,6 +78,70 @@ pub enum Token {
     Unknown(String),
 }
 
+impl Token {
+    /// Recursively extracts all text content from a token and its nested tokens.
+    /// This is useful for collecting all characters used in a document for font subsetting.
+    ///
+    /// # Returns
+    /// A string containing all text content from this token and any nested tokens.
+    ///
+    /// # Example
+    /// ```
+    /// use markdown2pdf::markdown::Token;
+    ///
+    /// let tokens = vec![
+    ///     Token::Heading(vec![Token::Text("Title".to_string())], 1),
+    ///     Token::Text("Body text with ăâîșț".to_string()),
+    /// ];
+    ///
+    /// let all_text = Token::collect_all_text(&tokens);
+    /// assert!(all_text.contains("Title"));
+    /// assert!(all_text.contains("ăâîșț"));
+    /// ```
+    pub fn collect_all_text(tokens: &[Token]) -> String {
+        let mut result = String::new();
+        for token in tokens {
+            token.collect_text_recursive(&mut result);
+        }
+        result
+    }
+
+    fn collect_text_recursive(&self, result: &mut String) {
+        match self {
+            Token::Text(s) => result.push_str(s),
+            Token::Heading(nested, _) => {
+                for token in nested {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::Emphasis { content, .. } => {
+                for token in content {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::StrongEmphasis(nested) => {
+                for token in nested {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::Code(_, code) => result.push_str(code),
+            Token::BlockQuote(text) => result.push_str(text),
+            Token::ListItem { content, .. } => {
+                for token in content {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::Link(text, _) => result.push_str(text),
+            Token::Image(alt, _) => result.push_str(alt),
+            Token::HtmlComment(comment) => result.push_str(comment),
+            Token::Unknown(text) => result.push_str(text),
+            Token::Newline | Token::HorizontalRule => {
+                // These don't contain text
+            }
+        }
+    }
+}
+
 /// Error types that can occur during lexical analysis
 #[derive(Debug)]
 pub enum LexerError {
