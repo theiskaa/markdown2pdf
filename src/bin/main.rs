@@ -45,10 +45,36 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         .to_str()
         .ok_or_else(|| AppError::PathError("Invalid output path".to_string()))?;
 
+    // Extract font configuration from CLI arguments
+    let font_config = if matches.contains_id("font-path")
+        || matches.contains_id("default-font")
+        || matches.contains_id("code-font")
+    {
+        let custom_paths: Vec<PathBuf> = matches
+            .get_many::<String>("font-path")
+            .map(|values| values.map(PathBuf::from).collect())
+            .unwrap_or_default();
+
+        let default_font = matches
+            .get_one::<String>("default-font")
+            .map(|s| s.to_string());
+
+        let code_font = matches.get_one::<String>("code-font").map(|s| s.to_string());
+
+        Some(markdown2pdf::fonts::FontConfig {
+            custom_paths,
+            default_font,
+            code_font,
+        })
+    } else {
+        None
+    };
+
     markdown2pdf::parse_into_file(
         markdown,
         output_path_str,
         markdown2pdf::config::ConfigSource::Default,
+        font_config.as_ref(),
     )
     .map_err(|e| AppError::ConversionError(e.to_string()))?;
 
@@ -90,6 +116,25 @@ fn main() {
                 .long("output")
                 .value_name("OUTPUT_PATH")
                 .help("Path to the output PDF file (defaults to ./output.pdf)"),
+        )
+        .arg(
+            Arg::new("font-path")
+                .long("font-path")
+                .value_name("PATH")
+                .help("Path to custom font directory or font file")
+                .action(clap::ArgAction::Append),
+        )
+        .arg(
+            Arg::new("default-font")
+                .long("default-font")
+                .value_name("FONT_NAME")
+                .help("Default font family to use (default: helvetica)"),
+        )
+        .arg(
+            Arg::new("code-font")
+                .long("code-font")
+                .value_name("FONT_NAME")
+                .help("Font for code blocks (default: courier)"),
         );
 
     let matches = cmd.clone().get_matches();
