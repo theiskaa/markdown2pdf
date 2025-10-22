@@ -10,11 +10,27 @@ use rusttype::Font;
 
 /// Configuration for custom font loading.
 /// Allows users to specify custom font paths and override default font selections.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct FontConfig {
+    /// Custom font directories or files to search
     pub custom_paths: Vec<PathBuf>,
+    /// Override for the default text font (if None, uses style config)
     pub default_font: Option<String>,
+    /// Override for the code font (if None, uses courier)
     pub code_font: Option<String>,
+    /// Enable font subsetting to reduce PDF file size (default: true)
+    pub enable_subsetting: bool,
+}
+
+impl Default for FontConfig {
+    fn default() -> Self {
+        Self {
+            custom_paths: Vec::new(),
+            default_font: None,
+            code_font: None,
+            enable_subsetting: true, // Enabled by default for smaller PDFs
+        }
+    }
 }
 
 /// Attempts to load a built-in PDF font family using only the PDF built-in fonts
@@ -331,6 +347,7 @@ pub fn load_custom_font_family(
 /// # Arguments
 /// * `name` - The font family name to load
 /// * `config` - Optional font configuration with custom paths
+/// * `text` - Optional text content for font subsetting
 ///
 /// # Returns
 /// * `Ok(FontFamily<FontData>)` if the font is found
@@ -340,27 +357,146 @@ pub fn load_custom_font_family(
 /// 1. If custom_paths are provided in config, search there first
 /// 2. Check if it's a built-in font (helvetica, times, courier)
 /// 3. Search system fonts
-/// 4. Return error if nothing found
+/// 4. Apply font subsetting if enabled and text is provided
+/// 5. Return error if nothing found
 pub fn load_font_with_config(
     name: &str,
     config: Option<&FontConfig>,
+    text: Option<&str>,
 ) -> Result<FontFamily<FontData>, Error> {
-    // If custom paths are provided, try those first
+    // Check if subsetting is enabled
+    let enable_subsetting = config.map(|c| c.enable_subsetting).unwrap_or(false);
+
+    // Try custom paths first if provided
     if let Some(cfg) = config {
         if !cfg.custom_paths.is_empty() {
             if let Ok(family) = load_custom_font_family(name, &cfg.custom_paths) {
+                return apply_subsetting_if_enabled(family, enable_subsetting, text);
+            }
+        }
+    }
+
+    // Check if it's a built-in font (no subsetting for built-in fonts)
+    let family = match name.to_lowercase().as_str() {
+        "helvetica" | "arial" | "sans" | "sans-serif" | "times" | "timesnewroman"
+        | "times new roman" | "serif" | "courier" | "monospace" => {
+            return load_builtin_font_family(name); // Built-in fonts don't use subsetting
+        }
+        _ => {
+            // Try system fonts as fallback
+            load_system_font_family_simple(name)?
+        }
+    };
+
+    apply_subsetting_if_enabled(family, enable_subsetting, text)
+}
+
+/// Applies font subsetting if enabled and text is provided.
+fn apply_subsetting_if_enabled(
+    family: FontFamily<FontData>,
+    enable_subsetting: bool,
+    text: Option<&str>,
+) -> Result<FontFamily<FontData>, Error> {
+    if !enable_subsetting || text.is_none() {
+        return Ok(family);
+    }
+
+    let text = text.unwrap();
+    if text.is_empty() {
+        return Ok(family);
+    }
+
+    // Subset the font using genpdfi's subsetting module
+    // Get the raw font data from the first variant (regular)
+    let original_data = family.regular.get_data()?;
+
+    let subset_data = genpdfi::subsetting::subset_font(original_data, text).map_err(|e| {
+        eprintln!("Warning: Font subsetting failed: {}, using full font", e);
+        e
+    })?;
+
+    // Create new FontFamily with subset data
+    let shared = Arc::new(subset_data);
+    let mk = || FontData::new_shared(shared.clone(), None);
+
+    Ok(FontFamily {
+        regular: mk()?,
+        bold: mk()?,
+        italic: mk()?,
+        bold_italic: mk()?,
+    })
+}
+
+/// Loads a Unicode-capable system font with good international character support.
+///
+/// This function attempts to find and load a font from the system that supports
+/// a wide range of Unicode characters, making it suitable for documents with
+/// international text (Romanian, Cyrillic, Greek, etc.).
+///
+/// # Priority Order
+/// 1. Noto Sans - Google's comprehensive Unicode font
+/// 2. DejaVu Sans - Popular open-source Unicode font
+/// 3. Liberation Sans - Red Hat's Unicode font
+/// 4. Arial Unicode MS - Microsoft's Unicode font (if available)
+/// 5. Fallback to Helvetica (PDF built-in, limited to Windows-1252)
+///
+/// # Arguments
+/// * `text` - Optional text to check coverage for. If provided, will verify the selected font supports all characters.
+///
+/// # Returns
+/// * `Ok(FontFamily<FontData>)` - A font family with good Unicode support
+/// * `Err(Error)` - If no suitable font could be loaded
+///
+/// # Example
+/// ```rust,no_run
+/// use markdown2pdf::fonts::load_unicode_system_font;
+///
+/// // Load best available Unicode font
+/// let font = load_unicode_system_font(None)?;
+///
+/// // Load and verify coverage for Romanian text
+/// let romanian_text = "ăâîșț ĂÂÎȘȚ";
+/// let font = load_unicode_system_font(Some(romanian_text))?;
+/// # Ok::<(), genpdfi::error::Error>(())
+/// ```
+pub fn load_unicode_system_font(text: Option<&str>) -> Result<FontFamily<FontData>, Error> {
+    // Priority list of Unicode-capable fonts
+    let unicode_fonts = [
+        "Noto Sans",
+        "DejaVu Sans",
+        "Liberation Sans",
+        "Arial Unicode MS",
+        "Segoe UI", // Windows default (good Unicode support)
+        "SF Pro",   // macOS (good Unicode support)
+        "Roboto",   // Android default
+    ];
+
+    // Try each Unicode font
+    for font_name in &unicode_fonts {
+        if let Ok(family) = load_system_font_family_simple(font_name) {
+            // If text provided, check coverage
+            if let Some(text) = text {
+                let coverage = family.regular.check_coverage(text);
+                if coverage.is_complete() {
+                    eprintln!("✓ Using system font '{}' (100% coverage)", font_name);
+                    return Ok(family);
+                } else {
+                    eprintln!(
+                        "⚠ Font '{}' has only {:.1}% coverage, trying next...",
+                        font_name,
+                        coverage.coverage_percent()
+                    );
+                }
+            } else {
+                // No text to check, font found is good enough
+                eprintln!("✓ Using system font '{}'", font_name);
                 return Ok(family);
             }
         }
     }
 
-    // Check if it's a built-in font
-    match name.to_lowercase().as_str() {
-        "helvetica" | "arial" | "sans" | "sans-serif" | "times" | "timesnewroman"
-        | "times new roman" | "serif" | "courier" | "monospace" => load_builtin_font_family(name),
-        _ => {
-            // Try system fonts as fallback
-            load_system_font_family_simple(name)
-        }
-    }
+    // Last resort: use PDF built-in Helvetica
+    eprintln!("⚠ No Unicode font found, falling back to Helvetica (limited character support)");
+    eprintln!("  Tip: Install 'Noto Sans' or 'DejaVu Sans' for better Unicode support");
+    load_builtin_font_family("helvetica")
 }

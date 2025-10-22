@@ -65,6 +65,7 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             custom_paths,
             default_font,
             code_font,
+            enable_subsetting: true,  // Enable subsetting by default for smaller PDFs
         })
     } else {
         None
