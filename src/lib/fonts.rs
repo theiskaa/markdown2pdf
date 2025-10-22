@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use fontdb::Database;
@@ -6,6 +7,15 @@ use genpdfi::error::{Error, ErrorKind};
 use genpdfi::fonts::{FontData, FontFamily};
 use printpdf::BuiltinFont;
 use rusttype::Font;
+
+/// Configuration for custom font loading.
+/// Allows users to specify custom font paths and override default font selections.
+#[derive(Debug, Clone, Default)]
+pub struct FontConfig {
+    pub custom_paths: Vec<PathBuf>,
+    pub default_font: Option<String>,
+    pub code_font: Option<String>,
+}
 
 /// Attempts to load a built-in PDF font family using only the PDF built-in fonts
 /// without any system font dependencies. This ensures consistent character spacing
@@ -233,4 +243,124 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
         italic: mk()?,
         bold_italic: mk()?,
     })
+}
+
+/// Attempts to load a font family from custom paths first, then falls back to system fonts.
+/// This function searches user-specified directories or files before looking in system fonts.
+///
+/// # Arguments
+/// * `name` - The font family name to search for
+/// * `custom_paths` - Custom directories or font files to search
+///
+/// # Returns
+/// * `Ok(FontFamily<FontData>)` if the font is found and loaded successfully
+/// * `Err(Error)` if the font cannot be found in any location
+///
+/// # Search order
+/// 1. Custom paths (if provided) - searches for exact matches or files containing the name
+/// 2. System fonts via fontdb
+/// 3. Returns error if not found
+pub fn load_custom_font_family(
+    name: &str,
+    custom_paths: &[PathBuf],
+) -> Result<FontFamily<FontData>, Error> {
+    let wanted = name.to_lowercase();
+
+    // First, try to load from custom paths
+    for custom_path in custom_paths {
+        if custom_path.is_file() {
+            // If it's a direct file path, try to load it
+            if let Some(file_name) = custom_path.file_name().and_then(|n| n.to_str()) {
+                if file_name.to_lowercase().contains(&wanted) {
+                    if let Ok(bytes) = fs::read(custom_path) {
+                        if rusttype::Font::from_bytes(bytes.clone()).is_ok() {
+                            let shared = Arc::new(bytes);
+                            let mk = || FontData::new_shared(shared.clone(), None);
+                            return Ok(FontFamily {
+                                regular: mk()?,
+                                bold: mk()?,
+                                italic: mk()?,
+                                bold_italic: mk()?,
+                            });
+                        }
+                    }
+                }
+            }
+        } else if custom_path.is_dir() {
+            if let Ok(entries) = fs::read_dir(custom_path) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+
+                    // Only consider TTF/OTF files
+                    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                        if !ext.eq_ignore_ascii_case("ttf") && !ext.eq_ignore_ascii_case("otf") {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+
+                    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                        if file_name.to_lowercase().contains(&wanted) {
+                            if let Ok(bytes) = fs::read(&path) {
+                                if rusttype::Font::from_bytes(bytes.clone()).is_ok() {
+                                    let shared = Arc::new(bytes);
+                                    let mk = || FontData::new_shared(shared.clone(), None);
+                                    return Ok(FontFamily {
+                                        regular: mk()?,
+                                        bold: mk()?,
+                                        italic: mk()?,
+                                        bold_italic: mk()?,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If not found in custom paths, fall back to system fonts
+    load_system_font_family_simple(name)
+}
+
+/// Loads a font family using the provided FontConfig, with intelligent fallback.
+/// This is the main entry point for loading fonts with custom configuration.
+///
+/// # Arguments
+/// * `name` - The font family name to load
+/// * `config` - Optional font configuration with custom paths
+///
+/// # Returns
+/// * `Ok(FontFamily<FontData>)` if the font is found
+/// * `Err(Error)` if the font cannot be loaded from any source
+///
+/// # Loading strategy
+/// 1. If custom_paths are provided in config, search there first
+/// 2. Check if it's a built-in font (helvetica, times, courier)
+/// 3. Search system fonts
+/// 4. Return error if nothing found
+pub fn load_font_with_config(
+    name: &str,
+    config: Option<&FontConfig>,
+) -> Result<FontFamily<FontData>, Error> {
+    // If custom paths are provided, try those first
+    if let Some(cfg) = config {
+        if !cfg.custom_paths.is_empty() {
+            if let Ok(family) = load_custom_font_family(name, &cfg.custom_paths) {
+                return Ok(family);
+            }
+        }
+    }
+
+    // Check if it's a built-in font
+    match name.to_lowercase().as_str() {
+        "helvetica" | "arial" | "sans" | "sans-serif" | "times" | "timesnewroman"
+        | "times new roman" | "serif" | "courier" | "monospace" => load_builtin_font_family(name),
+        _ => {
+            // Try system fonts as fallback
+            load_system_font_family_simple(name)
+        }
+    }
 }
