@@ -15,7 +15,7 @@
 //! // Convert Markdown string to PDF with proper error handling
 //! fn example() -> Result<(), Box<dyn Error>> {
 //!     let markdown = "# Hello World\nThis is a test.".to_string();
-//!     markdown2pdf::parse_into_file(markdown, "output.pdf", ConfigSource::Default)?;
+//!     markdown2pdf::parse_into_file(markdown, "output.pdf", ConfigSource::Default, None)?;
 //!     Ok(())
 //! }
 //! ```
@@ -31,7 +31,7 @@
 //! // Read markdown file with proper error handling
 //! fn example_with_styling() -> Result<(), Box<dyn Error>> {
 //!     let markdown = fs::read_to_string("input.md")?;
-//!     markdown2pdf::parse_into_file(markdown, "styled-output.pdf", ConfigSource::Default)?;
+//!     markdown2pdf::parse_into_file(markdown, "styled-output.pdf", ConfigSource::Default, None)?;
 //!     Ok(())
 //! }
 //! ```
@@ -51,7 +51,7 @@
 //!     See our [website](https://example.com) for more info.
 //!     "#.to_string();
 //!
-//!     markdown2pdf::parse_into_file(markdown, "doc-with-images.pdf", ConfigSource::Default)?;
+//!     markdown2pdf::parse_into_file(markdown, "doc-with-images.pdf", ConfigSource::Default, None)?;
 //!     Ok(())
 //! }
 //! ```
@@ -158,23 +158,29 @@ impl fmt::Display for MdpError {
 /// ```rust
 /// use std::error::Error;
 /// use markdown2pdf::config::ConfigSource;
+/// use markdown2pdf::fonts::FontConfig;
 ///
 /// fn example() -> Result<(), Box<dyn Error>> {
 ///     let markdown = "# Hello World\nThis is a test.".to_string();
 ///
 ///     // Use default configuration
-///     markdown2pdf::parse_into_file(markdown.clone(), "output1.pdf", ConfigSource::Default)?;
+///     markdown2pdf::parse_into_file(markdown.clone(), "output1.pdf", ConfigSource::Default, None)?;
 ///
 ///     // Use file-based configuration
-///     markdown2pdf::parse_into_file(markdown.clone(), "output2.pdf", ConfigSource::File("config.toml"))?;
+///     markdown2pdf::parse_into_file(markdown.clone(), "output2.pdf", ConfigSource::File("config.toml"), None)?;
 ///
-///     // Use embedded configuration
+///     // Use embedded configuration with custom font
 ///     const EMBEDDED: &str = r#"
 ///         [heading.1]
 ///         size = 18
 ///         bold = true
 ///     "#;
-///     markdown2pdf::parse_into_file(markdown, "output3.pdf", ConfigSource::Embedded(EMBEDDED))?;
+///     let font_config = FontConfig {
+///         custom_paths: vec!["./fonts".into()],
+///         default_font: Some("Roboto".to_string()),
+///         code_font: None,
+///     };
+///     markdown2pdf::parse_into_file(markdown, "output3.pdf", ConfigSource::Embedded(EMBEDDED), Some(&font_config))?;
 ///
 ///     Ok(())
 /// }
@@ -183,6 +189,7 @@ pub fn parse_into_file(
     markdown: String,
     path: &str,
     config: config::ConfigSource,
+    font_config: Option<&fonts::FontConfig>,
 ) -> Result<(), MdpError> {
     let mut lexer = Lexer::new(markdown);
     let tokens = lexer
@@ -190,7 +197,7 @@ pub fn parse_into_file(
         .map_err(|e| MdpError::ParseError(format!("Failed to parse markdown: {:?}", e)))?;
 
     let style = config::load_config_from_source(config);
-    let pdf = Pdf::new(tokens, style);
+    let pdf = Pdf::new(tokens, style, font_config);
     let document = pdf.render_into_document();
 
     if let Some(err) = Pdf::render(document, path) {
@@ -221,6 +228,7 @@ pub fn parse_into_file(
 /// use std::fs;
 /// use std::error::Error;
 /// use markdown2pdf::config::ConfigSource;
+/// use markdown2pdf::fonts::FontConfig;
 ///
 /// fn example() -> Result<(), Box<dyn Error>> {
 ///     let markdown = "# Hello World\nThis is a test.".to_string();
@@ -231,7 +239,7 @@ pub fn parse_into_file(
 ///         size = 18
 ///         bold = true
 ///     "#;
-///     let pdf_bytes = markdown2pdf::parse_into_bytes(markdown, ConfigSource::Embedded(EMBEDDED))?;
+///     let pdf_bytes = markdown2pdf::parse_into_bytes(markdown, ConfigSource::Embedded(EMBEDDED), None)?;
 ///
 ///     // Save to file or send over network
 ///     fs::write("output.pdf", pdf_bytes)?;
@@ -241,6 +249,7 @@ pub fn parse_into_file(
 pub fn parse_into_bytes(
     markdown: String,
     config: config::ConfigSource,
+    font_config: Option<&fonts::FontConfig>,
 ) -> Result<Vec<u8>, MdpError> {
     let mut lexer = Lexer::new(markdown);
     let tokens = lexer
@@ -248,7 +257,7 @@ pub fn parse_into_bytes(
         .map_err(|e| MdpError::ParseError(format!("Failed to parse markdown: {:?}", e)))?;
 
     let style = config::load_config_from_source(config);
-    let pdf = Pdf::new(tokens, style);
+    let pdf = Pdf::new(tokens, style, font_config);
     let document = pdf.render_into_document();
 
     Pdf::render_to_bytes(document).map_err(|err| MdpError::PdfError(err))
@@ -262,7 +271,7 @@ mod tests {
     #[test]
     fn test_basic_markdown_conversion() {
         let markdown = "# Test\nHello world".to_string();
-        let result = parse_into_file(markdown, "test_output.pdf", config::ConfigSource::Default);
+        let result = parse_into_file(markdown, "test_output.pdf", config::ConfigSource::Default, None);
         assert!(result.is_ok());
         fs::remove_file("test_output.pdf").unwrap();
     }
@@ -270,7 +279,7 @@ mod tests {
     #[test]
     fn test_invalid_markdown() {
         let markdown = "![Invalid".to_string();
-        let result = parse_into_file(markdown, "error_output.pdf", config::ConfigSource::Default);
+        let result = parse_into_file(markdown, "error_output.pdf", config::ConfigSource::Default, None);
         assert!(matches!(result, Err(MdpError::ParseError(_))));
     }
 
@@ -281,6 +290,7 @@ mod tests {
             markdown,
             "/nonexistent/directory/output.pdf",
             config::ConfigSource::Default,
+            None,
         );
         assert!(matches!(result, Err(MdpError::PdfError(_))));
     }
@@ -288,7 +298,7 @@ mod tests {
     #[test]
     fn test_basic_markdown_to_bytes() {
         let markdown = "# Test\nHello world".to_string();
-        let result = parse_into_bytes(markdown, config::ConfigSource::Default);
+        let result = parse_into_bytes(markdown, config::ConfigSource::Default, None);
         assert!(result.is_ok());
         let pdf_bytes = result.unwrap();
         assert!(!pdf_bytes.is_empty());
@@ -315,6 +325,7 @@ mod tests {
             markdown,
             "test_embedded_output.pdf",
             config::ConfigSource::Embedded(EMBEDDED_CONFIG),
+            None,
         );
         assert!(result.is_ok());
 
@@ -337,7 +348,7 @@ mod tests {
 
         let markdown =
             "# Hello World\nThis is a test document with embedded configuration.".to_string();
-        let result = parse_into_bytes(markdown, config::ConfigSource::Embedded(EMBEDDED_CONFIG));
+        let result = parse_into_bytes(markdown, config::ConfigSource::Embedded(EMBEDDED_CONFIG), None);
         assert!(result.is_ok());
 
         let pdf_bytes = result.unwrap();
@@ -350,7 +361,7 @@ mod tests {
         const INVALID_CONFIG: &str = "this is not valid toml {{{";
 
         let markdown = "# Test\nContent".to_string();
-        let result = parse_into_bytes(markdown, config::ConfigSource::Embedded(INVALID_CONFIG));
+        let result = parse_into_bytes(markdown, config::ConfigSource::Embedded(INVALID_CONFIG), None);
         assert!(result.is_ok());
 
         let pdf_bytes = result.unwrap();
@@ -362,7 +373,7 @@ mod tests {
         const EMPTY_CONFIG: &str = "";
 
         let markdown = "# Test\nContent".to_string();
-        let result = parse_into_bytes(markdown, config::ConfigSource::Embedded(EMPTY_CONFIG));
+        let result = parse_into_bytes(markdown, config::ConfigSource::Embedded(EMPTY_CONFIG), None);
         assert!(result.is_ok());
 
         let pdf_bytes = result.unwrap();
@@ -373,7 +384,7 @@ mod tests {
     fn test_config_source_variants() {
         let markdown = "# Test\nContent".to_string();
 
-        let result = parse_into_bytes(markdown.clone(), config::ConfigSource::Default);
+        let result = parse_into_bytes(markdown.clone(), config::ConfigSource::Default, None);
         assert!(result.is_ok());
 
         const EMBEDDED: &str = r#"
@@ -381,10 +392,10 @@ mod tests {
             size = 16
             bold = true
         "#;
-        let result = parse_into_bytes(markdown.clone(), config::ConfigSource::Embedded(EMBEDDED));
+        let result = parse_into_bytes(markdown.clone(), config::ConfigSource::Embedded(EMBEDDED), None);
         assert!(result.is_ok());
 
-        let result = parse_into_bytes(markdown, config::ConfigSource::File("nonexistent.toml"));
+        let result = parse_into_bytes(markdown, config::ConfigSource::File("nonexistent.toml"), None);
         assert!(result.is_ok());
     }
 
@@ -418,7 +429,7 @@ Final paragraph.
         "#
         .to_string();
 
-        let result = parse_into_bytes(markdown, config::ConfigSource::Default);
+        let result = parse_into_bytes(markdown, config::ConfigSource::Default, None);
         assert!(result.is_ok());
         let pdf_bytes = result.unwrap();
         assert!(!pdf_bytes.is_empty());
@@ -428,7 +439,7 @@ Final paragraph.
     #[test]
     fn test_empty_markdown_to_bytes() {
         let markdown = "".to_string();
-        let result = parse_into_bytes(markdown, config::ConfigSource::Default);
+        let result = parse_into_bytes(markdown, config::ConfigSource::Default, None);
         assert!(result.is_ok());
         let pdf_bytes = result.unwrap();
         assert!(!pdf_bytes.is_empty());
@@ -438,7 +449,7 @@ Final paragraph.
     #[test]
     fn test_invalid_markdown_to_bytes() {
         let markdown = "![Invalid".to_string();
-        let result = parse_into_bytes(markdown, config::ConfigSource::Default);
+        let result = parse_into_bytes(markdown, config::ConfigSource::Default, None);
         assert!(matches!(result, Err(MdpError::ParseError(_))));
     }
 }
