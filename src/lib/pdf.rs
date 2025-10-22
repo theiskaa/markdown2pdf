@@ -65,35 +65,53 @@ impl Pdf {
         style: StyleMatch,
         font_config: Option<&crate::fonts::FontConfig>,
     ) -> Self {
-        let family_name = font_config
+        let all_text = if font_config.map(|c| c.enable_subsetting).unwrap_or(false) {
+            Some(Token::collect_all_text(&input))
+        } else {
+            None
+        };
+
+        let font_family = if let Some(family_name) = font_config
             .and_then(|cfg| cfg.default_font.as_deref())
             .or(style.text.font_family)
-            .unwrap_or("helvetica");
-
-        let font_family = crate::fonts::load_font_with_config(family_name, font_config)
-            .unwrap_or_else(|_| {
-                eprintln!(
-                    "Warning: could not load font '{}', falling back to Helvetica",
-                    family_name
-                );
+        {
+            // User specified a font, try to load it
+            crate::fonts::load_font_with_config(family_name, font_config, all_text.as_deref())
+                .unwrap_or_else(|_| {
+                    eprintln!(
+                        "Warning: could not load font '{}', trying Unicode system fonts...",
+                        family_name
+                    );
+                    crate::fonts::load_unicode_system_font(all_text.as_deref()).unwrap_or_else(
+                        |_| {
+                            crate::fonts::load_builtin_font_family("helvetica")
+                                .expect("Failed to load fallback font family")
+                        },
+                    )
+                })
+        } else {
+            eprintln!("No font specified, searching for Unicode-capable system font...");
+            crate::fonts::load_unicode_system_font(all_text.as_deref()).unwrap_or_else(|_| {
                 crate::fonts::load_builtin_font_family("helvetica")
                     .expect("Failed to load fallback font family")
-            });
+            })
+        };
 
         // For code blocks we prefer a monospace font (use config override or default to courier)
         let code_font_name = font_config
             .and_then(|cfg| cfg.code_font.as_deref())
             .unwrap_or("courier");
 
-        let code_font_family = crate::fonts::load_font_with_config(code_font_name, font_config)
-            .unwrap_or_else(|_| {
-                eprintln!(
-                    "Warning: could not load code font '{}', falling back to Courier",
-                    code_font_name
-                );
-                crate::fonts::load_builtin_font_family("courier")
-                    .expect("Failed to load fallback code font family")
-            });
+        let code_font_family =
+            crate::fonts::load_font_with_config(code_font_name, font_config, all_text.as_deref())
+                .unwrap_or_else(|_| {
+                    eprintln!(
+                        "Warning: could not load code font '{}', falling back to Courier",
+                        code_font_name
+                    );
+                    crate::fonts::load_builtin_font_family("courier")
+                        .expect("Failed to load fallback code font family")
+                });
 
         Self {
             input,
