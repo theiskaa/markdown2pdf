@@ -63,7 +63,7 @@ cargo add markdown2pdf
 Or add to your Cargo.toml:
 
 ```toml
-markdown2pdf = "0.1.6"
+markdown2pdf = "0.1.9"
 ```
 
 ## Usage
@@ -85,6 +85,56 @@ Convert from URL:
 markdown2pdf -u "https://raw.githubusercontent.com/user/repo/main/README.md" -o "readme.pdf"
 ```
 
+The command-line interface includes validation and output control options to support different workflows and debugging needs. The `--verbose` flag enables detailed output showing font selection decisions, coverage percentages, and file sizes, which is particularly useful when troubleshooting font rendering issues or optimizing document generation. Conversely, the `--quiet` flag suppresses all output except errors, making it ideal for use in CI/CD pipelines and automated scripts where clean output is preferred.
+
+Pre-flight validation can be performed using the `--dry-run` flag, which analyzes your Markdown content for potential issues without generating a PDF. This validation checks for common syntax problems like unclosed code blocks or brackets, detects Unicode characters that might require special font configuration, and verifies that referenced image files exist. The dry-run mode is significantly faster than full PDF generation and provides immediate feedback about potential rendering issues, making it valuable for pre-commit hooks and rapid iteration during document development.
+
+```bash
+# Verbose output for debugging
+markdown2pdf -p document.md --verbose -o output.pdf
+
+# Quiet mode for scripts
+markdown2pdf -p document.md --quiet -o output.pdf
+
+# Validate without generating PDF
+markdown2pdf -p document.md --dry-run
+
+# Combined: verbose validation
+markdown2pdf -p document.md --verbose --dry-run
+```
+
+## Font Handling and Unicode Support
+
+The markdown2pdf library includes sophisticated font handling capabilities designed for international documents and diverse character sets. The system automatically detects Unicode characters in your content and selects appropriate fonts to ensure proper rendering across multiple scripts and languages.
+
+Font subsetting technology is built into the core engine, dramatically reducing PDF file sizes by including only the glyphs actually used in your document. This optimization typically achieves a 98% size reduction compared to embedding complete font files, making the generated PDFs compact and efficient for distribution. For example, a document using Noto Sans might embed only 31 KB of font data instead of the full 1.2 MB font file, with no loss in rendering quality or character coverage.
+
+The library supports fallback font chains, allowing you to specify multiple fonts that will be tried in sequence when a character is missing from the primary font. This is particularly valuable for documents containing mixed scripts such as Latin, Cyrillic, Greek, or Asian characters. The system analyzes each character and automatically selects the most appropriate font from your fallback chain, ensuring complete coverage without manual intervention. You can specify fallback fonts using the `--fallback-font` argument, which can be provided multiple times to build a comprehensive fallback chain.
+
+Unicode support is automatic and intelligent. When the library detects non-ASCII characters in your content, it searches system fonts for those with good Unicode coverage, prioritizing fonts like Noto Sans, DejaVu Sans, and Liberation Sans. The system reports coverage percentages and provides helpful suggestions if your chosen font cannot render all characters in the document. For documents requiring extensive international character support, you can explicitly specify a Unicode-capable font with `--default-font "Noto Sans"` combined with appropriate fallbacks.
+
+Font variant loading has been enhanced to support true typographic styles rather than relying on synthetic rendering. The system searches for actual Bold, Italic, and Bold-Italic font files when you use emphasis in your Markdown, trying multiple naming conventions automatically. If variant files are found, they are loaded and used for proper typography; if not, the system gracefully falls back to the regular font face with a helpful notification. This works seamlessly with custom font directories specified through `--font-path` arguments.
+
+The font name resolution system includes fuzzy matching and aliasing to handle cross-platform font availability. When you specify a font like "Arial" on a system where Helvetica is available instead, the library automatically tries common aliases and alternatives. This ensures your documents render consistently across Windows, macOS, and Linux platforms without requiring platform-specific configuration.
+
+Custom fonts can be loaded from directories or individual font files by providing paths through the `--font-path` option. The system recursively searches these directories for TrueType and OpenType fonts, making them available for selection. Combined with the fallback chain system, this allows you to bundle fonts with your application or specify organization-standard typefaces while maintaining fallback coverage for any edge cases.
+
+```bash
+# Unicode document with fallback chain
+markdown2pdf -p international.md \
+  --default-font "Noto Sans" \
+  --fallback-font "Arial Unicode MS" \
+  --fallback-font "DejaVu Sans" \
+  -o output.pdf
+
+# Custom fonts with automatic subsetting
+markdown2pdf -p document.md \
+  --font-path "./fonts" \
+  --default-font "Roboto" \
+  --code-font "Fira Code" \
+  -o output.pdf
+```
+
 ## Library Usage
 
 The library exposes two main functions: `parse_into_file()` and `parse_into_bytes()`. Both accept raw Markdown text and handle all intermediate processing steps internally. They leverage the lexer to build an abstract syntax tree, apply styling rules from configuration, and render the final PDF output.
@@ -99,17 +149,45 @@ Configuration sources include `ConfigSource::Default` for built-in styling with 
 use markdown2pdf::{parse_into_file, config::ConfigSource};
 
 // Default styling
-parse_into_file(markdown, "output.pdf", ConfigSource::Default)?;
+parse_into_file(markdown, "output.pdf", ConfigSource::Default, None)?;
 
 // File-based configuration
-parse_into_file(markdown, "output.pdf", ConfigSource::File("config.toml"))?;
+parse_into_file(markdown, "output.pdf", ConfigSource::File("config.toml"), None)?;
 
 // Embedded configuration
 const CONFIG: &str = include_str!("../config.toml");
-parse_into_file(markdown, "output.pdf", ConfigSource::Embedded(CONFIG))?;
+parse_into_file(markdown, "output.pdf", ConfigSource::Embedded(CONFIG), None)?;
 ```
 
 For embedded configuration, TOML content can be included at compile time using `include_str!()` or defined as string literals. This approach eliminates runtime file dependencies and creates truly portable executables suitable for containerized deployments.
+
+Font configuration at the library level is accomplished through the `FontConfig` structure, which provides programmatic control over font selection, fallback chains, and subsetting behavior. The configuration allows you to specify custom font directories, set default and code fonts, establish fallback font chains, and control whether font subsetting is enabled. When working with international content or documents requiring specific typography, you can construct a font configuration and pass it to the parsing functions as an optional parameter.
+
+```rust
+use markdown2pdf::{parse_into_file, config::ConfigSource, fonts::FontConfig};
+use std::path::PathBuf;
+
+// Configure fonts for international document
+let font_config = FontConfig {
+    custom_paths: vec![PathBuf::from("./fonts")],
+    default_font: Some("Noto Sans".to_string()),
+    code_font: Some("Fira Code".to_string()),
+    fallback_fonts: vec![
+        "Arial Unicode MS".to_string(),
+        "DejaVu Sans".to_string(),
+    ],
+    enable_subsetting: true,
+};
+
+parse_into_file(
+    markdown,
+    "output.pdf",
+    ConfigSource::Default,
+    Some(&font_config),
+)?;
+```
+
+The font subsetting feature is enabled by default and works transparently to reduce PDF file sizes. When enabled, the library analyzes all text content in your document to determine which glyphs are actually needed, then creates a minimal font subset containing only those characters. This process maintains full rendering fidelity while dramatically reducing file size, making it particularly effective for large documents or when using comprehensive Unicode fonts.
 
 For advanced usage, you can work directly with the lexer and PDF generation components. Create a lexer instance to parse Markdown content into tokens, then create a PDF renderer with styling rules through a `StyleMatch` instance loaded via `load_config_from_source()`. Finally, render the document to a file or convert to bytes.
 
