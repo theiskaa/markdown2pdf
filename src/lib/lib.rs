@@ -111,6 +111,7 @@ pub mod fonts;
 pub mod markdown;
 pub mod pdf;
 pub mod styling;
+pub mod validation;
 
 use markdown::*;
 use pdf::Pdf;
@@ -122,17 +123,118 @@ use std::fmt;
 #[derive(Debug)]
 pub enum MdpError {
     /// Indicates an error occurred while parsing the Markdown content
-    ParseError(String),
+    ParseError {
+        message: String,
+        position: Option<usize>,
+        suggestion: Option<String>,
+    },
     /// Indicates an error occurred during PDF file generation
-    PdfError(String),
+    PdfError {
+        message: String,
+        path: Option<String>,
+        suggestion: Option<String>,
+    },
+    /// Indicates a font loading error
+    FontError {
+        font_name: String,
+        message: String,
+        suggestion: String,
+    },
+    /// Indicates an invalid configuration
+    ConfigError { message: String, suggestion: String },
+    /// Indicates an I/O error
+    IoError {
+        message: String,
+        path: String,
+        suggestion: String,
+    },
 }
 
 impl Error for MdpError {}
 impl fmt::Display for MdpError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            MdpError::ParseError(msg) => write!(f, "[lexer] markdown parsing error: {}", msg),
-            MdpError::PdfError(msg) => write!(f, "[pdf] PDF generation error: {}", msg),
+            MdpError::ParseError {
+                message,
+                position,
+                suggestion,
+            } => {
+                write!(f, "❌ Markdown Parsing Error: {}", message)?;
+                if let Some(pos) = position {
+                    write!(f, " (at position {})", pos)?;
+                }
+                if let Some(hint) = suggestion {
+                    write!(f, "\n💡 Suggestion: {}", hint)?;
+                }
+                Ok(())
+            }
+            MdpError::PdfError {
+                message,
+                path,
+                suggestion,
+            } => {
+                write!(f, "❌ PDF Generation Error: {}", message)?;
+                if let Some(p) = path {
+                    write!(f, "\n📁 Path: {}", p)?;
+                }
+                if let Some(hint) = suggestion {
+                    write!(f, "\n💡 Suggestion: {}", hint)?;
+                }
+                Ok(())
+            }
+            MdpError::FontError {
+                font_name,
+                message,
+                suggestion,
+            } => {
+                write!(f, "❌ Font Error: Failed to load font '{}'", font_name)?;
+                write!(f, "\n   Reason: {}", message)?;
+                write!(f, "\n💡 Suggestion: {}", suggestion)?;
+                Ok(())
+            }
+            MdpError::ConfigError {
+                message,
+                suggestion,
+            } => {
+                write!(f, "❌ Configuration Error: {}", message)?;
+                write!(f, "\n💡 Suggestion: {}", suggestion)?;
+                Ok(())
+            }
+            MdpError::IoError {
+                message,
+                path,
+                suggestion,
+            } => {
+                write!(f, "❌ File Error: {}", message)?;
+                write!(f, "\n📁 Path: {}", path)?;
+                write!(f, "\n💡 Suggestion: {}", suggestion)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl MdpError {
+    /// Creates a simple parse error with just a message
+    pub fn parse_error(message: impl Into<String>) -> Self {
+        MdpError::ParseError {
+            message: message.into(),
+            position: None,
+            suggestion: Some(
+                "Check your Markdown syntax for unclosed brackets, quotes, or code blocks"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// Creates a simple PDF error with just a message
+    pub fn pdf_error(message: impl Into<String>) -> Self {
+        MdpError::PdfError {
+            message: message.into(),
+            path: None,
+            suggestion: Some(
+                "Check that the output directory exists and you have write permissions".to_string(),
+            ),
         }
     }
 }
@@ -179,6 +281,8 @@ impl fmt::Display for MdpError {
 ///         custom_paths: vec!["./fonts".into()],
 ///         default_font: Some("Roboto".to_string()),
 ///         code_font: None,
+///         fallback_fonts: vec![],
+///         enable_subsetting: true,
 ///     };
 ///     markdown2pdf::parse_into_file(markdown, "output3.pdf", ConfigSource::Embedded(EMBEDDED), Some(&font_config))?;
 ///
@@ -191,17 +295,48 @@ pub fn parse_into_file(
     config: config::ConfigSource,
     font_config: Option<&fonts::FontConfig>,
 ) -> Result<(), MdpError> {
+    // Validate output path exists
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            return Err(MdpError::IoError {
+                message: format!("Output directory does not exist"),
+                path: parent.display().to_string(),
+                suggestion: format!("Create the directory first: mkdir -p {}", parent.display()),
+            });
+        }
+    }
+
     let mut lexer = Lexer::new(markdown);
-    let tokens = lexer
-        .parse()
-        .map_err(|e| MdpError::ParseError(format!("Failed to parse markdown: {:?}", e)))?;
+    let tokens = lexer.parse().map_err(|e| {
+        let msg = format!("{:?}", e);
+        MdpError::ParseError {
+            message: msg.clone(),
+            position: None,
+            suggestion: Some(if msg.contains("UnexpectedEndOfInput") {
+                "Check for unclosed code blocks (```), links, or image tags".to_string()
+            } else {
+                "Verify your Markdown syntax is valid. Try testing with a simpler document first."
+                    .to_string()
+            }),
+        }
+    })?;
 
     let style = config::load_config_from_source(config);
     let pdf = Pdf::new(tokens, style, font_config);
     let document = pdf.render_into_document();
 
     if let Some(err) = Pdf::render(document, path) {
-        return Err(MdpError::PdfError(err));
+        return Err(MdpError::PdfError {
+            message: err.clone(),
+            path: Some(path.to_string()),
+            suggestion: Some(if err.contains("Permission") || err.contains("denied") {
+                "Check that you have write permissions for this location".to_string()
+            } else if err.contains("No such file") {
+                "Make sure the output directory exists".to_string()
+            } else {
+                "Try a different output path or check available disk space".to_string()
+            }),
+        });
     }
 
     Ok(())
@@ -252,15 +387,29 @@ pub fn parse_into_bytes(
     font_config: Option<&fonts::FontConfig>,
 ) -> Result<Vec<u8>, MdpError> {
     let mut lexer = Lexer::new(markdown);
-    let tokens = lexer
-        .parse()
-        .map_err(|e| MdpError::ParseError(format!("Failed to parse markdown: {:?}", e)))?;
+    let tokens = lexer.parse().map_err(|e| {
+        let msg = format!("{:?}", e);
+        MdpError::ParseError {
+            message: msg.clone(),
+            position: None,
+            suggestion: Some(if msg.contains("UnexpectedEndOfInput") {
+                "Check for unclosed code blocks (```), links, or image tags".to_string()
+            } else {
+                "Verify your Markdown syntax is valid. Try testing with a simpler document first."
+                    .to_string()
+            }),
+        }
+    })?;
 
     let style = config::load_config_from_source(config);
     let pdf = Pdf::new(tokens, style, font_config);
     let document = pdf.render_into_document();
 
-    Pdf::render_to_bytes(document).map_err(|err| MdpError::PdfError(err))
+    Pdf::render_to_bytes(document).map_err(|err| MdpError::PdfError {
+        message: err,
+        path: None,
+        suggestion: Some("Check available memory and try with a smaller document".to_string()),
+    })
 }
 
 #[cfg(test)]
@@ -271,7 +420,12 @@ mod tests {
     #[test]
     fn test_basic_markdown_conversion() {
         let markdown = "# Test\nHello world".to_string();
-        let result = parse_into_file(markdown, "test_output.pdf", config::ConfigSource::Default, None);
+        let result = parse_into_file(
+            markdown,
+            "test_output.pdf",
+            config::ConfigSource::Default,
+            None,
+        );
         assert!(result.is_ok());
         fs::remove_file("test_output.pdf").unwrap();
     }
@@ -279,8 +433,13 @@ mod tests {
     #[test]
     fn test_invalid_markdown() {
         let markdown = "![Invalid".to_string();
-        let result = parse_into_file(markdown, "error_output.pdf", config::ConfigSource::Default, None);
-        assert!(matches!(result, Err(MdpError::ParseError(_))));
+        let result = parse_into_file(
+            markdown,
+            "error_output.pdf",
+            config::ConfigSource::Default,
+            None,
+        );
+        assert!(matches!(result, Err(MdpError::ParseError { .. })));
     }
 
     #[test]
@@ -292,7 +451,10 @@ mod tests {
             config::ConfigSource::Default,
             None,
         );
-        assert!(matches!(result, Err(MdpError::PdfError(_))));
+        assert!(matches!(
+            result,
+            Err(MdpError::IoError { .. }) | Err(MdpError::PdfError { .. })
+        ));
     }
 
     #[test]
@@ -348,7 +510,11 @@ mod tests {
 
         let markdown =
             "# Hello World\nThis is a test document with embedded configuration.".to_string();
-        let result = parse_into_bytes(markdown, config::ConfigSource::Embedded(EMBEDDED_CONFIG), None);
+        let result = parse_into_bytes(
+            markdown,
+            config::ConfigSource::Embedded(EMBEDDED_CONFIG),
+            None,
+        );
         assert!(result.is_ok());
 
         let pdf_bytes = result.unwrap();
@@ -361,7 +527,11 @@ mod tests {
         const INVALID_CONFIG: &str = "this is not valid toml {{{";
 
         let markdown = "# Test\nContent".to_string();
-        let result = parse_into_bytes(markdown, config::ConfigSource::Embedded(INVALID_CONFIG), None);
+        let result = parse_into_bytes(
+            markdown,
+            config::ConfigSource::Embedded(INVALID_CONFIG),
+            None,
+        );
         assert!(result.is_ok());
 
         let pdf_bytes = result.unwrap();
@@ -392,10 +562,18 @@ mod tests {
             size = 16
             bold = true
         "#;
-        let result = parse_into_bytes(markdown.clone(), config::ConfigSource::Embedded(EMBEDDED), None);
+        let result = parse_into_bytes(
+            markdown.clone(),
+            config::ConfigSource::Embedded(EMBEDDED),
+            None,
+        );
         assert!(result.is_ok());
 
-        let result = parse_into_bytes(markdown, config::ConfigSource::File("nonexistent.toml"), None);
+        let result = parse_into_bytes(
+            markdown,
+            config::ConfigSource::File("nonexistent.toml"),
+            None,
+        );
         assert!(result.is_ok());
     }
 
@@ -450,6 +628,6 @@ Final paragraph.
     fn test_invalid_markdown_to_bytes() {
         let markdown = "![Invalid".to_string();
         let result = parse_into_bytes(markdown, config::ConfigSource::Default, None);
-        assert!(matches!(result, Err(MdpError::ParseError(_))));
+        assert!(matches!(result, Err(MdpError::ParseError { .. })));
     }
 }
