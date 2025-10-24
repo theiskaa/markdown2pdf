@@ -65,7 +65,7 @@ impl Pdf {
         style: StyleMatch,
         font_config: Option<&crate::fonts::FontConfig>,
     ) -> Self {
-        let all_text = if font_config.map(|c| c.enable_subsetting).unwrap_or(false) {
+        let all_text = if font_config.map(|c| c.enable_subsetting).unwrap_or(true) {
             Some(Token::collect_all_text(&input))
         } else {
             None
