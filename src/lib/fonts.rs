@@ -8,6 +8,89 @@ use genpdfi::fonts::{FontData, FontFamily};
 use printpdf::BuiltinFont;
 use rusttype::Font;
 
+/// Returns common aliases for a font name.
+///
+/// This allows users to specify "Arial" and have the system try
+/// "Helvetica", "Liberation Sans", etc.
+fn get_font_aliases(name: &str) -> Vec<&'static str> {
+    match name.to_lowercase().as_str() {
+        "arial" => vec!["Helvetica", "Liberation Sans", "FreeSans"],
+        "helvetica" => vec!["Arial", "Liberation Sans", "FreeSans"],
+        "times new roman" | "times" => {
+            vec!["Times", "Times New Roman", "Liberation Serif", "FreeSerif"]
+        }
+        "courier new" | "courier" => vec!["Courier", "Courier New", "Liberation Mono", "FreeMono"],
+        "verdana" => vec!["DejaVu Sans", "Bitstream Vera Sans"],
+        "georgia" => vec!["Liberation Serif", "FreeSerif"],
+        "comic sans ms" | "comic sans" => vec!["Comic Neue", "Comic Relief"],
+        _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_font_aliases() {
+        // Test Arial aliases
+        let arial_aliases = get_font_aliases("Arial");
+        assert!(arial_aliases.contains(&"Helvetica"));
+        assert!(arial_aliases.contains(&"Liberation Sans"));
+
+        // Test case insensitivity
+        let arial_lower = get_font_aliases("arial");
+        assert_eq!(arial_aliases, arial_lower);
+
+        // Test Times New Roman aliases
+        let times_aliases = get_font_aliases("Times New Roman");
+        assert!(times_aliases.contains(&"Liberation Serif"));
+        assert!(times_aliases.contains(&"Times"));
+
+        // Test "times" also works
+        let times_short = get_font_aliases("times");
+        assert_eq!(times_aliases, times_short);
+
+        // Test unknown font returns empty
+        let unknown = get_font_aliases("UnknownFont123");
+        assert!(unknown.is_empty());
+
+        // Test Verdana
+        let verdana = get_font_aliases("Verdana");
+        assert!(verdana.contains(&"DejaVu Sans"));
+    }
+}
+
+/// Font style variant types
+#[derive(Debug, Clone, Copy)]
+enum FontVariant {
+    Regular,
+    Bold,
+    Italic,
+    BoldItalic,
+}
+
+impl FontVariant {
+    /// Returns common naming suffixes for this variant
+    fn suffixes(&self) -> &[&str] {
+        match self {
+            FontVariant::Regular => &["Regular", ""],
+            FontVariant::Bold => &["Bold", "Bd", "B"],
+            FontVariant::Italic => &["Italic", "It", "I", "Oblique"],
+            FontVariant::BoldItalic => &["BoldItalic", "Bold Italic", "BoldIt", "BdIt", "BI"],
+        }
+    }
+
+    fn _name(&self) -> &str {
+        match self {
+            FontVariant::Regular => "Regular",
+            FontVariant::Bold => "Bold",
+            FontVariant::Italic => "Italic",
+            FontVariant::BoldItalic => "BoldItalic",
+        }
+    }
+}
+
 /// Configuration for custom font loading.
 /// Allows users to specify custom font paths and override default font selections.
 #[derive(Debug, Clone)]
@@ -18,6 +101,9 @@ pub struct FontConfig {
     pub default_font: Option<String>,
     /// Override for the code font (if None, uses courier)
     pub code_font: Option<String>,
+    /// Fallback fonts to use when primary font doesn't have a character
+    /// These fonts are tried in order when a character is missing
+    pub fallback_fonts: Vec<String>,
     /// Enable font subsetting to reduce PDF file size (default: true)
     pub enable_subsetting: bool,
 }
@@ -28,6 +114,7 @@ impl Default for FontConfig {
             custom_paths: Vec::new(),
             default_font: None,
             code_font: None,
+            fallback_fonts: Vec::new(),
             enable_subsetting: true, // Enabled by default for smaller PDFs
         }
     }
@@ -200,65 +287,73 @@ fn load_system_font_bytes_fallback(candidates: &[&str]) -> Result<Vec<u8>, Error
 /// If the requested family cannot be found, an `InvalidFont` error is returned so that the caller
 /// can decide how to proceed (e.g. fall back to a built-in font).
 pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>, Error> {
+    let mut candidates = vec![name];
+    let aliases = get_font_aliases(name);
+    candidates.extend(aliases);
+
     let mut db = Database::new();
     db.load_system_fonts();
 
-    let wanted = name.to_lowercase();
+    for candidate_name in candidates {
+        let wanted = candidate_name.to_lowercase();
+        let mut selected_bytes: Option<Vec<u8>> = None;
 
-    let mut selected_bytes: Option<Vec<u8>> = None;
+        for face in db.faces() {
+            let path = match &face.source {
+                fontdb::Source::File(p) => p,
+                _ => continue,
+            };
 
-    for face in db.faces() {
-        let path = match &face.source {
-            fontdb::Source::File(p) => p,
-            _ => continue,
-        };
+            if path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map_or(false, |ext| ext.eq_ignore_ascii_case("ttc"))
+            {
+                continue;
+            }
 
-        if path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map_or(false, |ext| ext.eq_ignore_ascii_case("ttc"))
-        {
-            continue;
-        }
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !file_name.contains(&wanted) {
+                continue;
+            }
 
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        if !file_name.contains(&wanted) {
-            continue;
-        }
-
-        match fs::read(path) {
-            Ok(b) => {
-                if rusttype::Font::from_bytes(b.clone()).is_ok() {
-                    selected_bytes = Some(b);
-                    break;
+            match fs::read(path) {
+                Ok(b) => {
+                    if rusttype::Font::from_bytes(b.clone()).is_ok() {
+                        selected_bytes = Some(b);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to read font file {:?}: {}", path, e);
                 }
             }
-            Err(e) => {
-                eprintln!("Failed to read font file {:?}: {}", path, e);
+        }
+
+        if let Some(bytes) = selected_bytes {
+            if candidate_name != name {
+                eprintln!("  ℹ Using '{}' as alias for '{}'", candidate_name, name);
             }
+
+            let shared = Arc::new(bytes);
+            let mk = || FontData::new_shared(shared.clone(), None);
+            return Ok(FontFamily {
+                regular: mk()?,
+                bold: mk()?,
+                italic: mk()?,
+                bold_italic: mk()?,
+            });
         }
     }
 
-    let bytes = selected_bytes.ok_or_else(|| {
-        Error::new(
-            format!("No usable system font found for family '{}'.", name),
-            ErrorKind::InvalidFont,
-        )
-    })?;
-
-    let shared = Arc::new(bytes);
-
-    let mk = || FontData::new_shared(shared.clone(), None);
-    Ok(FontFamily {
-        regular: mk()?,
-        bold: mk()?,
-        italic: mk()?,
-        bold_italic: mk()?,
-    })
+    Err(Error::new(
+        format!("No usable system font found for family '{}'.", name),
+        ErrorKind::InvalidFont,
+    ))
 }
 
 /// Attempts to load a font family from custom paths first, then falls back to system fonts.
@@ -280,6 +375,12 @@ pub fn load_custom_font_family(
     name: &str,
     custom_paths: &[PathBuf],
 ) -> Result<FontFamily<FontData>, Error> {
+    if let Ok(family) = load_font_family_with_variants(name, custom_paths) {
+        eprintln!("✓ Loaded font '{}' with proper variants", name);
+        return Ok(family);
+    }
+
+    eprintln!("  → Searching for single font file for '{}'", name);
     let wanted = name.to_lowercase();
 
     // First, try to load from custom paths
@@ -341,6 +442,169 @@ pub fn load_custom_font_family(
     load_system_font_family_simple(name)
 }
 
+/// Searches for a specific font variant file in custom paths.
+///
+/// Tries multiple naming patterns for font variants:
+/// - NotoSans-Bold.ttf
+/// - NotoSansBold.ttf
+/// - NotoSans_Bold.ttf
+/// - notosans-bold.ttf
+///
+/// Also tries font name aliases (e.g., Arial -> Helvetica)
+fn find_font_variant_in_paths(
+    base_name: &str,
+    variant: FontVariant,
+    custom_paths: &[PathBuf],
+) -> Option<Vec<u8>> {
+    let mut candidates = vec![base_name];
+    let aliases = get_font_aliases(base_name);
+    candidates.extend(aliases);
+
+    for candidate in candidates {
+        let base_lower = candidate.to_lowercase().replace(" ", "");
+
+        for custom_path in custom_paths {
+            if !custom_path.is_dir() {
+                continue;
+            }
+
+            let Ok(entries) = fs::read_dir(custom_path) else {
+                continue;
+            };
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+
+                if !ext.eq_ignore_ascii_case("ttf") && !ext.eq_ignore_ascii_case("otf") {
+                    continue;
+                }
+
+                let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+
+                let file_lower = file_name.to_lowercase();
+                for suffix in variant.suffixes() {
+                    if suffix.is_empty() && !matches!(variant, FontVariant::Regular) {
+                        continue;
+                    }
+
+                    let patterns = if suffix.is_empty() {
+                        vec![format!("{}.ttf", base_lower), format!("{}.otf", base_lower)]
+                    } else {
+                        vec![
+                            format!("{}-{}.ttf", base_lower, suffix.to_lowercase()),
+                            format!("{}{}.ttf", base_lower, suffix.to_lowercase()),
+                            format!("{}_{}.ttf", base_lower, suffix.to_lowercase()),
+                            format!("{} {}.ttf", base_lower, suffix.to_lowercase()),
+                            format!("{}-{}.otf", base_lower, suffix.to_lowercase()),
+                            format!("{}{}.otf", base_lower, suffix.to_lowercase()),
+                        ]
+                    };
+
+                    for pattern in &patterns {
+                        if file_lower.contains(pattern) || file_lower == *pattern {
+                            if let Ok(bytes) = fs::read(&path) {
+                                if Font::from_bytes(bytes.clone()).is_ok() {
+                                    if candidate != base_name {
+                                        eprintln!(
+                                            "  ℹ Found '{}' variant as alias for '{}'",
+                                            candidate, base_name
+                                        );
+                                    }
+                                    return Some(bytes);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Loads a font family with proper variant files (Bold, Italic, BoldItalic).
+///
+/// This function searches for actual variant font files instead of reusing
+/// the regular font for all styles. Falls back to regular font if variants aren't found.
+///
+/// # Arguments
+/// * `name` - The font family base name
+/// * `custom_paths` - Directories to search for font files
+///
+/// # Returns
+/// A FontFamily with actual variant files loaded
+pub fn load_font_family_with_variants(
+    name: &str,
+    custom_paths: &[PathBuf],
+) -> Result<FontFamily<FontData>, Error> {
+    let regular_bytes = find_font_variant_in_paths(name, FontVariant::Regular, custom_paths)
+        .ok_or_else(|| {
+            Error::new(
+                format!("Could not find regular variant for font '{}'", name),
+                ErrorKind::InvalidFont,
+            )
+        })?;
+
+    let bold_bytes = find_font_variant_in_paths(name, FontVariant::Bold, custom_paths);
+    let italic_bytes = find_font_variant_in_paths(name, FontVariant::Italic, custom_paths);
+    let bold_italic_bytes = find_font_variant_in_paths(name, FontVariant::BoldItalic, custom_paths);
+
+    let regular_shared = Arc::new(regular_bytes);
+    let regular = FontData::new_shared(regular_shared.clone(), None)?;
+
+    let bold = if let Some(bytes) = bold_bytes {
+        FontData::new_shared(Arc::new(bytes), None).unwrap_or_else(|_| {
+            eprintln!("  ⚠ Bold variant invalid, using regular");
+            regular.clone()
+        })
+    } else {
+        eprintln!(
+            "  → No Bold variant found for '{}', using regular (faux bold)",
+            name
+        );
+        regular.clone()
+    };
+
+    let italic = if let Some(bytes) = italic_bytes {
+        FontData::new_shared(Arc::new(bytes), None).unwrap_or_else(|_| {
+            eprintln!("  ⚠ Italic variant invalid, using regular");
+            regular.clone()
+        })
+    } else {
+        eprintln!(
+            "  → No Italic variant found for '{}', using regular (faux italic)",
+            name
+        );
+        regular.clone()
+    };
+
+    let bold_italic = if let Some(bytes) = bold_italic_bytes {
+        FontData::new_shared(Arc::new(bytes), None).unwrap_or_else(|_| {
+            eprintln!("  ⚠ BoldItalic variant invalid, using bold");
+            bold.clone()
+        })
+    } else {
+        eprintln!(
+            "  → No BoldItalic variant found for '{}', using bold (faux italic)",
+            name
+        );
+        bold.clone()
+    };
+
+    Ok(FontFamily {
+        regular,
+        bold,
+        italic,
+        bold_italic,
+    })
+}
+
 /// Loads a font family using the provided FontConfig, with intelligent fallback.
 /// This is the main entry point for loading fonts with custom configuration.
 ///
@@ -367,7 +631,21 @@ pub fn load_font_with_config(
     // Check if subsetting is enabled
     let enable_subsetting = config.map(|c| c.enable_subsetting).unwrap_or(false);
 
-    // Try custom paths first if provided
+    // Check if fallback fonts are specified
+    if let Some(cfg) = config {
+        if !cfg.fallback_fonts.is_empty() {
+            // Use smart fallback selection
+            eprintln!(
+                "Loading font with {} fallbacks...",
+                cfg.fallback_fonts.len()
+            );
+            let family =
+                load_font_with_fallbacks(name, &cfg.fallback_fonts, &cfg.custom_paths, text)?;
+            return apply_subsetting_if_enabled(family, enable_subsetting, text);
+        }
+    }
+
+    // Try custom paths first if provided (no fallbacks)
     if let Some(cfg) = config {
         if !cfg.custom_paths.is_empty() {
             if let Ok(family) = load_custom_font_family(name, &cfg.custom_paths) {
@@ -499,4 +777,124 @@ pub fn load_unicode_system_font(text: Option<&str>) -> Result<FontFamily<FontDat
     eprintln!("⚠ No Unicode font found, falling back to Helvetica (limited character support)");
     eprintln!("  Tip: Install 'Noto Sans' or 'DejaVu Sans' for better Unicode support");
     load_builtin_font_family("helvetica")
+}
+
+/// Loads a font with fallback support for better coverage.
+///
+/// This function tries to find the best font for the given text by:
+/// 1. Loading the primary font
+/// 2. Loading all fallback fonts
+/// 3. Checking coverage for each
+/// 4. Selecting the font with the best coverage
+///
+/// # Arguments
+/// * `primary_name` - Name of the primary font to load
+/// * `fallback_names` - List of fallback font names to try
+/// * `custom_paths` - Custom paths to search for fonts
+/// * `text` - Optional text to check coverage for
+///
+/// # Returns
+/// The font with the best coverage for the given text
+pub fn load_font_with_fallbacks(
+    primary_name: &str,
+    fallback_names: &[String],
+    custom_paths: &[PathBuf],
+    text: Option<&str>,
+) -> Result<FontFamily<FontData>, Error> {
+    // Try to load primary font first
+    let primary = if !custom_paths.is_empty() {
+        load_custom_font_family(primary_name, custom_paths)
+            .or_else(|_| load_system_font_family_simple(primary_name))
+    } else {
+        load_system_font_family_simple(primary_name)
+    };
+
+    // If no text to check, just return primary (or first fallback that works)
+    if text.is_none() {
+        if let Ok(font) = primary {
+            return Ok(font);
+        }
+
+        // Try fallbacks
+        for fallback_name in fallback_names {
+            if let Ok(font) = load_system_font_family_simple(fallback_name) {
+                eprintln!("✓ Using fallback font '{}'", fallback_name);
+                return Ok(font);
+            }
+        }
+
+        return Err(Error::new(
+            format!("Could not load font '{}' or any fallbacks", primary_name),
+            ErrorKind::InvalidFont,
+        ));
+    }
+
+    let text = text.unwrap();
+    let mut best_font: Option<FontFamily<FontData>> = None;
+    let mut best_coverage = 0.0;
+    let mut best_name = String::new();
+
+    // Check primary font coverage
+    if let Ok(font) = primary {
+        let coverage = font.regular.check_coverage(text);
+        if coverage.is_complete() {
+            eprintln!("✓ Primary font '{}' has 100% coverage", primary_name);
+            return Ok(font);
+        }
+
+        eprintln!(
+            "  Primary font '{}' coverage: {:.1}%",
+            primary_name,
+            coverage.coverage_percent()
+        );
+
+        best_coverage = coverage.coverage_percent();
+        best_font = Some(font);
+        best_name = primary_name.to_string();
+    }
+
+    // Try each fallback
+    for fallback_name in fallback_names {
+        let fallback = if !custom_paths.is_empty() {
+            load_custom_font_family(fallback_name, custom_paths)
+                .or_else(|_| load_system_font_family_simple(fallback_name))
+        } else {
+            load_system_font_family_simple(fallback_name)
+        };
+
+        if let Ok(font) = fallback {
+            let coverage = font.regular.check_coverage(text);
+
+            if coverage.is_complete() {
+                eprintln!("✓ Fallback font '{}' has 100% coverage", fallback_name);
+                return Ok(font);
+            }
+
+            eprintln!(
+                "  Fallback font '{}' coverage: {:.1}%",
+                fallback_name,
+                coverage.coverage_percent()
+            );
+
+            if coverage.coverage_percent() > best_coverage {
+                best_coverage = coverage.coverage_percent();
+                best_font = Some(font);
+                best_name = fallback_name.clone();
+            }
+        }
+    }
+
+    // Return the font with best coverage
+    if let Some(font) = best_font {
+        eprintln!(
+            "✓ Selected font '{}' with {:.1}% coverage",
+            best_name, best_coverage
+        );
+        Ok(font)
+    } else {
+        Err(Error::new(
+            format!("Could not load font '{}' or any fallbacks", primary_name),
+            ErrorKind::InvalidFont,
+        ))
+    }
 }
