@@ -147,6 +147,10 @@ pub struct StyleMatch {
     pub image: BasicTextStyle,
     /// Style for regular text
     pub text: BasicTextStyle,
+    /// Style for table headers
+    pub table_header: BasicTextStyle,
+    /// Style for table cells
+    pub table_cell: BasicTextStyle,
 
     // TODO: Not parsed into a actual horizontal rule currently, we need a proper styling for this
     /// Style for horizontal rules (---)
@@ -264,6 +268,32 @@ impl Default for StyleMatch {
                 Some((0, 0, 0)),
                 None,
                 Some(0.5),
+                None,
+                None,
+                false,
+                false,
+                false,
+                false,
+                None,
+            ),
+            table_header: BasicTextStyle::new(
+                8,
+                Some((0, 0, 0)),
+                None,
+                None,
+                None,
+                None,
+                false,
+                false,
+                false,
+                false,
+                None,
+            ),
+            table_cell: BasicTextStyle::new(
+                8,
+                Some((0, 0, 0)),
+                None,
+                None,
                 None,
                 None,
                 false,

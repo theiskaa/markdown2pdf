@@ -462,7 +462,7 @@ impl Pdf {
         let mut header_row = table.row();
         for (i, header_cell) in headers.iter().enumerate() {
             let mut para = genpdfi::elements::Paragraph::default();
-            let style = genpdfi::style::Style::new();
+            let style = genpdfi::style::Style::new().with_font_size(self.style.table_header.size);
 
             if let Some(align) = aligns.get(i) {
                 para.set_alignment(*align);
@@ -483,7 +483,7 @@ impl Pdf {
 
             for (i, cell_tokens) in row.iter().enumerate() {
                 let mut para = genpdfi::elements::Paragraph::default();
-                let style = genpdfi::style::Style::new();
+                let style = genpdfi::style::Style::new().with_font_size(self.style.table_cell.size);
 
                 if let Some(align) = aligns.get(i) {
                     para.set_alignment(*align);
