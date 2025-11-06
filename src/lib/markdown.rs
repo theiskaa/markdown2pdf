@@ -41,6 +41,8 @@
 //!         ├── text: String
 //!         └── url: String
 
+use genpdfi::Alignment;
+
 /// Represents the different types of tokens that can be parsed from Markdown text.
 /// Each variant captures both the semantic meaning and associated content/metadata
 /// needed to properly render the element.
@@ -68,6 +70,14 @@ pub enum Token {
     Image(String, String),
     /// Plain text content
     Text(String),
+    /// Table with header, alignment info, and rows
+    Table {
+        headers: Vec<Vec<Token>>,
+        aligns: Vec<Alignment>,
+        rows: Vec<Vec<Vec<Token>>>,
+    },
+    /// Text alignment for table columns
+    TableAlignment(Alignment),
     /// HTML comment content
     HtmlComment(String),
     /// Line break
@@ -223,6 +233,13 @@ impl Lexer {
             }
             '<' if self.is_html_comment_start() => self.parse_html_comment()?,
             '\n' => self.parse_newline()?,
+            '|' if is_line_start => {
+                if self.is_table_start() {
+                    self.parse_table()?
+                } else {
+                    self.parse_text()?
+                }
+            }
             _ => self.parse_text()?,
         };
 
@@ -628,6 +645,92 @@ impl Lexer {
             content,
             ordered,
             number,
+        })
+    }
+
+    /// Checks if the current posisiton is the start of a table
+    fn is_table_start(&self) -> bool {
+        let rest: String = self.input[self.position..].iter().collect();
+        // Next line with --- or :---
+        if let Some(pos) = rest.find('\n') {
+            let next_line = rest[pos + 1..].lines().next().unwrap_or("");
+            next_line.contains('-')
+        } else {
+            false
+        }
+    }
+
+    /// Parses a table, handling column alignment
+    fn parse_table(&mut self) -> Result<Token, LexerError> {
+        // Parse header row
+        let header_line = self.read_until_newline();
+        let header_cells: Vec<String> = header_line
+            .trim_matches('|')
+            .split('|')
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        if self.current_char() == '\n' {
+            self.advance();
+        }
+
+        // Parse alignment row
+        let align_line = self.read_until_newline();
+        let aligns: Vec<Alignment> = align_line
+            .trim_matches('|')
+            .split('|')
+            .map(|s| {
+                let s = s.trim();
+                match (s.starts_with(':'), s.ends_with(':')) {
+                    (true, true) => Alignment::Center,
+                    (true, false) => Alignment::Left,
+                    (false, true) => Alignment::Right,
+                    _ => Alignment::Left,
+                }
+            })
+            .collect();
+
+        if self.current_char() == '\n' {
+            self.advance();
+        }
+
+        // Convert header strings to token vectors
+        let mut headers = Vec::new();
+        for cell in header_cells {
+            let mut cell_lexer = Lexer::new(cell);
+            headers.push(cell_lexer.parse()?);
+        }
+
+        // Parse rows until blank or non-table start
+        let mut rows = Vec::new();
+        while self.position < self.input.len() {
+            let line = self.read_until_newline();
+            if line.trim().is_empty() {
+                break;
+            }
+
+            let cell_texts: Vec<String> = line
+                .trim_matches('|')
+                .split('|')
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            let mut row_tokens = Vec::new();
+            for cell in cell_texts {
+                let mut cell_lexer = Lexer::new(cell);
+                row_tokens.push(cell_lexer.parse()?);
+            }
+            rows.push(row_tokens);
+
+            if self.current_char() == '\n' {
+                self.advance();
+            }
+        }
+
+        Ok(Token::Table {
+            headers,
+            aligns,
+            rows,
         })
     }
 
