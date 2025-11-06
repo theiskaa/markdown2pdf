@@ -1188,4 +1188,37 @@ A paragraph with `code` and [link](url).
             )]
         );
     }
+
+    #[test]
+    fn test_tables() {
+        let input = r#"| Name | Age | City |
+|:-----|:---:|----:|
+| Alice | 30 | Paris |
+| Bob | 25 | Lyon |"#;
+
+        let tokens = parse(input);
+        assert_eq!(
+            tokens,
+            vec![Token::Table {
+                headers: vec![
+                    vec![Token::Text("Name".to_string())],
+                    vec![Token::Text("Age".to_string())],
+                    vec![Token::Text("City".to_string())],
+                ],
+                aligns: vec![Alignment::Left, Alignment::Center, Alignment::Right],
+                rows: vec![
+                    vec![
+                        vec![Token::Text("Alice".to_string())],
+                        vec![Token::Text("30".to_string())],
+                        vec![Token::Text("Paris".to_string())],
+                    ],
+                    vec![
+                        vec![Token::Text("Bob".to_string())],
+                        vec![Token::Text("25".to_string())],
+                        vec![Token::Text("Lyon".to_string())],
+                    ],
+                ],
+            }]
+        );
+    }
 }
