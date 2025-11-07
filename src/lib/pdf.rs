@@ -106,8 +106,21 @@ impl Pdf {
                     custom_paths,
                     all_text.as_deref(),
                 ) {
-                    let primary_fonts = crate::fonts::extract_primary_fonts(&chain_family);
-                    (primary_fonts, Some(chain_family))
+                    let final_chain = if let Some(text) = all_text.as_deref() {
+                        let enable_subsetting =
+                            font_config.map(|c| c.enable_subsetting).unwrap_or(true);
+                        if enable_subsetting {
+                            crate::fonts::apply_subsetting_to_chain(chain_family, text)
+                                .expect("Font subsetting failed for fallback chain")
+                        } else {
+                            chain_family
+                        }
+                    } else {
+                        chain_family
+                    };
+
+                    let primary_fonts = crate::fonts::extract_primary_fonts(&final_chain);
+                    (primary_fonts, Some(final_chain))
                 } else {
                     eprintln!("Warning: fallback chain loading failed, using single best font...");
                     let single_font = crate::fonts::load_font_with_fallbacks(
