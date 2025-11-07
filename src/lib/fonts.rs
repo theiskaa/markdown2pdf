@@ -708,6 +708,135 @@ fn apply_subsetting_if_enabled(
     })
 }
 
+/// Applies font subsetting to a fallback chain to reduce PDF file size.
+///
+/// This function subsets each font in the chain (primary and all fallbacks) based on
+/// which characters from the document that font actually needs to render.
+///
+/// # Arguments
+/// * `chain_family` - The fallback chain family to subset
+/// * `text` - The document text to analyze for character usage
+///
+/// # Returns
+/// A new FontFamily<FontFallbackChain> with subset fonts
+pub fn apply_subsetting_to_chain(
+    chain_family: FontFamily<genpdfi::fonts::FontFallbackChain>,
+    text: &str,
+) -> Result<FontFamily<genpdfi::fonts::FontFallbackChain>, Error> {
+    if text.is_empty() {
+        return Ok(chain_family);
+    }
+
+    let subset_regular = subset_chain(&chain_family.regular, text)?;
+    let subset_bold = subset_chain(&chain_family.bold, text)?;
+    let subset_italic = subset_chain(&chain_family.italic, text)?;
+    let subset_bold_italic = subset_chain(&chain_family.bold_italic, text)?;
+
+    Ok(FontFamily {
+        regular: subset_regular,
+        bold: subset_bold,
+        italic: subset_italic,
+        bold_italic: subset_bold_italic,
+    })
+}
+
+/// Subsets a single fallback chain by subsetting each font based on what it renders.
+fn subset_chain(
+    chain: &genpdfi::fonts::FontFallbackChain,
+    text: &str,
+) -> Result<genpdfi::fonts::FontFallbackChain, Error> {
+    let segments = chain.segment_text(text);
+    use std::collections::HashMap;
+
+    let mut font_chars: HashMap<*const FontData, String> = HashMap::new();
+    for (segment_text, font_data) in &segments {
+        let font_ptr = *font_data as *const FontData;
+        font_chars
+            .entry(font_ptr)
+            .or_insert_with(String::new)
+            .push_str(segment_text);
+    }
+
+    let primary_text = font_chars
+        .get(&(chain.primary() as *const FontData))
+        .map(|s| s.as_str())
+        .unwrap_or("");
+
+    let subset_primary = if !primary_text.is_empty() {
+        eprintln!(
+            "  Subsetting primary font ({} chars)...",
+            primary_text.len()
+        );
+        subset_single_font(chain.primary(), primary_text)?
+    } else {
+        chain.primary().clone()
+    };
+
+    let mut subset_fallbacks = Vec::new();
+    for (idx, fallback) in chain.fallbacks().iter().enumerate() {
+        let fallback_text = font_chars
+            .get(&(fallback as *const FontData))
+            .map(|s| s.as_str())
+            .unwrap_or("");
+
+        let subset_fallback = if !fallback_text.is_empty() {
+            eprintln!(
+                "  Subsetting fallback {} ({} chars)...",
+                idx + 1,
+                fallback_text.len()
+            );
+            subset_single_font(fallback, fallback_text)?
+        } else {
+            eprintln!("  Fallback {} not used, skipping subsetting", idx + 1);
+            fallback.clone()
+        };
+
+        subset_fallbacks.push(subset_fallback);
+    }
+
+    let mut new_chain = genpdfi::fonts::FontFallbackChain::new(subset_primary);
+    for fallback in subset_fallbacks {
+        new_chain = new_chain.with_fallback(fallback);
+    }
+
+    Ok(new_chain)
+}
+
+/// Subsets a single FontData based on the provided text.
+fn subset_single_font(font: &FontData, text: &str) -> Result<FontData, Error> {
+    let original_data = font.get_data()?;
+    let original_size = original_data.len();
+
+    let subset_data = genpdfi::subsetting::subset_font(original_data, text).map_err(|e| {
+        eprintln!("\t Warning: Font subsetting failed: {}, using full font", e);
+        e
+    })?;
+
+    let subset_size = subset_data.len();
+    let reduction = ((original_size - subset_size) as f64 / original_size as f64) * 100.0;
+
+    eprintln!(
+        "\t ✓ {} → {} ({:.1}% reduction)",
+        format_size(original_size),
+        format_size(subset_size),
+        reduction
+    );
+
+    // Create new FontData with subset data (no builtin font for embedded fonts)
+    FontData::new_shared(Arc::new(subset_data), None)
+}
+
+/// Formats a byte size in a human-readable format.
+fn format_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.2} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 /// Loads a Unicode-capable system font with good international character support.
 ///
 /// This function attempts to find and load a font from the system that supports
@@ -748,10 +877,10 @@ pub fn load_unicode_system_font(text: Option<&str>) -> Result<FontFamily<FontDat
         "DejaVu Sans",
         "Liberation Sans",
         "Arial Unicode MS",
-        "SF Pro",        // macOS system font (good Unicode)
+        "SF Pro",         // macOS system font (good Unicode)
         "Helvetica Neue", // macOS (better than Helvetica)
-        "Segoe UI",      // Windows default (good Unicode support)
-        "Roboto",        // Android default
+        "Segoe UI",       // Windows default (good Unicode support)
+        "Roboto",         // Android default
     ];
 
     let mut tried_fonts = Vec::new();
@@ -771,7 +900,11 @@ pub fn load_unicode_system_font(text: Option<&str>) -> Result<FontFamily<FontDat
                         font_name,
                         coverage.coverage_percent()
                     );
-                    tried_fonts.push(format!("{} ({:.1}% coverage)", font_name, coverage.coverage_percent()));
+                    tried_fonts.push(format!(
+                        "{} ({:.1}% coverage)",
+                        font_name,
+                        coverage.coverage_percent()
+                    ));
                 }
             } else {
                 // No text to check, font found is good enough
@@ -783,8 +916,9 @@ pub fn load_unicode_system_font(text: Option<&str>) -> Result<FontFamily<FontDat
         }
     }
 
-    // Last resort: use PDF built-in Helvetica
-    eprintln!("⚠ No suitable Unicode font found, falling back to Helvetica (limited character support)");
+    eprintln!(
+        "⚠ No suitable Unicode font found, falling back to Helvetica (limited character support)"
+    );
     if !tried_fonts.is_empty() {
         eprintln!("  Fonts tried:");
         for font in &tried_fonts {
@@ -838,9 +972,9 @@ pub fn get_default_fallback_fonts(primary_name: &str) -> Vec<String> {
         "Noto Sans",
         "DejaVu Sans",
         "Arial Unicode MS",
-        "SF Pro",          // macOS
-        "Segoe UI",        // Windows
-        "Roboto",          // Android/Chrome OS
+        "SF Pro",           // macOS
+        "Segoe UI",         // Windows
+        "Roboto",           // Android/Chrome OS
         "Noto Color Emoji", // Emoji support
     ];
 
@@ -1049,7 +1183,11 @@ pub fn load_font_with_fallbacks(
         best_coverage = coverage.coverage_percent();
         best_font = Some(font);
         best_name = primary_name.to_string();
-        tried_fonts.push(format!("{} ({:.1}% coverage)", primary_name, coverage.coverage_percent()));
+        tried_fonts.push(format!(
+            "{} ({:.1}% coverage)",
+            primary_name,
+            coverage.coverage_percent()
+        ));
     } else {
         tried_fonts.push(format!("{} (not found)", primary_name));
     }
@@ -1082,7 +1220,11 @@ pub fn load_font_with_fallbacks(
                 best_font = Some(font);
                 best_name = fallback_name.clone();
             }
-            tried_fonts.push(format!("{} ({:.1}% coverage)", fallback_name, coverage.coverage_percent()));
+            tried_fonts.push(format!(
+                "{} ({:.1}% coverage)",
+                fallback_name,
+                coverage.coverage_percent()
+            ));
         } else {
             tried_fonts.push(format!("{} (not found)", fallback_name));
         }
