@@ -631,14 +631,17 @@ pub fn load_font_with_config(
     // Check if subsetting is enabled
     let enable_subsetting = config.map(|c| c.enable_subsetting).unwrap_or(false);
 
-    // Check if fallback fonts are specified
+    // Check if fallback fonts are specified - if so, return a chain-based result
+    // Note: We can't apply subsetting to fallback chains yet, so this path doesn't support it
     if let Some(cfg) = config {
         if !cfg.fallback_fonts.is_empty() {
-            // Use smart fallback selection
             eprintln!(
-                "Loading font with {} fallbacks...",
+                "Loading font '{}' with {} fallback(s)...",
+                name,
                 cfg.fallback_fonts.len()
             );
+            // For now, use the legacy fallback selection approach
+            // TODO: Integrate fallback chains into the rendering pipeline
             let family =
                 load_font_with_fallbacks(name, &cfg.fallback_fonts, &cfg.custom_paths, text)?;
             return apply_subsetting_if_enabled(family, enable_subsetting, text);
@@ -739,15 +742,19 @@ fn apply_subsetting_if_enabled(
 /// ```
 pub fn load_unicode_system_font(text: Option<&str>) -> Result<FontFamily<FontData>, Error> {
     // Priority list of Unicode-capable fonts
+    // macOS-specific fonts are prioritized since they're more likely to be available
     let unicode_fonts = [
         "Noto Sans",
         "DejaVu Sans",
         "Liberation Sans",
         "Arial Unicode MS",
-        "Segoe UI", // Windows default (good Unicode support)
-        "SF Pro",   // macOS (good Unicode support)
-        "Roboto",   // Android default
+        "SF Pro",        // macOS system font (good Unicode)
+        "Helvetica Neue", // macOS (better than Helvetica)
+        "Segoe UI",      // Windows default (good Unicode support)
+        "Roboto",        // Android default
     ];
+
+    let mut tried_fonts = Vec::new();
 
     // Try each Unicode font
     for font_name in &unicode_fonts {
@@ -764,28 +771,210 @@ pub fn load_unicode_system_font(text: Option<&str>) -> Result<FontFamily<FontDat
                         font_name,
                         coverage.coverage_percent()
                     );
+                    tried_fonts.push(format!("{} ({:.1}% coverage)", font_name, coverage.coverage_percent()));
                 }
             } else {
                 // No text to check, font found is good enough
                 eprintln!("✓ Using system font '{}'", font_name);
                 return Ok(family);
             }
+        } else {
+            tried_fonts.push(format!("{} (not found)", font_name));
         }
     }
 
     // Last resort: use PDF built-in Helvetica
-    eprintln!("⚠ No Unicode font found, falling back to Helvetica (limited character support)");
-    eprintln!("  Tip: Install 'Noto Sans' or 'DejaVu Sans' for better Unicode support");
+    eprintln!("⚠ No suitable Unicode font found, falling back to Helvetica (limited character support)");
+    if !tried_fonts.is_empty() {
+        eprintln!("  Fonts tried:");
+        for font in &tried_fonts {
+            eprintln!("    - {}", font);
+        }
+    }
+    eprintln!("  💡 To fix this, install a Unicode font:");
+    eprintln!("     • brew install font-noto-sans  (Homebrew)");
+    eprintln!("     • Or download from https://fonts.google.com/noto");
     load_builtin_font_family("helvetica")
 }
 
-/// Loads a font with fallback support for better coverage.
+/// Extracts primary fonts from a fallback chain family.
+///
+/// This creates a `FontFamily<FontData>` from a `FontFamily<FontFallbackChain>`
+/// by taking the primary font from each chain. This is useful for compatibility
+/// with genpdfi which expects `FontData` rather than chains.
+///
+/// # Arguments
+/// * `chain_family` - The fallback chain family to extract primaries from
+///
+/// # Returns
+/// A `FontFamily<FontData>` containing the primary fonts
+pub fn extract_primary_fonts(
+    chain_family: &FontFamily<genpdfi::fonts::FontFallbackChain>,
+) -> FontFamily<FontData> {
+    FontFamily {
+        regular: chain_family.regular.primary().clone(),
+        bold: chain_family.bold.primary().clone(),
+        italic: chain_family.italic.primary().clone(),
+        bold_italic: chain_family.bold_italic.primary().clone(),
+    }
+}
+
+/// Returns a list of sensible default fallback fonts for the given primary font.
+///
+/// These fallbacks are tried in order when characters are missing from the primary font:
+/// 1. Unicode fonts (Noto Sans, DejaVu Sans, Arial Unicode)
+/// 2. System fonts (SF Pro on macOS, Segoe UI on Windows)
+/// 3. Emoji fonts for emoji support
+///
+/// # Arguments
+/// * `primary_name` - The primary font name (used to avoid redundant fallbacks)
+///
+/// # Returns
+/// A vector of fallback font names
+pub fn get_default_fallback_fonts(primary_name: &str) -> Vec<String> {
+    let primary_lower = primary_name.to_lowercase();
+
+    let candidates = vec![
+        "Noto Sans",
+        "DejaVu Sans",
+        "Arial Unicode MS",
+        "SF Pro",          // macOS
+        "Segoe UI",        // Windows
+        "Roboto",          // Android/Chrome OS
+        "Noto Color Emoji", // Emoji support
+    ];
+
+    candidates
+        .into_iter()
+        .filter(|name| name.to_lowercase() != primary_lower)
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Loads fonts and creates a fallback chain for handling mixed-script documents.
+///
+/// This function creates a `FontFallbackChain` by:
+/// 1. Loading the primary font
+/// 2. Loading all specified fallback fonts
+/// 3. Creating a chain where fonts are tried in order
+///
+/// When rendering text, the chain will automatically select the appropriate font
+/// for each character based on glyph coverage.
+///
+/// # Arguments
+/// * `primary_name` - Name of the primary font to load
+/// * `fallback_names` - List of fallback font names to try
+/// * `custom_paths` - Custom paths to search for fonts
+/// * `text` - Optional text for validation (currently unused, kept for API compatibility)
+///
+/// # Returns
+/// A `FontFamily` where each variant (regular, bold, etc.) is a `FontFallbackChain`
+///
+/// # Example
+/// ```no_run
+/// use markdown2pdf::fonts::load_font_with_fallback_chain;
+/// use std::path::PathBuf;
+///
+/// let chain = load_font_with_fallback_chain(
+///     "Noto Sans",
+///     &["DejaVu Sans".to_string(), "Arial".to_string()],
+///     &[PathBuf::from("./fonts")],
+///     Some("Hello мир! 👋")
+/// )?;
+/// # Ok::<(), genpdfi::error::Error>(())
+/// ```
+pub fn load_font_with_fallback_chain(
+    primary_name: &str,
+    fallback_names: &[String],
+    custom_paths: &[PathBuf],
+    _text: Option<&str>,
+) -> Result<FontFamily<genpdfi::fonts::FontFallbackChain>, Error> {
+    use genpdfi::fonts::FontFallbackChain;
+
+    // Load primary font
+    let primary_family = if !custom_paths.is_empty() {
+        load_custom_font_family(primary_name, custom_paths)
+            .or_else(|_| load_system_font_family_simple(primary_name))
+    } else {
+        load_system_font_family_simple(primary_name)
+    }?;
+
+    // Load all fallback fonts
+    let mut fallback_families = Vec::new();
+    for fallback_name in fallback_names {
+        let fallback_family = if !custom_paths.is_empty() {
+            load_custom_font_family(fallback_name, custom_paths)
+                .or_else(|_| load_system_font_family_simple(fallback_name))
+        } else {
+            load_system_font_family_simple(fallback_name)
+        };
+
+        if let Ok(family) = fallback_family {
+            eprintln!("  ✓ Loaded fallback font '{}'", fallback_name);
+            fallback_families.push(family);
+        } else {
+            eprintln!("  ⚠ Fallback font '{}' not found, skipping", fallback_name);
+        }
+    }
+
+    // Create fallback chains for each variant
+    let regular_chain = {
+        let mut chain = FontFallbackChain::new(primary_family.regular);
+        for family in &fallback_families {
+            chain = chain.with_fallback(family.regular.clone());
+        }
+        chain
+    };
+
+    let bold_chain = {
+        let mut chain = FontFallbackChain::new(primary_family.bold);
+        for family in &fallback_families {
+            chain = chain.with_fallback(family.bold.clone());
+        }
+        chain
+    };
+
+    let italic_chain = {
+        let mut chain = FontFallbackChain::new(primary_family.italic);
+        for family in &fallback_families {
+            chain = chain.with_fallback(family.italic.clone());
+        }
+        chain
+    };
+
+    let bold_italic_chain = {
+        let mut chain = FontFallbackChain::new(primary_family.bold_italic);
+        for family in &fallback_families {
+            chain = chain.with_fallback(family.bold_italic.clone());
+        }
+        chain
+    };
+
+    eprintln!(
+        "✓ Created fallback chain: {} + {} fallback(s)",
+        primary_name,
+        fallback_families.len()
+    );
+
+    Ok(FontFamily {
+        regular: regular_chain,
+        bold: bold_chain,
+        italic: italic_chain,
+        bold_italic: bold_italic_chain,
+    })
+}
+
+/// Loads a font with fallback support for better coverage (legacy function).
 ///
 /// This function tries to find the best font for the given text by:
 /// 1. Loading the primary font
 /// 2. Loading all fallback fonts
 /// 3. Checking coverage for each
 /// 4. Selecting the font with the best coverage
+///
+/// **Note**: This function is kept for backward compatibility. New code should use
+/// `load_font_with_fallback_chain()` which returns actual fallback chains instead
+/// of selecting a single best font.
 ///
 /// # Arguments
 /// * `primary_name` - Name of the primary font to load
@@ -801,6 +990,8 @@ pub fn load_font_with_fallbacks(
     custom_paths: &[PathBuf],
     text: Option<&str>,
 ) -> Result<FontFamily<FontData>, Error> {
+    let mut tried_fonts = Vec::new();
+
     // Try to load primary font first
     let primary = if !custom_paths.is_empty() {
         load_custom_font_family(primary_name, custom_paths)
@@ -814,6 +1005,7 @@ pub fn load_font_with_fallbacks(
         if let Ok(font) = primary {
             return Ok(font);
         }
+        tried_fonts.push(format!("{} (not found)", primary_name));
 
         // Try fallbacks
         for fallback_name in fallback_names {
@@ -821,8 +1013,14 @@ pub fn load_font_with_fallbacks(
                 eprintln!("✓ Using fallback font '{}'", fallback_name);
                 return Ok(font);
             }
+            tried_fonts.push(format!("{} (not found)", fallback_name));
         }
 
+        eprintln!("❌ Could not load font '{}' or any fallbacks", primary_name);
+        eprintln!("  Fonts tried:");
+        for font in &tried_fonts {
+            eprintln!("    - {}", font);
+        }
         return Err(Error::new(
             format!("Could not load font '{}' or any fallbacks", primary_name),
             ErrorKind::InvalidFont,
@@ -851,6 +1049,9 @@ pub fn load_font_with_fallbacks(
         best_coverage = coverage.coverage_percent();
         best_font = Some(font);
         best_name = primary_name.to_string();
+        tried_fonts.push(format!("{} ({:.1}% coverage)", primary_name, coverage.coverage_percent()));
+    } else {
+        tried_fonts.push(format!("{} (not found)", primary_name));
     }
 
     // Try each fallback
@@ -881,17 +1082,42 @@ pub fn load_font_with_fallbacks(
                 best_font = Some(font);
                 best_name = fallback_name.clone();
             }
+            tried_fonts.push(format!("{} ({:.1}% coverage)", fallback_name, coverage.coverage_percent()));
+        } else {
+            tried_fonts.push(format!("{} (not found)", fallback_name));
         }
     }
 
     // Return the font with best coverage
     if let Some(font) = best_font {
-        eprintln!(
-            "✓ Selected font '{}' with {:.1}% coverage",
-            best_name, best_coverage
-        );
+        if best_coverage < 100.0 {
+            eprintln!(
+                "⚠️  Selected font '{}' with {:.1}% coverage (some characters may not display)",
+                best_name, best_coverage
+            );
+            eprintln!("  Fonts tried:");
+            for font in &tried_fonts {
+                eprintln!("    - {}", font);
+            }
+            eprintln!("  💡 To fix this, install a Unicode font:");
+            eprintln!("     • brew install font-noto-sans  (Homebrew)");
+            eprintln!("     • Or download from https://fonts.google.com/noto");
+        } else {
+            eprintln!(
+                "✓ Selected font '{}' with {:.1}% coverage",
+                best_name, best_coverage
+            );
+        }
         Ok(font)
     } else {
+        eprintln!("❌ Could not load font '{}' or any fallbacks", primary_name);
+        eprintln!("  Fonts tried:");
+        for font in &tried_fonts {
+            eprintln!("    - {}", font);
+        }
+        eprintln!("  💡 To fix this, install a Unicode font:");
+        eprintln!("     • brew install font-noto-sans  (Homebrew)");
+        eprintln!("     • Or download from https://fonts.google.com/noto");
         Err(Error::new(
             format!("Could not load font '{}' or any fallbacks", primary_name),
             ErrorKind::InvalidFont,
