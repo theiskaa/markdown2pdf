@@ -16,7 +16,7 @@
 //! The module is designed to be both robust for production use and flexible enough to accommodate various document structures
 //! and styling needs.
 
-use crate::{styling::StyleMatch, Token};
+use crate::{fonts::load_unicode_system_font, styling::StyleMatch, Token};
 use genpdfi::{
     fonts::{FontData, FontFamily},
     Document,
@@ -37,6 +37,8 @@ pub struct Pdf {
     style: StyleMatch,
     font_family: FontFamily<FontData>,
     code_font_family: FontFamily<FontData>,
+    font_fallback_chain: Option<FontFamily<genpdfi::fonts::FontFallbackChain>>,
+    code_font_fallback_chain: Option<FontFamily<genpdfi::fonts::FontFallbackChain>>,
 }
 
 impl Pdf {
@@ -71,30 +73,86 @@ impl Pdf {
             None
         };
 
-        let font_family = if let Some(family_name) = font_config
+        // Try to load fonts with fallback chains
+        let (font_family, font_fallback_chain) = if let Some(family_name) = font_config
             .and_then(|cfg| cfg.default_font.as_deref())
             .or(style.text.font_family)
         {
-            // User specified a font, try to load it
-            crate::fonts::load_font_with_config(family_name, font_config, all_text.as_deref())
-                .unwrap_or_else(|_| {
-                    eprintln!(
-                        "Warning: could not load font '{}', trying Unicode system fonts...",
-                        family_name
-                    );
-                    crate::fonts::load_unicode_system_font(all_text.as_deref()).unwrap_or_else(
-                        |_| {
-                            crate::fonts::load_builtin_font_family("helvetica")
-                                .expect("Failed to load fallback font family")
-                        },
+            // User specified a font - try to load it with automatic fallbacks
+            let fallback_fonts = if let Some(cfg) = font_config {
+                if cfg.fallback_fonts.is_empty() {
+                    crate::fonts::get_default_fallback_fonts(family_name)
+                } else {
+                    cfg.fallback_fonts.clone()
+                }
+            } else {
+                crate::fonts::get_default_fallback_fonts(family_name)
+            };
+
+            if !fallback_fonts.is_empty() {
+                eprintln!(
+                    "Loading font '{}' with {} automatic fallback(s)...",
+                    family_name,
+                    fallback_fonts.len()
+                );
+                let custom_paths = font_config
+                    .map(|c| c.custom_paths.as_slice())
+                    .unwrap_or(&[]);
+
+                // Try to load with fallback chains
+                if let Ok(chain_family) = crate::fonts::load_font_with_fallback_chain(
+                    family_name,
+                    &fallback_fonts,
+                    custom_paths,
+                    all_text.as_deref(),
+                ) {
+                    let primary_fonts = crate::fonts::extract_primary_fonts(&chain_family);
+                    (primary_fonts, Some(chain_family))
+                } else {
+                    eprintln!("Warning: fallback chain loading failed, using single best font...");
+                    let single_font = crate::fonts::load_font_with_fallbacks(
+                        family_name,
+                        &fallback_fonts,
+                        custom_paths,
+                        all_text.as_deref(),
                     )
-                })
+                    .unwrap_or_else(|_| {
+                        crate::fonts::load_font_with_config(
+                            family_name,
+                            font_config,
+                            all_text.as_deref(),
+                        )
+                        .unwrap_or_else(|_| {
+                            load_unicode_system_font(all_text.as_deref()).unwrap_or_else(|_| {
+                                crate::fonts::load_builtin_font_family("helvetica")
+                                    .expect("Failed to load fallback font family")
+                            })
+                        })
+                    });
+                    (single_font, None)
+                }
+            } else {
+                // No fallbacks available, use basic loading
+                let single_font = crate::fonts::load_font_with_config(
+                    family_name,
+                    font_config,
+                    all_text.as_deref(),
+                )
+                .unwrap_or_else(|_| {
+                    load_unicode_system_font(all_text.as_deref()).unwrap_or_else(|_| {
+                        crate::fonts::load_builtin_font_family("helvetica")
+                            .expect("Failed to load fallback font family")
+                    })
+                });
+                (single_font, None)
+            }
         } else {
             eprintln!("No font specified, searching for Unicode-capable system font...");
-            crate::fonts::load_unicode_system_font(all_text.as_deref()).unwrap_or_else(|_| {
+            let single_font = load_unicode_system_font(all_text.as_deref()).unwrap_or_else(|_| {
                 crate::fonts::load_builtin_font_family("helvetica")
                     .expect("Failed to load fallback font family")
-            })
+            });
+            (single_font, None)
         };
 
         // For code blocks we prefer a monospace font (use config override or default to courier)
@@ -118,6 +176,8 @@ impl Pdf {
             style,
             font_family,
             code_font_family,
+            font_fallback_chain,
+            code_font_fallback_chain: None,
         }
     }
 
