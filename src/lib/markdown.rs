@@ -697,8 +697,9 @@ impl Lexer {
         // Convert header strings to token vectors
         let mut headers = Vec::new();
         for cell in header_cells {
-            let mut cell_lexer = Lexer::new(cell);
-            headers.push(cell_lexer.parse()?);
+            // TODO: parse the inside of the cell, handling
+            // the exclusion of things like headings and block quotes
+            headers.push(vec![Token::Text(cell)]);
         }
 
         // Parse rows until blank or non-table start
@@ -717,8 +718,10 @@ impl Lexer {
 
             let mut row_tokens = Vec::new();
             for cell in cell_texts {
-                let mut cell_lexer = Lexer::new(cell);
-                row_tokens.push(cell_lexer.parse()?);
+                // TODO: parse the inside of the cell, handling
+                // the exclusion of things like headings and block quotes
+                // FIX: large unbreakable words don't fit in cells
+                row_tokens.push(vec![Token::Text(cell)]);
             }
             rows.push(row_tokens);
 
