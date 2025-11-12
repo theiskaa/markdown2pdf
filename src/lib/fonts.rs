@@ -1,4 +1,5 @@
 use std::fs;
+use std::panic;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -304,28 +305,50 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
                 _ => continue,
             };
 
-            if path
-                .extension()
-                .and_then(|s| s.to_str())
-                .map_or(false, |ext| ext.eq_ignore_ascii_case("ttc"))
-            {
-                continue;
-            }
+            let face_family = face.families.first().map(|(name, _)| name.to_lowercase());
+            let matches_family = face_family.as_ref().map_or(false, |f| f.contains(&wanted));
 
             let file_name = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_lowercase();
-            if !file_name.contains(&wanted) {
+            let matches_filename = file_name.contains(&wanted);
+
+            if !matches_family && !matches_filename {
                 continue;
             }
 
+            // Try to load the font (works for both .ttf and .ttc)
             match fs::read(path) {
                 Ok(b) => {
-                    if rusttype::Font::from_bytes(b.clone()).is_ok() {
-                        selected_bytes = Some(b);
-                        break;
+                    let is_ttc = path
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map_or(false, |ext| ext.eq_ignore_ascii_case("ttc"));
+
+                    if is_ttc {
+                        // .ttc (TrueType Collection) files are currently not supported
+                        // because fonts in collections often share tables, making extraction complex.
+                        // Users should install individual .ttf/.otf versions of fonts instead.
+                        eprintln!(
+                            "  ℹ Skipping '{}' (.ttc collections not yet fully supported)",
+                            file_name
+                        );
+                        eprintln!(
+                            "     💡 Install individual .ttf/.otf version for best compatibility"
+                        );
+                        continue;
+                    } else {
+                        // Regular .ttf/.otf file
+                        // Use catch_unwind because Font::from_bytes() can panic on invalid data
+                        let is_valid = panic::catch_unwind(|| Font::from_bytes(b.clone()).is_ok())
+                            .unwrap_or(false);
+
+                        if is_valid {
+                            selected_bytes = Some(b);
+                            break;
+                        }
                     }
                 }
                 Err(e) => {
@@ -337,6 +360,17 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
         if let Some(bytes) = selected_bytes {
             if candidate_name != name {
                 eprintln!("  ℹ Using '{}' as alias for '{}'", candidate_name, name);
+            }
+
+            // Double-check the font is valid before creating FontData
+            // This prevents panics from invalid .ttc extractions
+            // Use catch_unwind because Font::from_bytes() can panic on invalid data
+            let is_valid =
+                panic::catch_unwind(|| Font::from_bytes(bytes.clone()).is_ok()).unwrap_or(false);
+
+            if !is_valid {
+                eprintln!("  ⚠ Font data invalid, skipping '{}'", candidate_name);
+                continue;
             }
 
             let shared = Arc::new(bytes);
