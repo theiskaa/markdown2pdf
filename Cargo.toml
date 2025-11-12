@@ -1,6 +1,6 @@
 [package]
 name = "markdown2pdf"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 authors = ["Ismael Sh <me@theiskaa.com>"]
 description = "Create PDF with Markdown files (a md to pdf transpiler)"
@@ -23,7 +23,7 @@ rustls-tls = ["reqwest/rustls-tls"]
 native-tls = ["reqwest/native-tls"]
 
 [dependencies]
-genpdfi = "0.2.3"
+genpdfi = { git = "https://github.com/theiskaa/genpdfi.git", branch = "feature/font-subsetting" }
 dirs = "4.0.0"
 toml = "0.8.19"
 once_cell = "1.20.2"
