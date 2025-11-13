@@ -10,13 +10,11 @@
 
 </p>
 
-markdown2pdf is a command-line tool and library for converting Markdown content into styled PDF documents. It uses a lexical analyzer to parse Markdown and a PDF module to generate documents based on the parsed tokens.
+markdown2pdf converts Markdown to PDF using a lexical analyzer and PDF rendering engine. The library tokenizes Markdown into semantic elements, applies styling rules from TOML configuration, and generates styled PDF output.
 
-The library employs a pipeline that tokenizes Markdown text into semantic elements, then processes these tokens through a styling module that applies configurable visual formatting. The styling engine supports customization of fonts, colors, spacing, and other typographic properties through TOML configuration. For containerized deployments and self-contained binaries, configurations can be embedded directly at compile time, eliminating runtime file dependencies.
+Both binary and library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
 
-This project includes both a binary and a library. The binary provides a command-line interface for converting Markdown files, URLs, or direct string input into styled PDF documents. The library offers programmatic Markdown parsing and PDF generation with fine-grained control over the conversion process, styling rules, and document formatting, including embedded configuration support for Docker, Nix, and containerized deployments.
-
-The library is fast and reliable, built in Rust for performance and memory safety. It handles comprehensive Markdown syntax including headings, lists, code blocks, links, and images. Configuration is flexible through TOML files that can be loaded from disk or embedded at compile time. The library supports multiple input sources and can generate files or return PDF bytes for in-memory processing.
+Built in Rust for performance and memory safety. Handles standard Markdown syntax including headings, lists, code blocks, links, and images. Supports multiple input sources and outputs to files or bytes for in-memory processing.
 
 ## Install binary
 
@@ -63,12 +61,12 @@ cargo add markdown2pdf
 Or add to your Cargo.toml:
 
 ```toml
-markdown2pdf = "0.1.6"
+markdown2pdf = "0.1.9"
 ```
 
 ## Usage
 
-The markdown2pdf tool accepts Markdown file paths, direct content strings, or URLs as input. Options include `-p` for file paths, `-s` for direct string content, `-u` for URLs, and `-o` for output file specification. If multiple input options are provided, precedence follows: path > url > string. Default output is 'output.pdf' if not specified.
+The tool accepts file paths (`-p`), string content (`-s`), or URLs (`-u`) as input. Output path is specified with `-o`. Input precedence: path > url > string. Defaults to 'output.pdf'.
 
 Convert a Markdown file:
 ```bash
@@ -85,45 +83,87 @@ Convert from URL:
 markdown2pdf -u "https://raw.githubusercontent.com/user/repo/main/README.md" -o "readme.pdf"
 ```
 
+Use `--verbose` for detailed font selection output, `--quiet` for CI/CD pipelines, or `--dry-run` to validate syntax without generating PDF.
+
+## Font Handling and Unicode Support
+
+The library automatically detects Unicode characters and selects system fonts with good coverage. Font subsetting reduces PDF size by 98% by including only used glyphs. A document with Noto Sans embeds ~31 KB instead of 1.2 MB.
+
+Fallback font chains specify multiple fonts tried in sequence for missing characters. Useful for mixed-script documents with Latin, Cyrillic, Greek, or CJK. The system analyzes each character and selects the best font from the chain.
+
+When non-ASCII characters are detected, the library prioritizes Noto Sans, DejaVu Sans, and Liberation Sans. Coverage percentages are reported with suggestions if fonts lack support.
+
+The system loads actual Bold, Italic, and Bold-Italic font files rather than synthetic rendering. Font name resolution includes fuzzy matching and aliasing for cross-platform compatibility. "Arial" automatically maps to Helvetica on macOS.
+
+Custom fonts load from directories via `--font-path` with recursive search for TrueType and OpenType fonts.
+
+```bash
+# Unicode with fallback chain
+markdown2pdf -p international.md --default-font "Noto Sans" \
+  --fallback-font "Arial Unicode MS" -o output.pdf
+
+# Custom fonts with subsetting
+markdown2pdf -p document.md --font-path "./fonts" \
+  --default-font "Roboto" --code-font "Fira Code" -o output.pdf
+```
+
 ## Library Usage
 
-The library exposes two main functions: `parse_into_file()` and `parse_into_bytes()`. Both accept raw Markdown text and handle all intermediate processing steps internally. They leverage the lexer to build an abstract syntax tree, apply styling rules from configuration, and render the final PDF output.
+Two main functions: `parse_into_file()` saves PDF to disk, `parse_into_bytes()` returns bytes for web services. Both parse Markdown, apply styling, and render output.
 
-The `parse_into_file()` function saves the PDF directly to a file. The `parse_into_bytes()` function returns the PDF data as a byte vector for scenarios requiring more flexibility, such as web services, API responses, or network transmission.
-
-The library uses a `ConfigSource` enum to specify how styling configuration should be loaded. This supports three approaches: default built-in styling, file-based configuration loaded at runtime, or embedded configuration compiled directly into the binary.
-
-Configuration sources include `ConfigSource::Default` for built-in styling with no external dependencies, `ConfigSource::File("path")` for runtime loading from TOML files, and `ConfigSource::Embedded(content)` for compile-time embedded configuration strings.
+Configuration uses `ConfigSource`: `Default` for built-in styling, `File("path")` for runtime loading, or `Embedded(content)` for compile-time embedding.
 
 ```rust
 use markdown2pdf::{parse_into_file, config::ConfigSource};
 
 // Default styling
-parse_into_file(markdown, "output.pdf", ConfigSource::Default)?;
+parse_into_file(markdown, "output.pdf", ConfigSource::Default, None)?;
 
 // File-based configuration
-parse_into_file(markdown, "output.pdf", ConfigSource::File("config.toml"))?;
+parse_into_file(markdown, "output.pdf", ConfigSource::File("config.toml"), None)?;
 
 // Embedded configuration
 const CONFIG: &str = include_str!("../config.toml");
-parse_into_file(markdown, "output.pdf", ConfigSource::Embedded(CONFIG))?;
+parse_into_file(markdown, "output.pdf", ConfigSource::Embedded(CONFIG), None)?;
 ```
 
-For embedded configuration, TOML content can be included at compile time using `include_str!()` or defined as string literals. This approach eliminates runtime file dependencies and creates truly portable executables suitable for containerized deployments.
+Embedded configuration uses `include_str!()` at compile time, eliminating runtime file dependencies.
 
-For advanced usage, you can work directly with the lexer and PDF generation components. Create a lexer instance to parse Markdown content into tokens, then create a PDF renderer with styling rules through a `StyleMatch` instance loaded via `load_config_from_source()`. Finally, render the document to a file or convert to bytes.
+Font configuration uses `FontConfig` for programmatic control over fonts, fallback chains, and subsetting.
+
+```rust
+use markdown2pdf::{parse_into_file, config::ConfigSource, fonts::FontConfig};
+use std::path::PathBuf;
+
+// Configure fonts for international document
+let font_config = FontConfig {
+    custom_paths: vec![PathBuf::from("./fonts")],
+    default_font: Some("Noto Sans".to_string()),
+    code_font: Some("Fira Code".to_string()),
+    fallback_fonts: vec![
+        "Arial Unicode MS".to_string(),
+        "DejaVu Sans".to_string(),
+    ],
+    enable_subsetting: true,
+};
+
+parse_into_file(
+    markdown,
+    "output.pdf",
+    ConfigSource::Default,
+    Some(&font_config),
+)?;
+```
+
+Font subsetting is enabled by default, analyzing text to create minimal subsets while maintaining full fidelity.
+
+For advanced usage, work directly with the lexer and PDF components via `load_config_from_source()`.
 
 ## Configuration
 
-The markdown2pdf tool and library support extensive customization through TOML configuration. Configuration can be provided through three methods: default built-in styles, file-based configuration loaded at runtime, or embedded configuration compiled into the binary.
+TOML configuration customizes fonts, colors, spacing, and visual properties. Configuration translates to a `StyleMatch` instance. Three loading methods: default styles, runtime files, or compile-time embedding.
 
-The configuration is translated to a `StyleMatch` instance which determines how different Markdown elements are rendered in the final PDF. Configuration supports customization of fonts, colors, spacing, and other visual properties for all Markdown elements.
-
-Default configuration uses built-in styling with sensible defaults and requires no external files. File-based configuration loads TOML files at runtime and supports both relative and absolute paths. Embedded configuration compiles TOML content directly into the binary, creating self-contained executables perfect for Docker, Nix, and containerized environments.
-
-Embedded configuration provides several advantages: self-contained binaries with no external dependencies, container compatibility with no filesystem concerns, version control integration where configuration changes are tracked with code, compile-time validation where errors are caught early, and production reliability that eliminates missing file errors.
-
-Error handling is graceful - if a specified configuration file cannot be found or contains invalid syntax, the library falls back to default styling without crashing, ensuring PDF generation always succeeds.
+Embedded configuration creates self-contained binaries for Docker and containers with compile-time validation. Error handling falls back to default styling if files are missing or invalid.
 
 For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the example configuration from `markdown2pdfrc.example.toml`. For library usage with embedded config, create your configuration file and embed it using `include_str!()` or define it as a string literal, then use it with `ConfigSource::Embedded(content)`.
 

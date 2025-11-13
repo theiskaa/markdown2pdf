@@ -17,7 +17,7 @@ impl Token {
     ///
     /// let mut lexer = Lexer::new("# Title".to_string());
     /// let tokens = lexer.parse().unwrap();
-    /// markdown2pdf::markdown::Token::save_to_json_file(&tokens, "tokens.json").unwrap();
+    /// markdown2pdf::markdown::Token::save_to_json_file(tokens, "tokens.json").unwrap();
     /// ```
     pub fn save_to_json_file(tokens: Vec<Token>, file_path: &str) -> std::io::Result<()> {
         let json_content = Self::tokens_to_readable_json(tokens);
