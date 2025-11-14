@@ -64,6 +64,36 @@ Or add to your Cargo.toml:
 markdown2pdf = "0.1.9"
 ```
 
+### Feature Flags
+
+The library provides optional feature flags to control dependencies:
+
+- **Default (no features)**: Core PDF generation from files and strings. No network dependencies.
+- **`fetch`**: Enables URL fetching support (requires one of the TLS features below).
+- **`native-tls`**: Enables URL fetching with native TLS/OpenSSL (recommended for most users).
+- **`rustls-tls`**: Enables URL fetching with pure-Rust TLS implementation (useful for static linking or avoiding OpenSSL).
+
+```toml
+# Minimal installation (no network dependencies)
+markdown2pdf = "0.1.9"
+
+# With URL fetching support (native TLS)
+markdown2pdf = { version = "0.1.9", features = ["native-tls"] }
+
+# With URL fetching support (rustls)
+markdown2pdf = { version = "0.1.9", features = ["rustls-tls"] }
+```
+
+**Note**: Binary installations via cargo or prebuilt downloads do not include URL fetching by default. To build the binary with URL support:
+
+```bash
+# Install with URL fetching support
+cargo install markdown2pdf --features native-tls
+
+# Or build from source
+cargo build --release --features native-tls
+```
+
 ## Usage
 
 The tool accepts file paths (`-p`), string content (`-s`), or URLs (`-u`) as input. Output path is specified with `-o`. Input precedence: path > url > string. Defaults to 'output.pdf'.
@@ -78,7 +108,7 @@ Convert string content:
 markdown2pdf -s "**bold text** *italic text*." -o "output.pdf"
 ```
 
-Convert from URL:
+Convert from URL (requires `native-tls` or `rustls-tls` feature):
 ```bash
 markdown2pdf -u "https://raw.githubusercontent.com/user/repo/main/README.md" -o "readme.pdf"
 ```

@@ -651,7 +651,7 @@ dependencies = [
 [[package]]
 name = "genpdfi"
 version = "0.2.3"
-source = "git+https://github.com/theiskaa/genpdfi.git?branch=feature%2Ffont-subsetting#90087221b9779beb31587d55272a61a25842e17e"
+source = "git+https://github.com/theiskaa/genpdfi.git?branch=main#50a4a2346b03deb85ec4785ed375bc7010504a18"
 dependencies = [
  "derive_more",
  "hb-subset",
