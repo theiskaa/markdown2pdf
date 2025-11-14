@@ -1,218 +1,303 @@
-# Changelog
+## [0.1.9] - 2025-11-14
 
-All notable changes to this project will be documented in this file.
-This file will include each commit message and the commit message will be grouped by
-the changelog generator (git-cliff).
-
----
-
-## [0.1.8] - 2025-10-07
 ### Features
-- *(markdown)* Improve list parsing and add is_list_marker method for better list item handling
-- *(debug)* Add functionality to save tokens as JSON for visualization
+
+- _(fonts)_ Improve font loading by adding validation for font data and handling of .ttc files
+- _(pdf)_ Improve font loading by applying subsetting to fallback chains based on character usage
+- _(fonts)_ Add font subsetting functionality to reduce PDF file size by analyzing character usage in fallback chains
+- _(pdf)_ Improve font loading with automatic fallback chains and improved handling for missing fonts
+- _(fonts)_ Improve font loading with fallback chains and improved error reporting for missing fonts
+- _(cli)_ Add verbosity levels and dry-run option for enhanced user feedback during PDF generation
+- _(errors)_ Improve MdpError handling with detailed error structures and suggestions for better debugging
+- _(fonts)_ Improve font loading with aliases and variant support for better fallback handling
+- _(validation)_ Implement a validation system for markdown conversion with warnings for missing fonts, images, and syntax issues
+- _(pdf)_ Enhance font loading with optional text extraction for improved fallback handling
+- _(markdown)_ Add recursive text extraction method for tokens
+- _(fonts)_ Add font subsetting support
+- _(lib)_ Update parse_into_file and parse_into_bytes to support optional font configuration
+- _(pdf)_ Improve pdf creation with optional font configuration for custom and default fonts
+- _(fonts)_ Implement custom font loading with configuration options
+- _(bin)_ Add font configuration options for custom and default fonts
 
 ### Bug Fixes
-- *(markdown)* Remove the token visualization json generator call
+
+- _(pdf)_ Change default behavior of font subsetting to true for improved text extraction
 
 ### Documentation
 
-- *(changelog)* Update changelog with 0.1.7 commits
-- *(readme)* Update readme to include homebrew and prebuilt install variants
-
-## [0.1.7] - 2025-09-21
-
-### Documentation
-- *(readme)* Update readme to include homebrew and prebuilt install variants
-
-### Documentation
-- *(funding)* Add github funding file
-- *(donate)* Add donation information and link to DONATE.md in README
+- _(readme)_ Update feature flag section
+- _(readme)_ Simplfiy readme to make it more pleasant to read
 
 ### Miscellaneous Tasks
 
-- *(ci)* Add GitHub Actions workflow for release automation and configure dist settings in Cargo.toml and new dist-workspace.toml
+- _(cargo)_ Add feature flags to control the lib by preference
+- _(.gitignore)_ Add pattern to ignore test markdown files
+- _(dependencies)_ Update dependencies in Cargo.lock and Cargo.toml, including version bump for markdown2pdf to 0.1.9 and switching genpdfi to a git source for font subsetting feature
+- _(docs)_ Update README to improve docs on cli options, font handling, and Unicode support
+
+## [0.1.8] - 2025-10-07
+
+### Features
+
+- _(markdown)_ Improve list parsing and add is_list_marker method for better list item handling
+- _(debug)_ Add functionality to save tokens as JSON for visualization
+
+### Bug Fixes
+
+- _(markdown)_ Remove the token visualization json generator call
+
+### Other
+
+- Version v0.1.8
+
+### Documentation
+
+- _(changelog)_ Update changelog with 0.1.7 commits
+- _(readme)_ Update readme to include homebrew and prebuilt install variants
+
+### Miscellaneous Tasks
+
+- Release 0.1.8 version
+
+## [0.1.7] - 2025-09-21
+
+### Other
+
+- Version 0.1.7
+
+### Documentation
+
+- _(funding)_ Add github funding file
+- _(donate)_ Add donation information and link to DONATE.md in README
+
+### Miscellaneous Tasks
+
+- _(ci)_ Add GitHub Actions workflow for release automation and configure dist settings in Cargo.toml and new dist-workspace.toml
 
 ## [0.1.6] - 2025-07-21
 
 ### Features
-- *(config)* Add ConfigSource enum and refactor configuration loading functions to support default, file, and embedded sources
+
+- _(config)_ Add ConfigSource enum and refactor configuration loading functions to support default, file, and embedded sources
 
 ### Bug Fixes
-- *(main)* Update parse_into_file call to use ConfigSource::Default for improved configuration handling
+
+- _(main)_ Update parse_into_file call to use ConfigSource::Default for improved configuration handling
 
 ### Refactor
-- *(lib)* Update parse_into_file and parse_into_bytes functions to use ConfigSource for configuration handling
+
+- _(lib)_ Update parse_into_file and parse_into_bytes functions to use ConfigSource for configuration handling
 
 ### Documentation
-- *(readme)* Add new logo and some cool badges
-- *(readme)* Revise README for clarity and update configuration handling details, including embedded support and usage examples
 
+- _(readme)_ Add new logo and some cool badges
+- _(readme)_ Revise README for clarity and update configuration handling details, including embedded support and usage examples
+
+### Miscellaneous Tasks
+
+- _(cargo)_ Update version to 0.1.6 and reflect changes in Cargo.toml, Cargo.lock, CHANGELOG.md, and README.md
 
 ## [0.1.5] - 2025-07-16
 
 ### Features
-- *(lib)* Rename parse function to parse_into_file and add parse_into_bytes for in-memory PDF generation
-- *(pdf)* Add render_to_bytes method for in-memory PDF generation and corresponding tests
+
+- _(lib)_ Rename parse function to parse_into_file and add parse_into_bytes for in-memory PDF generation
+- _(pdf)_ Add render_to_bytes method for in-memory PDF generation and corresponding tests
 
 ### Documentation
-- *(readme)* Update documentation to reflect new parse_into_file and parse_into_bytes functions for PDF generation
-- *(readme)* Update version from 0.1.3 to 0.1.4 in readme
+
+- _(readme)_ Update documentation to reflect new parse_into_file and parse_into_bytes functions for PDF generation
+- _(readme)_ Update version from 0.1.3 to 0.1.4 in readme
 
 ### Miscellaneous Tasks
-- *(app)* Remove Makefile at all
+
+- _(cargo)_ Update version to 0.1.5 and reflect version changes in other files
+- _(app)_ Remove Makefile at all
 
 ## [0.1.4] - 2025-07-09
 
 ### Features
-- *(fonts)* Add comprehensive font loading functionality with built-in and system font support
-- *(fonts)* Implement ultra-minimal font loading with caching and variant analysis
+
+- _(fonts)_ Add comprehensive font loading functionality with built-in and system font support
+- _(fonts)_ Implement ultra-minimal font loading with caching and variant analysis
 
 ### Bug Fixes
-- *(main)* Update error handling to provide clearer user guidance for markdown input requirements
+
+- _(main)_ Update error handling to provide clearer user guidance for markdown input requirements
 
 ### Other
-- *(cargo)* Remove thiserror module
+
+- _(cargo)_ Remove thiserror module
 
 ### Refactor
-- *(lib)* Update parse function to accept an optional configuration path for improved flexibility
-- *(main)* Improve command handling and error messaging for markdown input
-- *(lib)* Remove commented sections and unused font loading logic
-- *(styling)* Remove unused font references and optimize font loading logic for efficiency
-- *(pdf)* Enhance font loading logic to support system fonts and fallback options
-- *(pdf)* Replace font loading methods with minimal variants for improved efficiency
+
+- _(lib)_ Update parse function to accept an optional configuration path for improved flexibility
+- _(main)_ Improve command handling and error messaging for markdown input
+- _(lib)_ Remove commented sections and unused font loading logic
+- _(styling)_ Remove unused font references and optimize font loading logic for efficiency
+- _(pdf)_ Enhance font loading logic to support system fonts and fallback options
+- _(pdf)_ Replace font loading methods with minimal variants for improved efficiency
 
 ### Documentation
-- *(readme)* Enhance configuration section to include custom config file path and error handling details
+
+- _(readme)_ Enhance configuration section to include custom config file path and error handling details
 
 ### Miscellaneous Tasks
-- *(dependencies)* Update genpdfi source from github to registry (version 0.2.3  )
-- *(dependencies)* Update package versions and add new dependencies for font handling and PDF generation
-- *(lib)* Remove embedded assets including help text and Roboto font files to streamline the project and reduce binary size.
+
+- _(dependencies)_ Update Cargo.lock
+- _(cargo)_ Update version from v0.1.3 to v0.1.4
+- _(dependencies)_ Update genpdfi source from github to registry (version 0.2.3 )
+- _(dependencies)_ Update package versions and add new dependencies for font handling and PDF generation
+- _(lib)_ Remove embedded assets including help text and Roboto font files to streamline the project and reduce binary size.
 - Fix some advisory issues
 - Make it possible to compile without openssl
-- *(dependencies)* Bump genpdfi version to 0.2.2 in Cargo.toml and Cargo.lock
-
-## New Contributors
-* @nicolasburtey made their first contribution
+- _(dependencies)_ Bump genpdfi version to 0.2.2 in Cargo.toml and Cargo.lock
 
 ## [0.1.3] - 2025-03-31
+
 ### Features
-- *(assets)* Move default implementation to [Default] trait
-- *(pdf)* Implement before_spacing as breaks
-- *(config)* Parse before_spacing and add in the example file
-- *(styling)* Add before_spacing field to BasicTextStyle
+
+- _(assets)_ Move default implementation to [Default] trait
+- _(pdf)_ Implement before_spacing as breaks
+- _(config)_ Parse before_spacing and add in the example file
+- _(styling)_ Add before_spacing field to BasicTextStyle
 
 ### Bug Fixes
-- *(markdown)* Enhance image parsing to handle invalid syntax gracefully
-- *(lib/markdown)* Improve example doc codes
-- *(markdown)* Use shorthanded struct initialization for emphasis init
+
+- _(markdown)_ Enhance image parsing to handle invalid syntax gracefully
+- _(lib/markdown)_ Improve example doc codes
+- _(markdown)_ Use shorthanded struct initialization for emphasis init
 
 ### Documentation
-- *(readme)* Expand library integration guide
+
+- _(changelog)_ Update CHANGELOG.md for version 0.1.3 with new features, bug fixes, documentation updates, and tests
+- _(readme)_ Expand library integration guide
 
 ### Testing
-- *(markdown)* Add tests for standalone exclamation and image parsing
-- *(lib)* Covert both success and error cases
-- *(pdf)* Cover most cases except 'genpdfi' imports
-- *(markdown)* Cover all possible cases of lexer
-- *(styling)* Cover all cases in styling
-- *(config)* Add tests for each method except reading from config file
 
-## [0.1.2] - 2024-12-01
-### Features
-- *(cli)* Add URL input support for remote markdown files
-- *(assets)* Embed the help text file to assets
-
-### Bug Fixes
-- *(markdown)* Remove the token printing in markdown parser
-
-### Refactor
-- *(bin)* Re-implement the structure of cli
-
-## [0.1.1] - 2024-11-29
-### Features
-- *(pdf)* Implement hierarchical list rendering with proper indentation
-- *(markdown)* Support mixed ordered/unordered nested lists
-- *(lib)* Load embedded fonts from assets
-- *(lib)* Include assets in lib
-- *(lib)* Add asset embedding
-
-### Bug Fixes
-- *(markdown)* Ensure proper spacing after emphasized text
-- *(pdf)* Set correct before and after settings
-- *(markdown)* Handling space between tokens
-
-### Refactor
-- *(pdf)* Restructure PDF generation implementation
-- *(pdf)* Improve the structure of pdf implementation
-
-### Documentation
-- *(readme)* Update the readme to have more technical info
-- *(lib)* Improve code documentation
+- _(markdown)_ Add tests for standalone exclamation and image parsing
+- _(lib)_ Covert both success and error cases
+- _(pdf)_ Cover most cases except 'genpdfi' imports
+- _(markdown)_ Cover all possible cases of lexer
+- _(styling)_ Cover all cases in styling
+- _(config)_ Add tests for each method except reading from config file
 
 ### Miscellaneous Tasks
-- *(changelog)* Add "New Contributors" header to cliff
-- *(cargo)* Add Cargo.lock
 
-## New Contributors
-* @orhun made their first contribution
+- _(lib)_ Update markdown2pdf version to 0.1.3 in Cargo.toml and Cargo.lock
+
+## [0.1.2] - 2024-12-01
+
+### Features
+
+- _(cli)_ Add URL input support for remote markdown files
+- _(assets)_ Embed the help text file to assets
+
+### Bug Fixes
+
+- _(markdown)_ Remove the token printing in markdown parser
+
+### Refactor
+
+- _(bin)_ Re-implement the structure of cli
+
+### Miscellaneous Tasks
+
+- _(release)_ Bump version to 0.1.2
+
+## [0.1.1] - 2024-11-29
+
+### Features
+
+- _(lib)_ Bump new version v0.1.1
+- _(pdf)_ Implement hierarchical list rendering with proper indentation
+- _(markdown)_ Support mixed ordered/unordered nested lists
+- _(lib)_ Load embedded fonts from assets
+- _(lib)_ Include assets in lib
+- _(lib)_ Add asset embedding
+
+### Bug Fixes
+
+- _(markdown)_ Ensure proper spacing after emphasized text
+- _(pdf)_ Set correct before and after settings
+- _(markdown)_ Handling space between tokens
+
+### Refactor
+
+- _(pdf)_ Restructure PDF generation implementation
+- _(pdf)_ Improve the structure of pdf implementation
+
+### Documentation
+
+- _(readme)_ Update the readme to have more technical info
+- _(lib)_ Improve code documentation
+
+### Miscellaneous Tasks
+
+- _(changelog)_ Add "New Contributors" header to cliff
+- _(cargo)_ Add Cargo.lock
 
 ## [0.1.0] - 2024-11-17
+
 ### Features
-- *(docs)* Update readme
-- *(docs)* Add contributing document
-- *(base)* Use genpdfi instead of genpdf
-- *(cargo)* Add version to genpdf package
-- *(base)* Rename project to markdown2pdf
-- *(bin)* Set lto to 'thin' and enable strip
-- *(bin)* Handle the response result of parse
-- *(pdf)* Improve error returning from Pdf
-- *(pdf)* Handle code blocks in pdf converter
-- *(markdown)* Parse multiline code blocks and code snippet language
-- *(lib)* Improve documentation comments
-- *(docs)* Add configuration header to readme
-- *(config)* Read mdprc from the root directory
-- *(lib)* Implement config parsing into library
-- *(config)* Add module for parsing toml into StyleMatch
-- *(config)* Add configuration toml example
-- *(lib)* Add documentation comments & improve lib public methods
-- *(pdf)* Call add_link for Link elements
-- *(cargo)* Use fork of genpdf-rs-improved
-- *(styling)* Add new roboto font & change the fonts structure
-- *(styling)* Implement styling on pdf, to create pdfs based on style match
-- *(styling)* Improve styling & add new paramethers and styles
-- *(bin)* Add makefile for easy build
-- *(styling)* Add basic styling structure
-- *(bin)* Remove help.txt & add to main.rs
-- *(bin)* Update both package names to mdp
-- *(bin)* Update binary name to mpd
-- *(bin)* Improve cli & add docummentation
-- *(pdf)* Improve transforming lexer output to pdf
-- *(markdown)* Make Token cloneable
-- *(pdf)* Add basic logic for token to PDF element conversion
-- *(pdf)* Add pdf class to convert markdown to pdf
-- *(markdown)* Refactor text parsing to correctly handle special characters
-- *(markdown)* Update emphasis structure to level based
-- *(markdown)* Parse emphasis level correctly
-- *(markdown)* Implement parsing nested tokens functionality
-- *(markdown)* Bring back markdown lexer
-- *(assets)* Remove test_data and move testing markdowns on local only
-- *(lib)* Remove markdown lexer
-- *(lexer)* Add simple lexer to parse markdown
-- *(cargo)* Update the structure of cargo
-- *(docs)* Add README.md
+
+- _(docs)_ Update readme
+- _(docs)_ Add contributing document
+- _(base)_ Use genpdfi instead of genpdf
+- _(cargo)_ Add version to genpdf package
+- _(base)_ Rename project to markdown2pdf
+- _(bin)_ Set lto to 'thin' and enable strip
+- _(bin)_ Handle the response result of parse
+- _(pdf)_ Improve error returning from Pdf
+- _(pdf)_ Handle code blocks in pdf converter
+- _(markdown)_ Parse multiline code blocks and code snippet language
+- _(lib)_ Improve documentation comments
+- _(docs)_ Add configuration header to readme
+- _(config)_ Read mdprc from the root directory
+- _(lib)_ Implement config parsing into library
+- _(config)_ Add module for parsing toml into StyleMatch
+- _(config)_ Add configuration toml example
+- _(lib)_ Add documentation comments & improve lib public methods
+- _(pdf)_ Call add_link for Link elements
+- _(cargo)_ Use fork of genpdf-rs-improved
+- _(styling)_ Add new roboto font & change the fonts structure
+- _(styling)_ Implement styling on pdf, to create pdfs based on style match
+- _(styling)_ Improve styling & add new paramethers and styles
+- _(bin)_ Add makefile for easy build
+- _(styling)_ Add basic styling structure
+- _(bin)_ Remove help.txt & add to main.rs
+- _(bin)_ Update both package names to mdp
+- _(bin)_ Update binary name to mpd
+- _(bin)_ Improve cli & add docummentation
+- _(pdf)_ Improve transforming lexer output to pdf
+- _(markdown)_ Make Token cloneable
+- _(pdf)_ Add basic logic for token to PDF element conversion
+- _(pdf)_ Add pdf class to convert markdown to pdf
+- _(markdown)_ Refactor text parsing to correctly handle special characters
+- _(markdown)_ Update emphasis structure to level based
+- _(markdown)_ Parse emphasis level correctly
+- _(markdown)_ Implement parsing nested tokens functionality
+- _(markdown)_ Bring back markdown lexer
+- _(assets)_ Remove test_data and move testing markdowns on local only
+- _(lib)_ Remove markdown lexer
+- _(lexer)_ Add simple lexer to parse markdown
+- _(cargo)_ Update the structure of cargo
+- _(docs)_ Add README.md
 - Init cargo project
 
 ### Bug Fixes
-- *(config)* Remove config path printing
-- *(markdown)* Single line code block handling
-- *(bin)* Update the mdp caller in main
-- *(styling)* Add cross platform font path generation
-- *(pdf)* Missing space after hyper links
-- *(markdown)* Link item parsing
+
+- _(config)_ Remove config path printing
+- _(markdown)_ Single line code block handling
+- _(bin)_ Update the mdp caller in main
+- _(styling)_ Add cross platform font path generation
+- _(pdf)_ Missing space after hyper links
+- _(markdown)_ Link item parsing
 
 ### Documentation
-- *(changelog)* Add changelog generator
+
+- _(changelog)_ Add changelog generator
 
 ### Miscellaneous Tasks
-- *(base)* Rename project to mdp
+
+- _(base)_ Rename project to mdp
