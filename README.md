@@ -75,7 +75,7 @@ The library provides optional feature flags to control dependencies:
 
 ```toml
 # Minimal installation (no network dependencies)
-markdown2pdf = { version = "0.1.9", default-features = false }
+markdown2pdf = "0.1.9"
 
 # With URL fetching support (native TLS)
 markdown2pdf = { version = "0.1.9", features = ["native-tls"] }
