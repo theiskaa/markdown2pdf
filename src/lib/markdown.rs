@@ -41,6 +41,16 @@
 //!         ├── text: String
 //!         └── url: String
 
+/// Parsing context — determines which tokens are valid in the current location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseContext {
+    Root,       // top-level document
+    ListItem,   // inside a list item (block context)
+    TableCell,  // inside a table cell (restrict block-level tokens)
+    BlockQuote, // inside a blockquote (we'll treat as block-level but still disallow headings inside cells)
+    Inline,     // inline parsing context (e.g., inside emphasis / link)
+}
+
 /// Represents the different types of tokens that can be parsed from Markdown text.
 /// Each variant captures both the semantic meaning and associated content/metadata
 /// needed to properly render the element.
@@ -173,10 +183,17 @@ impl Lexer {
     /// Parses the entire input string into a sequence of tokens.
     /// Returns a Result containing either a Vec of parsed tokens or a LexerError.
     pub fn parse(&mut self) -> Result<Vec<Token>, LexerError> {
+        self.parse_with_context(ParseContext::Root)
+    }
+
+    /// Parses the entire input string into a sequence of tokens for a given context.
+    /// Returns a Result containing either a Vec of parsed tokens or a LexerError.
+    /// Takes in a `ParseContext` that determines which tokens are valid in the current location.
+    pub fn parse_with_context(&mut self, ctx: ParseContext) -> Result<Vec<Token>, LexerError> {
         let mut tokens = Vec::new();
 
         while self.position < self.input.len() {
-            if let Some(token) = self.next_token()? {
+            if let Some(token) = self.next_token(ctx)? {
                 tokens.push(token);
             }
         }
@@ -186,7 +203,11 @@ impl Lexer {
 
     /// Helper function to parse nested content until a delimiter is encountered.
     /// Used for parsing content within emphasis, headings, and list items.
-    fn parse_nested_content<F>(&mut self, is_delimiter: F) -> Result<Vec<Token>, LexerError>
+    fn parse_nested_content<F>(
+        &mut self,
+        is_delimiter: F,
+        ctx: ParseContext,
+    ) -> Result<Vec<Token>, LexerError>
     where
         F: Fn(char) -> bool,
     {
@@ -205,25 +226,27 @@ impl Lexer {
                 let current_indent = self.get_current_indent();
 
                 // If more indented than parent, treat as nested content
-                if current_indent > initial_indent {
+                if current_indent > initial_indent
+                    && !matches!(ctx, ParseContext::Inline | ParseContext::TableCell)
+                {
                     self.position += current_indent;
 
                     match self.current_char() {
                         '-' | '+' => {
                             if !self.check_horizontal_rule()? {
-                                content.push(self.parse_list_item(false, current_indent)?);
+                                content.push(self.parse_list_item(false, current_indent, ctx)?);
                                 continue;
                             }
                         }
                         '*' => {
                             if self.is_list_marker('*') {
-                                content.push(self.parse_list_item(false, current_indent)?);
+                                content.push(self.parse_list_item(false, current_indent, ctx)?);
                                 continue;
                             }
                         }
                         '0'..='9' => {
                             if self.check_ordered_list_marker().is_some() {
-                                content.push(self.parse_list_item(true, current_indent)?);
+                                content.push(self.parse_list_item(true, current_indent, ctx)?);
                                 continue;
                             }
                         }
@@ -233,7 +256,7 @@ impl Lexer {
             }
 
             // Parse regular content
-            if let Some(token) = self.next_token()? {
+            if let Some(token) = self.next_token(ctx)? {
                 content.push(token);
             }
         }
@@ -243,7 +266,7 @@ impl Lexer {
 
     /// Determines the next token in the input stream based on the current character
     /// and context. Handles special cases like line starts differently.
-    fn next_token(&mut self) -> Result<Option<Token>, LexerError> {
+    fn next_token(&mut self, ctx: ParseContext) -> Result<Option<Token>, LexerError> {
         // Only skip whitespace if we're not immediately after a special token
         if !self.is_after_special_token() {
             self.skip_whitespace();
@@ -256,24 +279,35 @@ impl Lexer {
         let current_char = self.current_char();
         let is_line_start = self.is_at_line_start();
 
+        // Helper closures to check whether a certain token is allowed in this context.
+        let allow_block_tokens = |context: ParseContext| -> bool {
+            // Block tokens are allowed in Root, ListItem, BlockQuote.
+            matches!(
+                context,
+                ParseContext::Root | ParseContext::ListItem | ParseContext::BlockQuote
+            )
+        };
+
         let token = match current_char {
-            '#' if is_line_start => self.parse_heading()?,
-            '*' if is_line_start && self.is_list_marker('*') => self.parse_list_item(false, 0)?,
+            '#' if is_line_start && allow_block_tokens(ctx) => self.parse_heading()?,
+            '*' if is_line_start && allow_block_tokens(ctx) && self.is_list_marker('*') => {
+                self.parse_list_item(false, 0, ctx)?
+            }
             '*' | '_' => self.parse_emphasis()?,
             '`' => self.parse_code()?,
-            '>' if is_line_start => self.parse_blockquote()?,
-            '-' | '+' if is_line_start => {
+            '>' if is_line_start && allow_block_tokens(ctx) => self.parse_blockquote()?,
+            '-' | '+' if is_line_start && allow_block_tokens(ctx) => {
                 if self.check_horizontal_rule()? {
                     Token::HorizontalRule
                 } else {
-                    self.parse_list_item(false, 0)?
+                    self.parse_list_item(false, 0, ctx)?
                 }
             }
-            '0'..='9' if is_line_start => {
+            '0'..='9' if is_line_start && allow_block_tokens(ctx) => {
                 if let Some(_) = self.check_ordered_list_marker() {
-                    self.parse_list_item(true, 0)?
+                    self.parse_list_item(true, 0, ctx)?
                 } else {
-                    self.parse_text()?
+                    self.parse_text(ctx)?
                 }
             }
             '[' => self.parse_link()?,
@@ -282,12 +316,12 @@ impl Lexer {
                 if self.position + 1 < self.input.len() && self.input[self.position + 1] == '[' {
                     self.parse_image()?
                 } else {
-                    self.parse_text()?
+                    self.parse_text(ctx)?
                 }
             }
             '<' if self.is_html_comment_start() => self.parse_html_comment()?,
             '\n' => self.parse_newline()?,
-            _ => self.parse_text()?,
+            _ => self.parse_text(ctx)?,
         };
 
         Ok(Some(token))
@@ -301,7 +335,7 @@ impl Lexer {
             self.advance();
         }
         self.skip_whitespace();
-        let content = self.parse_nested_content(|c| c == '\n')?;
+        let content = self.parse_nested_content(|c| c == '\n', ParseContext::Inline)?;
         Ok(Token::Heading(content, level))
     }
 
@@ -318,7 +352,7 @@ impl Lexer {
             self.advance();
         }
 
-        let mut content = self.parse_nested_content(|c| c == delimiter)?;
+        let mut content = self.parse_nested_content(|c| c == delimiter, ParseContext::Inline)?;
         content.push(Token::Text(String::from(" ")));
 
         // Ensure proper closing
@@ -440,7 +474,7 @@ impl Lexer {
         } else {
             // If '!' is not followed by '[', treat it as regular text
             self.position = start_pos;
-            self.parse_text()
+            self.parse_text(ParseContext::Inline)
         }
     }
 
@@ -452,7 +486,7 @@ impl Lexer {
 
     /// Parses regular text until a special token start or newline is encountered.
     /// Returns an error if no text could be parsed.
-    fn parse_text(&mut self) -> Result<Token, LexerError> {
+    fn parse_text(&mut self, ctx: ParseContext) -> Result<Token, LexerError> {
         let mut content = String::new();
         let start_pos = self.position;
 
@@ -465,7 +499,7 @@ impl Lexer {
         while self.position < self.input.len() {
             let ch = self.current_char();
 
-            if ch == '\n' || self.is_start_of_special_token() {
+            if ch == '\n' || self.is_start_of_special_token(ctx) {
                 break;
             }
 
@@ -485,6 +519,7 @@ impl Lexer {
 
     /// Parses an HTML comment, extracting the comment content
     fn parse_html_comment(&mut self) -> Result<Token, LexerError> {
+        // Assumes current position at '<' and '!--' follows
         self.position += 4; // Skip past '<', '!', '-', '-'
         let start = self.position;
 
@@ -558,11 +593,15 @@ impl Lexer {
             .starts_with("<!--")
     }
 
-    /// Checks if current character could start a special token
-    fn is_start_of_special_token(&self) -> bool {
+    /// Checks if current position could start a special token given a context
+    fn is_start_of_special_token(&self, ctx: ParseContext) -> bool {
         let ch = self.current_char();
         match ch {
-            '#' | '*' | '_' | '`' | '[' => true,
+            '#' | '>' if matches!(ctx, ParseContext::Root) => true,
+
+            // inline-compatible tokens
+            '*' | '_' | '`' | '[' => true,
+
             '!' => {
                 if self.position + 1 < self.input.len() {
                     self.input[self.position + 1] == '['
@@ -570,7 +609,15 @@ impl Lexer {
                     false
                 }
             }
-            '<' => self.is_html_comment_start(),
+
+            '<' => {
+                if matches!(ctx, ParseContext::Root) {
+                    self.is_html_comment_start()
+                } else {
+                    false
+                }
+            }
+
             _ => false,
         }
     }
@@ -629,7 +676,12 @@ impl Lexer {
     }
 
     /// Parses a list item, handling both ordered and unordered types
-    fn parse_list_item(&mut self, ordered: bool, indent_level: usize) -> Result<Token, LexerError> {
+    fn parse_list_item(
+        &mut self,
+        ordered: bool,
+        indent_level: usize,
+        parent_ctx: ParseContext,
+    ) -> Result<Token, LexerError> {
         let mut number = None;
 
         if !ordered {
@@ -648,7 +700,7 @@ impl Lexer {
 
         let mut content = Vec::new();
         while self.position < self.input.len() && self.current_char() != '\n' {
-            if let Some(token) = self.next_token()? {
+            if let Some(token) = self.next_token(ParseContext::ListItem)? {
                 content.push(token);
             }
         }
@@ -669,19 +721,19 @@ impl Lexer {
             match self.current_char() {
                 '-' | '+' => {
                     if !self.check_horizontal_rule()? {
-                        content.push(self.parse_list_item(false, current_indent)?);
+                        content.push(self.parse_list_item(false, current_indent, parent_ctx)?);
                     }
                 }
                 '*' => {
                     if self.is_list_marker('*') {
-                        content.push(self.parse_list_item(false, current_indent)?);
+                        content.push(self.parse_list_item(false, current_indent, parent_ctx)?);
                     } else {
                         break;
                     }
                 }
                 '0'..='9' => {
                     if self.check_ordered_list_marker().is_some() {
-                        content.push(self.parse_list_item(true, current_indent)?);
+                        content.push(self.parse_list_item(true, current_indent, parent_ctx)?);
                     }
                 }
                 _ => break,
