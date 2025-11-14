@@ -650,8 +650,9 @@ dependencies = [
 
 [[package]]
 name = "genpdfi"
-version = "0.2.3"
-source = "git+https://github.com/theiskaa/genpdfi.git?branch=main#50a4a2346b03deb85ec4785ed375bc7010504a18"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81ea2e207b631ee7b40e63fc0fcea850fe2f572d0aec66a8d69bdd863ebd75bd"
 dependencies = [
  "derive_more",
  "hb-subset",
