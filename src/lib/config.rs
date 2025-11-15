@@ -220,6 +220,14 @@ pub fn parse_config_string(config_str: &str) -> StyleMatch {
         link: parse_style(config.get("link"), default_style.link),
         image: parse_style(config.get("image"), default_style.image),
         text: parse_style(config.get("text"), default_style.text),
+        table_header: parse_style(
+            config.get("table").and_then(|t| t.get("header")),
+            default_style.table_header,
+        ),
+        table_cell: parse_style(
+            config.get("table").and_then(|t| t.get("cell")),
+            default_style.table_cell,
+        ),
         horizontal_rule: parse_style(config.get("horizontal_rule"), default_style.horizontal_rule),
     }
 }
