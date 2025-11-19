@@ -97,7 +97,9 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             .get_one::<String>("default-font")
             .map(|s| s.to_string());
 
-        let code_font = matches.get_one::<String>("code-font").map(|s| s.to_string());
+        let code_font = matches
+            .get_one::<String>("code-font")
+            .map(|s| s.to_string());
 
         Some(markdown2pdf::fonts::FontConfig {
             custom_paths,
@@ -112,7 +114,8 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
 
     // Run validation checks
     if verbosity != Verbosity::Quiet {
-        let warnings = validation::validate_conversion(&markdown, font_config.as_ref(), Some(output_path_str));
+        let warnings =
+            validation::validate_conversion(&markdown, font_config.as_ref(), Some(output_path_str));
 
         if !warnings.is_empty() {
             if verbosity == Verbosity::Verbose {
@@ -137,11 +140,15 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             return Ok(());
         }
     } else if dry_run {
-        let warnings = validation::validate_conversion(&markdown, font_config.as_ref(), Some(output_path_str));
+        let warnings =
+            validation::validate_conversion(&markdown, font_config.as_ref(), Some(output_path_str));
         if warnings.is_empty() {
             return Ok(());
         } else {
-            return Err(AppError::ConversionError(format!("{} validation warnings", warnings.len())));
+            return Err(AppError::ConversionError(format!(
+                "{} validation warnings",
+                warnings.len()
+            )));
         }
     }
 
@@ -189,11 +196,13 @@ fn main() {
     let cmd = Command::new("markdown2pdf")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Convert Markdown files or strings to PDF")
-        .after_help("EXAMPLES:\n  \
+        .after_help(
+            "EXAMPLES:\n  \
             markdown2pdf -p document.md -o output.pdf\n  \
             markdown2pdf -s \"# Hello World\" --default-font \"Noto Sans\"\n  \
             markdown2pdf -p doc.md --verbose --dry-run\n  \
-            markdown2pdf -p unicode.md --default-font \"Arial\" --fallback-font \"Noto Sans\"\n")
+            markdown2pdf -p unicode.md --default-font \"Arial\" --fallback-font \"Noto Sans\"\n",
+        )
         .arg(
             Arg::new("path")
                 .short('p')

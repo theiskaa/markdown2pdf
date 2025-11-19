@@ -106,18 +106,11 @@ impl Pdf {
                     custom_paths,
                     all_text.as_deref(),
                 ) {
-                    let final_chain = if let Some(text) = all_text.as_deref() {
-                        let enable_subsetting =
-                            font_config.map(|c| c.enable_subsetting).unwrap_or(true);
-                        if enable_subsetting {
-                            crate::fonts::apply_subsetting_to_chain(chain_family, text)
-                                .expect("Font subsetting failed for fallback chain")
-                        } else {
-                            chain_family
-                        }
-                    } else {
-                        chain_family
-                    };
+                    // Note: Font subsetting for fallback chains is currently disabled because
+                    // the subsetter crate creates CID fonts optimized for PDF rendering,
+                    // which cannot be re-parsed by rusttype for metrics. The primary font
+                    // still gets subset when loaded initially.
+                    let final_chain = chain_family;
 
                     let primary_fonts = crate::fonts::extract_primary_fonts(&final_chain);
                     (primary_fonts, Some(final_chain))
