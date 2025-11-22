@@ -597,7 +597,7 @@ impl Lexer {
     fn is_start_of_special_token(&self, ctx: ParseContext) -> bool {
         let ch = self.current_char();
         match ch {
-            '#' | '>' if matches!(ctx, ParseContext::Root) => true,
+            '#' if matches!(ctx, ParseContext::Root) => true,
 
             // inline-compatible tokens
             '*' | '_' | '`' | '[' => true,
