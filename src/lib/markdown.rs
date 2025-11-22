@@ -42,6 +42,15 @@
 //!         └── url: String
 
 use genpdfi::Alignment;
+/// Parsing context — determines which tokens are valid in the current location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseContext {
+    Root,       // top-level document
+    ListItem,   // inside a list item (block context)
+    TableCell,  // inside a table cell (restrict block-level tokens)
+    BlockQuote, // inside a blockquote (we'll treat as block-level but still disallow headings inside cells)
+    Inline,     // inline parsing context (e.g., inside emphasis / link)
+}
 
 /// Represents the different types of tokens that can be parsed from Markdown text.
 /// Each variant captures both the semantic meaning and associated content/metadata
@@ -88,6 +97,91 @@ pub enum Token {
     Unknown(String),
 }
 
+impl Token {
+    /// Recursively extracts all text content from a token and its nested tokens.
+    /// This is useful for collecting all characters used in a document for font subsetting.
+    ///
+    /// # Returns
+    /// A string containing all text content from this token and any nested tokens.
+    ///
+    /// # Example
+    /// ```
+    /// use markdown2pdf::markdown::Token;
+    ///
+    /// let tokens = vec![
+    ///     Token::Heading(vec![Token::Text("Title".to_string())], 1),
+    ///     Token::Text("Body text with ăâîșț".to_string()),
+    /// ];
+    ///
+    /// let all_text = Token::collect_all_text(&tokens);
+    /// assert!(all_text.contains("Title"));
+    /// assert!(all_text.contains("ăâîșț"));
+    /// ```
+    pub fn collect_all_text(tokens: &[Token]) -> String {
+        let mut result = String::new();
+        for token in tokens {
+            token.collect_text_recursive(&mut result);
+        }
+        result
+    }
+
+    fn collect_text_recursive(&self, result: &mut String) {
+        match self {
+            Token::Text(s) => result.push_str(s),
+            Token::Heading(nested, _) => {
+                for token in nested {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::Emphasis { content, .. } => {
+                for token in content {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::StrongEmphasis(nested) => {
+                for token in nested {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::Code(_, code) => result.push_str(code),
+            Token::BlockQuote(text) => result.push_str(text),
+            Token::ListItem { content, .. } => {
+                for token in content {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::Link(text, _) => result.push_str(text),
+            Token::Image(alt, _) => result.push_str(alt),
+            Token::HtmlComment(comment) => result.push_str(comment),
+            Token::Unknown(text) => result.push_str(text),
+            Token::Newline | Token::HorizontalRule => {
+                // These don't contain text
+            }
+            Token::Table {
+                headers,
+                aligns: _,
+                rows,
+            } => {
+                for header in headers {
+                    for token in header {
+                        token.collect_text_recursive(result);
+                    }
+                }
+                for row in rows {
+                    for cell in row {
+                        for token in cell {
+                            token.collect_text_recursive(result);
+                        }
+                    }
+                }
+            }
+            Token::TableAlignment(_) => {
+                // These don't contain text
+            }
+        }
+    }
+}
+
 /// Error types that can occur during lexical analysis
 #[derive(Debug)]
 pub enum LexerError {
@@ -119,10 +213,17 @@ impl Lexer {
     /// Parses the entire input string into a sequence of tokens.
     /// Returns a Result containing either a Vec of parsed tokens or a LexerError.
     pub fn parse(&mut self) -> Result<Vec<Token>, LexerError> {
+        self.parse_with_context(ParseContext::Root)
+    }
+
+    /// Parses the entire input string into a sequence of tokens for a given context.
+    /// Returns a Result containing either a Vec of parsed tokens or a LexerError.
+    /// Takes in a `ParseContext` that determines which tokens are valid in the current location.
+    pub fn parse_with_context(&mut self, ctx: ParseContext) -> Result<Vec<Token>, LexerError> {
         let mut tokens = Vec::new();
 
         while self.position < self.input.len() {
-            if let Some(token) = self.next_token()? {
+            if let Some(token) = self.next_token(ctx)? {
                 tokens.push(token);
             }
         }
@@ -132,7 +233,11 @@ impl Lexer {
 
     /// Helper function to parse nested content until a delimiter is encountered.
     /// Used for parsing content within emphasis, headings, and list items.
-    fn parse_nested_content<F>(&mut self, is_delimiter: F) -> Result<Vec<Token>, LexerError>
+    fn parse_nested_content<F>(
+        &mut self,
+        is_delimiter: F,
+        ctx: ParseContext,
+    ) -> Result<Vec<Token>, LexerError>
     where
         F: Fn(char) -> bool,
     {
@@ -151,25 +256,27 @@ impl Lexer {
                 let current_indent = self.get_current_indent();
 
                 // If more indented than parent, treat as nested content
-                if current_indent > initial_indent {
+                if current_indent > initial_indent
+                    && !matches!(ctx, ParseContext::Inline | ParseContext::TableCell)
+                {
                     self.position += current_indent;
 
                     match self.current_char() {
                         '-' | '+' => {
                             if !self.check_horizontal_rule()? {
-                                content.push(self.parse_list_item(false, current_indent)?);
+                                content.push(self.parse_list_item(false, current_indent, ctx)?);
                                 continue;
                             }
                         }
                         '*' => {
                             if self.is_list_marker('*') {
-                                content.push(self.parse_list_item(false, current_indent)?);
+                                content.push(self.parse_list_item(false, current_indent, ctx)?);
                                 continue;
                             }
                         }
                         '0'..='9' => {
                             if self.check_ordered_list_marker().is_some() {
-                                content.push(self.parse_list_item(true, current_indent)?);
+                                content.push(self.parse_list_item(true, current_indent, ctx)?);
                                 continue;
                             }
                         }
@@ -179,7 +286,7 @@ impl Lexer {
             }
 
             // Parse regular content
-            if let Some(token) = self.next_token()? {
+            if let Some(token) = self.next_token(ctx)? {
                 content.push(token);
             }
         }
@@ -189,7 +296,7 @@ impl Lexer {
 
     /// Determines the next token in the input stream based on the current character
     /// and context. Handles special cases like line starts differently.
-    fn next_token(&mut self) -> Result<Option<Token>, LexerError> {
+    fn next_token(&mut self, ctx: ParseContext) -> Result<Option<Token>, LexerError> {
         // Only skip whitespace if we're not immediately after a special token
         if !self.is_after_special_token() {
             self.skip_whitespace();
@@ -202,24 +309,35 @@ impl Lexer {
         let current_char = self.current_char();
         let is_line_start = self.is_at_line_start();
 
+        // Helper closures to check whether a certain token is allowed in this context.
+        let allow_block_tokens = |context: ParseContext| -> bool {
+            // Block tokens are allowed in Root, ListItem, BlockQuote.
+            matches!(
+                context,
+                ParseContext::Root | ParseContext::ListItem | ParseContext::BlockQuote
+            )
+        };
+
         let token = match current_char {
-            '#' if is_line_start => self.parse_heading()?,
-            '*' if is_line_start && self.is_list_marker('*') => self.parse_list_item(false, 0)?,
+            '#' if is_line_start && allow_block_tokens(ctx) => self.parse_heading()?,
+            '*' if is_line_start && allow_block_tokens(ctx) && self.is_list_marker('*') => {
+                self.parse_list_item(false, 0, ctx)?
+            }
             '*' | '_' => self.parse_emphasis()?,
             '`' => self.parse_code()?,
-            '>' if is_line_start => self.parse_blockquote()?,
-            '-' | '+' if is_line_start => {
+            '>' if is_line_start && allow_block_tokens(ctx) => self.parse_blockquote()?,
+            '-' | '+' if is_line_start && allow_block_tokens(ctx) => {
                 if self.check_horizontal_rule()? {
                     Token::HorizontalRule
                 } else {
-                    self.parse_list_item(false, 0)?
+                    self.parse_list_item(false, 0, ctx)?
                 }
             }
-            '0'..='9' if is_line_start => {
+            '0'..='9' if is_line_start && allow_block_tokens(ctx) => {
                 if let Some(_) = self.check_ordered_list_marker() {
-                    self.parse_list_item(true, 0)?
+                    self.parse_list_item(true, 0, ctx)?
                 } else {
-                    self.parse_text()?
+                    self.parse_text(ctx)?
                 }
             }
             '[' => self.parse_link()?,
@@ -228,7 +346,7 @@ impl Lexer {
                 if self.position + 1 < self.input.len() && self.input[self.position + 1] == '[' {
                     self.parse_image()?
                 } else {
-                    self.parse_text()?
+                    self.parse_text(ctx)?
                 }
             }
             '<' if self.is_html_comment_start() => self.parse_html_comment()?,
@@ -237,10 +355,10 @@ impl Lexer {
                 if self.is_table_start() {
                     self.parse_table()?
                 } else {
-                    self.parse_text()?
+                    self.parse_text(ctx)?
                 }
             }
-            _ => self.parse_text()?,
+            _ => self.parse_text(ctx)?,
         };
 
         Ok(Some(token))
@@ -254,7 +372,7 @@ impl Lexer {
             self.advance();
         }
         self.skip_whitespace();
-        let content = self.parse_nested_content(|c| c == '\n')?;
+        let content = self.parse_nested_content(|c| c == '\n', ParseContext::Inline)?;
         Ok(Token::Heading(content, level))
     }
 
@@ -271,7 +389,7 @@ impl Lexer {
             self.advance();
         }
 
-        let mut content = self.parse_nested_content(|c| c == delimiter)?;
+        let mut content = self.parse_nested_content(|c| c == delimiter, ParseContext::Inline)?;
         content.push(Token::Text(String::from(" ")));
 
         // Ensure proper closing
@@ -393,7 +511,7 @@ impl Lexer {
         } else {
             // If '!' is not followed by '[', treat it as regular text
             self.position = start_pos;
-            self.parse_text()
+            self.parse_text(ParseContext::Inline)
         }
     }
 
@@ -405,7 +523,7 @@ impl Lexer {
 
     /// Parses regular text until a special token start or newline is encountered.
     /// Returns an error if no text could be parsed.
-    fn parse_text(&mut self) -> Result<Token, LexerError> {
+    fn parse_text(&mut self, ctx: ParseContext) -> Result<Token, LexerError> {
         let mut content = String::new();
         let start_pos = self.position;
 
@@ -418,7 +536,7 @@ impl Lexer {
         while self.position < self.input.len() {
             let ch = self.current_char();
 
-            if ch == '\n' || self.is_start_of_special_token() {
+            if ch == '\n' || self.is_start_of_special_token(ctx) {
                 break;
             }
 
@@ -438,6 +556,7 @@ impl Lexer {
 
     /// Parses an HTML comment, extracting the comment content
     fn parse_html_comment(&mut self) -> Result<Token, LexerError> {
+        // Assumes current position at '<' and '!--' follows
         self.position += 4; // Skip past '<', '!', '-', '-'
         let start = self.position;
 
@@ -511,11 +630,15 @@ impl Lexer {
             .starts_with("<!--")
     }
 
-    /// Checks if current character could start a special token
-    fn is_start_of_special_token(&self) -> bool {
+    /// Checks if current position could start a special token given a context
+    fn is_start_of_special_token(&self, ctx: ParseContext) -> bool {
         let ch = self.current_char();
         match ch {
-            '#' | '*' | '_' | '`' | '[' => true,
+            '#' | '>' if matches!(ctx, ParseContext::Root) => true,
+
+            // inline-compatible tokens
+            '*' | '_' | '`' | '[' => true,
+
             '!' => {
                 if self.position + 1 < self.input.len() {
                     self.input[self.position + 1] == '['
@@ -523,7 +646,15 @@ impl Lexer {
                     false
                 }
             }
-            '<' => self.is_html_comment_start(),
+
+            '<' => {
+                if matches!(ctx, ParseContext::Root) {
+                    self.is_html_comment_start()
+                } else {
+                    false
+                }
+            }
+
             _ => false,
         }
     }
@@ -582,7 +713,12 @@ impl Lexer {
     }
 
     /// Parses a list item, handling both ordered and unordered types
-    fn parse_list_item(&mut self, ordered: bool, indent_level: usize) -> Result<Token, LexerError> {
+    fn parse_list_item(
+        &mut self,
+        ordered: bool,
+        indent_level: usize,
+        parent_ctx: ParseContext,
+    ) -> Result<Token, LexerError> {
         let mut number = None;
 
         if !ordered {
@@ -601,7 +737,7 @@ impl Lexer {
 
         let mut content = Vec::new();
         while self.position < self.input.len() && self.current_char() != '\n' {
-            if let Some(token) = self.next_token()? {
+            if let Some(token) = self.next_token(ParseContext::ListItem)? {
                 content.push(token);
             }
         }
@@ -622,19 +758,19 @@ impl Lexer {
             match self.current_char() {
                 '-' | '+' => {
                     if !self.check_horizontal_rule()? {
-                        content.push(self.parse_list_item(false, current_indent)?);
+                        content.push(self.parse_list_item(false, current_indent, parent_ctx)?);
                     }
                 }
                 '*' => {
                     if self.is_list_marker('*') {
-                        content.push(self.parse_list_item(false, current_indent)?);
+                        content.push(self.parse_list_item(false, current_indent, parent_ctx)?);
                     } else {
                         break;
                     }
                 }
                 '0'..='9' => {
                     if self.check_ordered_list_marker().is_some() {
-                        content.push(self.parse_list_item(true, current_indent)?);
+                        content.push(self.parse_list_item(true, current_indent, parent_ctx)?);
                     }
                 }
                 _ => break,
@@ -697,9 +833,9 @@ impl Lexer {
         // Convert header strings to token vectors
         let mut headers = Vec::new();
         for cell in header_cells {
-            // TODO: parse the inside of the cell, handling
-            // the exclusion of things like headings and block quotes
-            headers.push(vec![Token::Text(cell)]);
+            let mut cell_lexer = Lexer::new(cell);
+            let parsed = cell_lexer.parse_with_context(ParseContext::TableCell)?;
+            headers.push(parsed);
         }
 
         // Parse rows until blank or non-table start
@@ -718,10 +854,10 @@ impl Lexer {
 
             let mut row_tokens = Vec::new();
             for cell in cell_texts {
-                // TODO: parse the inside of the cell, handling
-                // the exclusion of things like headings and block quotes
                 // FIX: large unbreakable words don't fit in cells
-                row_tokens.push(vec![Token::Text(cell)]);
+                let mut cell_lexer = Lexer::new(cell);
+                let parsed = cell_lexer.parse_with_context(ParseContext::TableCell)?;
+                row_tokens.push(parsed);
             }
             rows.push(row_tokens);
 
