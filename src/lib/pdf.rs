@@ -19,7 +19,7 @@
 use crate::{fonts::load_unicode_system_font, styling::StyleMatch, Token};
 use genpdfi::{
     fonts::{FontData, FontFamily},
-    Document,
+    Alignment, Document,
 };
 
 /// The main PDF document generator that orchestrates the conversion process from markdown to PDF.
@@ -310,6 +310,15 @@ impl Pdf {
                     self.flush_paragraph(doc, &current_tokens);
                     current_tokens.clear();
                 }
+                Token::Table {
+                    headers,
+                    aligns,
+                    rows,
+                } => {
+                    self.flush_paragraph(doc, &current_tokens);
+                    current_tokens.clear();
+                    self.render_table(doc, headers, aligns, rows)
+                }
                 _ => {
                     current_tokens.push(token.clone());
                 }
@@ -520,6 +529,77 @@ impl Pdf {
                 );
             }
         }
+    }
+
+    /// Renders a table with headers, alignment information, and rows.
+    ///
+    /// Each row is a vector of cells.
+    ///
+    /// The table is rendered using genpdfi's TableLayout with proper column weights
+    /// and cell borders. Each cell content is processed as inline tokens to handle
+    /// formatting within table them.
+    fn render_table(
+        &self,
+        doc: &mut Document,
+        headers: &Vec<Vec<Token>>,
+        aligns: &Vec<Alignment>,
+        rows: &Vec<Vec<Vec<Token>>>,
+    ) {
+        doc.push(genpdfi::elements::Break::new(
+            self.style.text.before_spacing,
+        ));
+
+        let column_count = headers.len();
+        let column_weights = vec![1; column_count];
+
+        let mut table = genpdfi::elements::TableLayout::new(column_weights);
+        table.set_cell_decorator(genpdfi::elements::FrameCellDecorator::new(
+            true, true, false,
+        ));
+
+        // Render header row
+        let mut header_row = table.row();
+        for (i, header_cell) in headers.iter().enumerate() {
+            let mut para = genpdfi::elements::Paragraph::default();
+            let style = genpdfi::style::Style::new().with_font_size(self.style.table_header.size);
+
+            if let Some(align) = aligns.get(i) {
+                para.set_alignment(*align);
+            }
+
+            self.render_inline_content_with_style(&mut para, header_cell, style);
+            header_row.push_element(para);
+        }
+
+        if let Err(_) = header_row.push() {
+            eprintln!("Warning: Failed rendering a table");
+            return; // Skip the entire table if header fails
+        }
+
+        // Render data rows
+        for (row_idx, row) in rows.iter().enumerate() {
+            let mut table_row = table.row();
+
+            for (i, cell_tokens) in row.iter().enumerate() {
+                let mut para = genpdfi::elements::Paragraph::default();
+                let style = genpdfi::style::Style::new().with_font_size(self.style.table_cell.size);
+
+                if let Some(align) = aligns.get(i) {
+                    para.set_alignment(*align);
+                }
+
+                self.render_inline_content_with_style(&mut para, cell_tokens, style);
+                table_row.push_element(para);
+            }
+
+            if let Err(_) = table_row.push() {
+                eprintln!("Warning: Failed to push row {} in a table", row_idx);
+                continue; // Continue with next row
+            }
+        }
+
+        doc.push(table);
+        doc.push(genpdfi::elements::Break::new(self.style.text.after_spacing));
     }
 }
 

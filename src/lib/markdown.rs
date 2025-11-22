@@ -41,6 +41,7 @@
 //!         ├── text: String
 //!         └── url: String
 
+use genpdfi::Alignment;
 /// Parsing context — determines which tokens are valid in the current location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseContext {
@@ -78,6 +79,14 @@ pub enum Token {
     Image(String, String),
     /// Plain text content
     Text(String),
+    /// Table with header, alignment info, and rows
+    Table {
+        headers: Vec<Vec<Token>>,
+        aligns: Vec<Alignment>,
+        rows: Vec<Vec<Vec<Token>>>,
+    },
+    /// Text alignment for table columns
+    TableAlignment(Alignment),
     /// HTML comment content
     HtmlComment(String),
     /// Line break
@@ -146,6 +155,27 @@ impl Token {
             Token::HtmlComment(comment) => result.push_str(comment),
             Token::Unknown(text) => result.push_str(text),
             Token::Newline | Token::HorizontalRule => {
+                // These don't contain text
+            }
+            Token::Table {
+                headers,
+                aligns: _,
+                rows,
+            } => {
+                for header in headers {
+                    for token in header {
+                        token.collect_text_recursive(result);
+                    }
+                }
+                for row in rows {
+                    for cell in row {
+                        for token in cell {
+                            token.collect_text_recursive(result);
+                        }
+                    }
+                }
+            }
+            Token::TableAlignment(_) => {
                 // These don't contain text
             }
         }
@@ -321,6 +351,13 @@ impl Lexer {
             }
             '<' if self.is_html_comment_start() => self.parse_html_comment()?,
             '\n' => self.parse_newline()?,
+            '|' if is_line_start => {
+                if self.is_table_start() {
+                    self.parse_table()?
+                } else {
+                    self.parse_text(ctx)?
+                }
+            }
             _ => self.parse_text(ctx)?,
         };
 
@@ -744,6 +781,95 @@ impl Lexer {
             content,
             ordered,
             number,
+        })
+    }
+
+    /// Checks if the current posisiton is the start of a table
+    fn is_table_start(&self) -> bool {
+        let rest: String = self.input[self.position..].iter().collect();
+        // Next line with --- or :---
+        if let Some(pos) = rest.find('\n') {
+            let next_line = rest[pos + 1..].lines().next().unwrap_or("");
+            next_line.contains('-')
+        } else {
+            false
+        }
+    }
+
+    /// Parses a table, handling column alignment
+    fn parse_table(&mut self) -> Result<Token, LexerError> {
+        // Parse header row
+        let header_line = self.read_until_newline();
+        let header_cells: Vec<String> = header_line
+            .trim_matches('|')
+            .split('|')
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        if self.current_char() == '\n' {
+            self.advance();
+        }
+
+        // Parse alignment row
+        let align_line = self.read_until_newline();
+        let aligns: Vec<Alignment> = align_line
+            .trim_matches('|')
+            .split('|')
+            .map(|s| {
+                let s = s.trim();
+                match (s.starts_with(':'), s.ends_with(':')) {
+                    (true, true) => Alignment::Center,
+                    (true, false) => Alignment::Left,
+                    (false, true) => Alignment::Right,
+                    _ => Alignment::Left,
+                }
+            })
+            .collect();
+
+        if self.current_char() == '\n' {
+            self.advance();
+        }
+
+        // Convert header strings to token vectors
+        let mut headers = Vec::new();
+        for cell in header_cells {
+            let mut cell_lexer = Lexer::new(cell);
+            let parsed = cell_lexer.parse_with_context(ParseContext::TableCell)?;
+            headers.push(parsed);
+        }
+
+        // Parse rows until blank or non-table start
+        let mut rows = Vec::new();
+        while self.position < self.input.len() {
+            let line = self.read_until_newline();
+            if line.trim().is_empty() {
+                break;
+            }
+
+            let cell_texts: Vec<String> = line
+                .trim_matches('|')
+                .split('|')
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            let mut row_tokens = Vec::new();
+            for cell in cell_texts {
+                // FIX: large unbreakable words don't fit in cells
+                let mut cell_lexer = Lexer::new(cell);
+                let parsed = cell_lexer.parse_with_context(ParseContext::TableCell)?;
+                row_tokens.push(parsed);
+            }
+            rows.push(row_tokens);
+
+            if self.current_char() == '\n' {
+                self.advance();
+            }
+        }
+
+        Ok(Token::Table {
+            headers,
+            aligns,
+            rows,
         })
     }
 
@@ -1199,6 +1325,39 @@ A paragraph with `code` and [link](url).
                 "Alt text".to_string(),
                 "image.png".to_string()
             )]
+        );
+    }
+
+    #[test]
+    fn test_tables() {
+        let input = r#"| Name | Age | City |
+|:-----|:---:|----:|
+| Alice | 30 | Paris |
+| Bob | 25 | Lyon |"#;
+
+        let tokens = parse(input);
+        assert_eq!(
+            tokens,
+            vec![Token::Table {
+                headers: vec![
+                    vec![Token::Text("Name".to_string())],
+                    vec![Token::Text("Age".to_string())],
+                    vec![Token::Text("City".to_string())],
+                ],
+                aligns: vec![Alignment::Left, Alignment::Center, Alignment::Right],
+                rows: vec![
+                    vec![
+                        vec![Token::Text("Alice".to_string())],
+                        vec![Token::Text("30".to_string())],
+                        vec![Token::Text("Paris".to_string())],
+                    ],
+                    vec![
+                        vec![Token::Text("Bob".to_string())],
+                        vec![Token::Text("25".to_string())],
+                        vec![Token::Text("Lyon".to_string())],
+                    ],
+                ],
+            }]
         );
     }
 }
