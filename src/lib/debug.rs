@@ -167,6 +167,95 @@ impl Token {
                 )
             }
 
+            Token::Table {
+                headers,
+                aligns,
+                rows,
+            } => {
+                let mut result = format!("{}{{\n", indent);
+                result.push_str(&format!("{}\"type\": \"Table\",\n", inner_indent));
+
+                // Headers
+                result.push_str(&format!("{}\"headers\": [\n", inner_indent));
+                for (i, header_cell) in headers.iter().enumerate() {
+                    result.push_str(&format!("{}[\n", "  ".repeat(indent_level + 2)));
+                    for (j, token) in header_cell.iter().enumerate() {
+                        result.push_str(&token.to_readable_json(indent_level + 3));
+                        if j < header_cell.len() - 1 {
+                            result.push(',');
+                        }
+                        result.push('\n');
+                    }
+                    result.push_str(&format!("{}]", "  ".repeat(indent_level + 2)));
+                    if i < headers.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}],\n", inner_indent));
+
+                // Alignments
+                result.push_str(&format!("{}\"aligns\": [\n", inner_indent));
+                for (i, align) in aligns.iter().enumerate() {
+                    let align_str = match align {
+                        genpdfi::Alignment::Left => "Left",
+                        genpdfi::Alignment::Center => "Center",
+                        genpdfi::Alignment::Right => "Right",
+                    };
+                    result.push_str(&format!(
+                        "{}\"{}\"",
+                        "  ".repeat(indent_level + 2),
+                        align_str
+                    ));
+                    if i < aligns.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}],\n", inner_indent));
+
+                // Rows
+                result.push_str(&format!("{}\"rows\": [\n", inner_indent));
+                for (i, row) in rows.iter().enumerate() {
+                    result.push_str(&format!("{}[\n", "  ".repeat(indent_level + 2)));
+                    for (j, cell) in row.iter().enumerate() {
+                        result.push_str(&format!("{}[\n", "  ".repeat(indent_level + 3)));
+                        for (k, token) in cell.iter().enumerate() {
+                            result.push_str(&token.to_readable_json(indent_level + 4));
+                            if k < cell.len() - 1 {
+                                result.push(',');
+                            }
+                            result.push('\n');
+                        }
+                        result.push_str(&format!("{}]", "  ".repeat(indent_level + 3)));
+                        if j < row.len() - 1 {
+                            result.push(',');
+                        }
+                        result.push('\n');
+                    }
+                    result.push_str(&format!("{}]", "  ".repeat(indent_level + 2)));
+                    if i < rows.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}]\n", inner_indent));
+                result.push_str(&format!("{}}}", indent));
+                result
+            }
+
+            Token::TableAlignment(align) => {
+                let align_str = match align {
+                    genpdfi::Alignment::Left => "Left",
+                    genpdfi::Alignment::Center => "Center",
+                    genpdfi::Alignment::Right => "Right",
+                };
+                format!(
+                    "{}{{\n{}\"type\": \"TableAlignment\",\n{}\"alignment\": \"{}\"\n{}}}",
+                    indent, inner_indent, inner_indent, align_str, indent
+                )
+            }
+
             Token::HtmlComment(content) => {
                 format!(
                     "{}{{\n{}\"type\": \"HtmlComment\",\n{}\"content\": \"{}\"\n{}}}",
@@ -191,7 +280,6 @@ impl Token {
                     indent, inner_indent, indent
                 )
             }
-
             Token::Unknown(content) => {
                 format!(
                     "{}{{\n{}\"type\": \"Unknown\",\n{}\"content\": \"{}\"\n{}}}",
