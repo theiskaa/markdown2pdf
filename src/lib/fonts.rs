@@ -7,8 +7,17 @@ use fontdb::Database;
 use log::{debug, info, trace, warn};
 use genpdfi::error::{Error, ErrorKind};
 use genpdfi::fonts::{FontData, FontFamily};
+use once_cell::sync::Lazy;
 use printpdf::BuiltinFont;
 use rusttype::Font;
+
+/// Global cached font database to avoid expensive repeated system font scans.
+/// This is initialized once on first access and reused for all subsequent font lookups.
+static FONT_DATABASE: Lazy<Database> = Lazy::new(|| {
+    let mut db = Database::new();
+    db.load_system_fonts();
+    db
+});
 
 /// Returns common aliases for a font name.
 ///
@@ -212,8 +221,7 @@ impl BuiltinVariants {
 /// Attempts to find a suitable system font for built-in font metrics.
 /// Falls back to any available system font if specific candidates aren't found.
 fn load_system_font_bytes_fallback(candidates: &[&str]) -> Result<Vec<u8>, Error> {
-    let mut db = Database::new();
-    db.load_system_fonts();
+    let db = &*FONT_DATABASE;
 
     // First try to find matching candidates
     for face in db.faces() {
@@ -293,8 +301,7 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
     let aliases = get_font_aliases(name);
     candidates.extend(aliases);
 
-    let mut db = Database::new();
-    db.load_system_fonts();
+    let db = &*FONT_DATABASE;
 
     for candidate_name in candidates {
         let wanted = candidate_name.to_lowercase();
@@ -363,17 +370,7 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
                 debug!("Using '{}' as alias for '{}'", candidate_name, name);
             }
 
-            // Double-check the font is valid before creating FontData
-            // This prevents panics from invalid .ttc extractions
-            // Use catch_unwind because Font::from_bytes() can panic on invalid data
-            let is_valid =
-                panic::catch_unwind(|| Font::from_bytes(bytes.clone()).is_ok()).unwrap_or(false);
-
-            if !is_valid {
-                warn!("Font data invalid, skipping '{}'", candidate_name);
-                continue;
-            }
-
+            // Font was already validated above, no need to validate again
             let shared = Arc::new(bytes);
             let mk = || FontData::new_shared(shared.clone(), None);
             return Ok(FontFamily {
