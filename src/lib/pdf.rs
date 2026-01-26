@@ -21,6 +21,7 @@ use genpdfi::{
     fonts::{FontData, FontFamily},
     Alignment, Document,
 };
+use log::{info, warn};
 
 /// The main PDF document generator that orchestrates the conversion process from markdown to PDF.
 /// This struct serves as the central coordinator for document generation, managing the overall
@@ -90,7 +91,7 @@ impl Pdf {
             };
 
             if !fallback_fonts.is_empty() {
-                eprintln!(
+                info!(
                     "Loading font '{}' with {} automatic fallback(s)...",
                     family_name,
                     fallback_fonts.len()
@@ -115,7 +116,7 @@ impl Pdf {
                     let primary_fonts = crate::fonts::extract_primary_fonts(&final_chain);
                     (primary_fonts, Some(final_chain))
                 } else {
-                    eprintln!("Warning: fallback chain loading failed, using single best font...");
+                    warn!("Fallback chain loading failed, using single best font...");
                     let single_font = crate::fonts::load_font_with_fallbacks(
                         family_name,
                         &fallback_fonts,
@@ -153,7 +154,7 @@ impl Pdf {
                 (single_font, None)
             }
         } else {
-            eprintln!("No font specified, searching for Unicode-capable system font...");
+            info!("No font specified, searching for Unicode-capable system font...");
             let single_font = load_unicode_system_font(all_text.as_deref()).unwrap_or_else(|_| {
                 crate::fonts::load_builtin_font_family("helvetica")
                     .expect("Failed to load fallback font family")
@@ -169,8 +170,8 @@ impl Pdf {
         let code_font_family =
             crate::fonts::load_font_with_config(code_font_name, font_config, all_text.as_deref())
                 .unwrap_or_else(|_| {
-                    eprintln!(
-                        "Warning: could not load code font '{}', falling back to Courier",
+                    warn!(
+                        "Could not load code font '{}', falling back to Courier",
                         code_font_name
                     );
                     crate::fonts::load_builtin_font_family("courier")
@@ -572,7 +573,7 @@ impl Pdf {
         }
 
         if let Err(_) = header_row.push() {
-            eprintln!("Warning: Failed rendering a table");
+            warn!("Failed rendering a table");
             return; // Skip the entire table if header fails
         }
 
@@ -593,7 +594,7 @@ impl Pdf {
             }
 
             if let Err(_) = table_row.push() {
-                eprintln!("Warning: Failed to push row {} in a table", row_idx);
+                warn!("Failed to push row {} in a table", row_idx);
                 continue; // Continue with next row
             }
         }
