@@ -24,6 +24,7 @@ rustls-tls = ["fetch", "reqwest/rustls-tls"]
 native-tls = ["fetch", "reqwest/native-tls"]
 
 [dependencies]
+log = "0.4"
 genpdfi = "0.2.5"
 dirs = "4.0.0"
 toml = "0.8.19"
