@@ -1,12 +1,11 @@
 use std::fs;
-use std::panic;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use fontdb::Database;
-use log::{debug, info, trace, warn};
 use genpdfi::error::{Error, ErrorKind};
 use genpdfi::fonts::{FontData, FontFamily};
+use log::{debug, info, trace, warn};
 use once_cell::sync::Lazy;
 use printpdf::BuiltinFont;
 use rusttype::Font;
@@ -219,8 +218,52 @@ impl BuiltinVariants {
 }
 
 /// Attempts to find a suitable system font for built-in font metrics.
-/// Falls back to any available system font if specific candidates aren't found.
+/// Uses direct file paths first to avoid expensive database initialization.
 fn load_system_font_bytes_fallback(candidates: &[&str]) -> Result<Vec<u8>, Error> {
+    // FAST PATH: Try direct file paths first (avoids FONT_DATABASE initialization)
+    let common_font_dirs = if cfg!(target_os = "macos") {
+        vec!["/System/Library/Fonts/Supplemental", "/Library/Fonts"]
+    } else if cfg!(target_os = "linux") {
+        vec![
+            "/usr/share/fonts/truetype",
+            "/usr/share/fonts/TTF",
+            "/usr/local/share/fonts",
+        ]
+    } else if cfg!(target_os = "windows") {
+        vec!["C:\\Windows\\Fonts"]
+    } else {
+        vec![]
+    };
+
+    // Try direct file access for each candidate in common directories
+    for dir in &common_font_dirs {
+        let dir_path = std::path::Path::new(dir);
+        if !dir_path.exists() {
+            continue;
+        }
+
+        for candidate in candidates {
+            let patterns = [
+                format!("{}.ttf", candidate),
+                format!("{}.otf", candidate),
+                format!("{} Regular.ttf", candidate),
+                format!("{}-Regular.ttf", candidate),
+            ];
+
+            for pattern in &patterns {
+                let font_path = dir_path.join(pattern);
+                if font_path.exists() {
+                    if let Ok(bytes) = fs::read(&font_path) {
+                        if Font::from_bytes(bytes.clone()).is_ok() {
+                            return Ok(bytes);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // SLOW PATH: Fall back to FONT_DATABASE if direct access fails
     let db = &*FONT_DATABASE;
 
     // First try to find matching candidates
@@ -301,11 +344,77 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
     let aliases = get_font_aliases(name);
     candidates.extend(aliases);
 
+    // FAST PATH: Try direct file paths first (avoids expensive FONT_DATABASE initialization)
+    let common_font_dirs: Vec<&str> = if cfg!(target_os = "macos") {
+        vec!["/System/Library/Fonts/Supplemental", "/Library/Fonts"]
+    } else if cfg!(target_os = "linux") {
+        vec![
+            "/usr/share/fonts/truetype",
+            "/usr/share/fonts/TTF",
+            "/usr/local/share/fonts",
+        ]
+    } else if cfg!(target_os = "windows") {
+        vec!["C:\\Windows\\Fonts"]
+    } else {
+        vec![]
+    };
+
+    for dir in &common_font_dirs {
+        let dir_path = std::path::Path::new(dir);
+        if !dir_path.exists() {
+            continue;
+        }
+
+        for candidate in &candidates {
+            let wanted = candidate.to_lowercase().replace(" ms", ""); // "Arial Unicode MS" -> "arial unicode"
+                                                                      // Try common naming patterns
+            let patterns = [
+                format!("{}.ttf", candidate),
+                format!("{}.otf", candidate),
+                format!("{} Regular.ttf", candidate),
+                format!("{}-Regular.ttf", candidate),
+                // Handle "Arial Unicode MS" -> "Arial Unicode.ttf"
+                // FIXME: we gonna need better conditions here.
+                format!("{}.ttf", candidate.replace(" MS", "").replace(" ms", "")),
+            ];
+
+            for pattern in &patterns {
+                let font_path = dir_path.join(pattern);
+                if font_path.exists() {
+                    if let Ok(bytes) = fs::read(&font_path) {
+                        let file_stem = font_path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if !file_stem.starts_with(&wanted) && !wanted.starts_with(&file_stem) {
+                            continue;
+                        }
+
+                        if let Ok(regular) = FontData::new_shared(Arc::new(bytes), None) {
+                            return Ok(FontFamily {
+                                regular: regular.clone(),
+                                bold: regular.clone(),
+                                italic: regular.clone(),
+                                bold_italic: regular,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // SLOW PATH: Fall back to FONT_DATABASE if direct access fails
     let db = &*FONT_DATABASE;
 
     for candidate_name in candidates {
         let wanted = candidate_name.to_lowercase();
-        let mut selected_bytes: Option<Vec<u8>> = None;
+
+        // Use scoring to prefer exact matches over partial matches
+        // Score: 3 = exact family name, 2 = exact filename, 1 = partial match
+        let mut best_score = 0u8;
+        let mut best_path: Option<std::path::PathBuf> = None;
 
         for face in db.faces() {
             let path = match &face.source {
@@ -313,49 +422,75 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
                 _ => continue,
             };
 
-            let face_family = face.families.first().map(|(name, _)| name.to_lowercase());
-            let matches_family = face_family.as_ref().map_or(false, |f| f.contains(&wanted));
-
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            let matches_filename = file_name.contains(&wanted);
-
-            if !matches_family && !matches_filename {
+            // Skip .ttc files early
+            let is_ttc = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map_or(false, |ext| ext.eq_ignore_ascii_case("ttc"));
+            if is_ttc {
                 continue;
             }
 
-            // Try to load the font (works for both .ttf and .ttc)
-            match fs::read(path) {
+            let face_family = face.families.first().map(|(name, _)| name.to_lowercase());
+
+            // Calculate match score
+            let mut score = 0u8;
+
+            // Exact family name match (highest priority)
+            if face_family.as_ref().map_or(false, |f| f == &wanted) {
+                score = 3;
+            }
+            // Exact filename match (e.g., "Georgia.ttf" for "georgia")
+            else {
+                let file_stem = path
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if file_stem == wanted {
+                    score = 2;
+                }
+                // Partial family name match (lower priority)
+                else if face_family.as_ref().map_or(false, |f| f.contains(&wanted)) {
+                    score = 1;
+                }
+                // Partial filename match (lowest priority, skip for now to avoid SFGeorgian issue)
+            }
+
+            if score > best_score {
+                best_score = score;
+                best_path = Some(path.clone());
+
+                // If we have an exact family match, stop searching
+                if score == 3 {
+                    break;
+                }
+            }
+        }
+
+        if let Some(path) = best_path {
+            match fs::read(&path) {
                 Ok(b) => {
-                    let is_ttc = path
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map_or(false, |ext| ext.eq_ignore_ascii_case("ttc"));
+                    if candidate_name != name {
+                        debug!("Using '{}' as alias for '{}'", candidate_name, name);
+                    }
+                    debug!("Loaded font from {:?} (match score: {})", path, best_score);
 
-                    if is_ttc {
-                        // .ttc (TrueType Collection) files are currently not supported
-                        // because fonts in collections often share tables, making extraction complex.
-                        // Users should install individual .ttf/.otf versions of fonts instead.
-                        debug!(
-                            "Skipping '{}' (.ttc collections not yet fully supported)",
-                            file_name
-                        );
-                        debug!(
-                            "Install individual .ttf/.otf version for best compatibility"
-                        );
-                        continue;
-                    } else {
-                        // Regular .ttf/.otf file
-                        // Use catch_unwind because Font::from_bytes() can panic on invalid data
-                        let is_valid = panic::catch_unwind(|| Font::from_bytes(b.clone()).is_ok())
-                            .unwrap_or(false);
-
-                        if is_valid {
-                            selected_bytes = Some(b);
-                            break;
+                    let shared = Arc::new(b);
+                    // Parse font ONCE, then clone for variants (avoids 4x parsing overhead)
+                    // Skip separate validation - FontData::new_shared will fail if font is invalid
+                    match FontData::new_shared(shared.clone(), None) {
+                        Ok(regular) => {
+                            return Ok(FontFamily {
+                                regular: regular.clone(),
+                                bold: regular.clone(),
+                                italic: regular.clone(),
+                                bold_italic: regular,
+                            });
+                        }
+                        Err(e) => {
+                            debug!("Font {:?} invalid: {}, trying next", path, e);
+                            continue;
                         }
                     }
                 }
@@ -363,22 +498,6 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
                     warn!("Failed to read font file {:?}: {}", path, e);
                 }
             }
-        }
-
-        if let Some(bytes) = selected_bytes {
-            if candidate_name != name {
-                debug!("Using '{}' as alias for '{}'", candidate_name, name);
-            }
-
-            // Font was already validated above, no need to validate again
-            let shared = Arc::new(bytes);
-            let mk = || FontData::new_shared(shared.clone(), None);
-            return Ok(FontFamily {
-                regular: mk()?,
-                bold: mk()?,
-                italic: mk()?,
-                bold_italic: mk()?,
-            });
         }
     }
 
@@ -660,8 +779,8 @@ pub fn load_font_with_config(
     config: Option<&FontConfig>,
     text: Option<&str>,
 ) -> Result<FontFamily<FontData>, Error> {
-    // Check if subsetting is enabled
-    let enable_subsetting = config.map(|c| c.enable_subsetting).unwrap_or(false);
+    // Check if subsetting is enabled (defaults to true for smaller PDFs)
+    let enable_subsetting = config.map(|c| c.enable_subsetting).unwrap_or(true);
 
     // Check if fallback fonts are specified - if so, return a chain-based result
     // Note: We can't apply subsetting to fallback chains yet, so this path doesn't support it
@@ -705,6 +824,11 @@ pub fn load_font_with_config(
 }
 
 /// Applies font subsetting if enabled and text is provided.
+///
+/// This function uses a separation of concerns approach:
+/// - Full font data is kept for metrics (glyph widths, kerning) via rusttype
+/// - Subset font data is used for PDF embedding (smaller file size)
+/// - A glyph ID mapping ensures correct rendering in the PDF
 fn apply_subsetting_if_enabled(
     family: FontFamily<FontData>,
     enable_subsetting: bool,
@@ -719,24 +843,55 @@ fn apply_subsetting_if_enabled(
         return Ok(family);
     }
 
-    // Subset the font using genpdfi's subsetting module
-    // Get the raw font data from the first variant (regular)
-    let original_data = family.regular.get_data()?;
+    // Get the original (full) font data for metrics
+    let original_data = match family.regular.get_data() {
+        Ok(data) => data,
+        Err(e) => {
+            warn!(
+                "Could not get font data for subsetting: {}, using full font",
+                e
+            );
+            return Ok(family);
+        }
+    };
 
-    let subset_data = genpdfi::subsetting::subset_font(original_data, text).map_err(|e| {
-        warn!("Font subsetting failed: {}, using full font", e);
-        e
-    })?;
+    // Subset the font and get the glyph ID mapping
+    let subset_result = match genpdfi::subsetting::subset_font_with_mapping(original_data, text) {
+        Ok(result) => result,
+        Err(e) => {
+            warn!("Font subsetting failed: {}, using full font", e);
+            return Ok(family);
+        }
+    };
 
-    // Create new FontFamily with subset data
-    let shared = Arc::new(subset_data);
-    let mk = || FontData::new_shared(shared.clone(), None);
+    let subset_arc = Arc::new(subset_result.data);
 
+    // Log size reduction for debugging
+    let original_size = original_data.len();
+    let subset_size = subset_arc.len();
+    if original_size > 0 {
+        let reduction = ((original_size - subset_size) as f64 / original_size as f64) * 100.0;
+        info!(
+            "Font subset: {} -> {} ({:.1}% reduction)",
+            format_size(original_size),
+            format_size(subset_size),
+            reduction
+        );
+    }
+
+    // Clone with subset data (avoids re-parsing font)
+    let regular = FontData::clone_with_data(
+        &family.regular,
+        subset_arc.clone(),
+        Some(subset_result.glyph_id_map.clone()),
+    );
+
+    // Reuse the same subset for all variants (they share the same base font)
     Ok(FontFamily {
-        regular: mk()?,
-        bold: mk()?,
-        italic: mk()?,
-        bold_italic: mk()?,
+        regular: regular.clone(),
+        bold: regular.clone(),
+        italic: regular.clone(),
+        bold_italic: regular,
     })
 }
 
@@ -795,10 +950,7 @@ fn subset_chain(
         .unwrap_or("");
 
     let subset_primary = if !primary_text.is_empty() {
-        trace!(
-            "Subsetting primary font ({} chars)...",
-            primary_text.len()
-        );
+        trace!("Subsetting primary font ({} chars)...", primary_text.len());
         subset_single_font(chain.primary(), primary_text)?
     } else {
         chain.primary().clone()
@@ -948,9 +1100,7 @@ pub fn load_unicode_system_font(text: Option<&str>) -> Result<FontFamily<FontDat
         }
     }
 
-    warn!(
-        "No suitable Unicode font found, falling back to Helvetica (limited character support)"
-    );
+    warn!("No suitable Unicode font found, falling back to Helvetica (limited character support)");
     if !tried_fonts.is_empty() {
         debug!("Fonts tried:");
         for font in &tried_fonts {

@@ -636,9 +636,8 @@ dependencies = [
 
 [[package]]
 name = "genpdfi"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2e836a736cab076863aaf1731da1c7e92f9bb0322d13f168d61481a829d149e"
+version = "0.2.6"
+source = "git+https://github.com/theiskaa/genpdfi?branch=feat%2Fsubset-glyph-mapping#8cfcd8cd5d91c46ac36209fe0813319e882ddd6a"
 dependencies = [
  "derive_more",
  "lopdf 0.26.0",
