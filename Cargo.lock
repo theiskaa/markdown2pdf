@@ -636,7 +636,9 @@ dependencies = [
 
 [[package]]
 name = "genpdfi"
-version = "0.2.4"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2e836a736cab076863aaf1731da1c7e92f9bb0322d13f168d61481a829d149e"
 dependencies = [
  "derive_more",
  "lopdf 0.26.0",
@@ -1106,6 +1108,7 @@ dependencies = [
  "dirs",
  "fontdb",
  "genpdfi",
+ "log",
  "once_cell",
  "printpdf",
  "reqwest",

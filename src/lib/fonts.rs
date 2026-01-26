@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use fontdb::Database;
+use log::{debug, info, trace, warn};
 use genpdfi::error::{Error, ErrorKind};
 use genpdfi::fonts::{FontData, FontFamily};
 use printpdf::BuiltinFont;
@@ -331,12 +332,12 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
                         // .ttc (TrueType Collection) files are currently not supported
                         // because fonts in collections often share tables, making extraction complex.
                         // Users should install individual .ttf/.otf versions of fonts instead.
-                        eprintln!(
-                            "  ℹ Skipping '{}' (.ttc collections not yet fully supported)",
+                        debug!(
+                            "Skipping '{}' (.ttc collections not yet fully supported)",
                             file_name
                         );
-                        eprintln!(
-                            "     💡 Install individual .ttf/.otf version for best compatibility"
+                        debug!(
+                            "Install individual .ttf/.otf version for best compatibility"
                         );
                         continue;
                     } else {
@@ -352,14 +353,14 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to read font file {:?}: {}", path, e);
+                    warn!("Failed to read font file {:?}: {}", path, e);
                 }
             }
         }
 
         if let Some(bytes) = selected_bytes {
             if candidate_name != name {
-                eprintln!("  ℹ Using '{}' as alias for '{}'", candidate_name, name);
+                debug!("Using '{}' as alias for '{}'", candidate_name, name);
             }
 
             // Double-check the font is valid before creating FontData
@@ -369,7 +370,7 @@ pub fn load_system_font_family_simple(name: &str) -> Result<FontFamily<FontData>
                 panic::catch_unwind(|| Font::from_bytes(bytes.clone()).is_ok()).unwrap_or(false);
 
             if !is_valid {
-                eprintln!("  ⚠ Font data invalid, skipping '{}'", candidate_name);
+                warn!("Font data invalid, skipping '{}'", candidate_name);
                 continue;
             }
 
@@ -410,11 +411,11 @@ pub fn load_custom_font_family(
     custom_paths: &[PathBuf],
 ) -> Result<FontFamily<FontData>, Error> {
     if let Ok(family) = load_font_family_with_variants(name, custom_paths) {
-        eprintln!("✓ Loaded font '{}' with proper variants", name);
+        info!("Loaded font '{}' with proper variants", name);
         return Ok(family);
     }
 
-    eprintln!("  → Searching for single font file for '{}'", name);
+    debug!("Searching for single font file for '{}'", name);
     let wanted = name.to_lowercase();
 
     // First, try to load from custom paths
@@ -544,8 +545,8 @@ fn find_font_variant_in_paths(
                             if let Ok(bytes) = fs::read(&path) {
                                 if Font::from_bytes(bytes.clone()).is_ok() {
                                     if candidate != base_name {
-                                        eprintln!(
-                                            "  ℹ Found '{}' variant as alias for '{}'",
+                                        debug!(
+                                            "Found '{}' variant as alias for '{}'",
                                             candidate, base_name
                                         );
                                     }
@@ -594,12 +595,12 @@ pub fn load_font_family_with_variants(
 
     let bold = if let Some(bytes) = bold_bytes {
         FontData::new_shared(Arc::new(bytes), None).unwrap_or_else(|_| {
-            eprintln!("  ⚠ Bold variant invalid, using regular");
+            warn!("Bold variant invalid, using regular");
             regular.clone()
         })
     } else {
-        eprintln!(
-            "  → No Bold variant found for '{}', using regular (faux bold)",
+        debug!(
+            "No Bold variant found for '{}', using regular (faux bold)",
             name
         );
         regular.clone()
@@ -607,12 +608,12 @@ pub fn load_font_family_with_variants(
 
     let italic = if let Some(bytes) = italic_bytes {
         FontData::new_shared(Arc::new(bytes), None).unwrap_or_else(|_| {
-            eprintln!("  ⚠ Italic variant invalid, using regular");
+            warn!("Italic variant invalid, using regular");
             regular.clone()
         })
     } else {
-        eprintln!(
-            "  → No Italic variant found for '{}', using regular (faux italic)",
+        debug!(
+            "No Italic variant found for '{}', using regular (faux italic)",
             name
         );
         regular.clone()
@@ -620,12 +621,12 @@ pub fn load_font_family_with_variants(
 
     let bold_italic = if let Some(bytes) = bold_italic_bytes {
         FontData::new_shared(Arc::new(bytes), None).unwrap_or_else(|_| {
-            eprintln!("  ⚠ BoldItalic variant invalid, using bold");
+            warn!("BoldItalic variant invalid, using bold");
             bold.clone()
         })
     } else {
-        eprintln!(
-            "  → No BoldItalic variant found for '{}', using bold (faux italic)",
+        debug!(
+            "No BoldItalic variant found for '{}', using bold (faux italic)",
             name
         );
         bold.clone()
@@ -669,7 +670,7 @@ pub fn load_font_with_config(
     // Note: We can't apply subsetting to fallback chains yet, so this path doesn't support it
     if let Some(cfg) = config {
         if !cfg.fallback_fonts.is_empty() {
-            eprintln!(
+            info!(
                 "Loading font '{}' with {} fallback(s)...",
                 name,
                 cfg.fallback_fonts.len()
@@ -726,7 +727,7 @@ fn apply_subsetting_if_enabled(
     let original_data = family.regular.get_data()?;
 
     let subset_data = genpdfi::subsetting::subset_font(original_data, text).map_err(|e| {
-        eprintln!("Warning: Font subsetting failed: {}, using full font", e);
+        warn!("Font subsetting failed: {}, using full font", e);
         e
     })?;
 
@@ -797,8 +798,8 @@ fn subset_chain(
         .unwrap_or("");
 
     let subset_primary = if !primary_text.is_empty() {
-        eprintln!(
-            "  Subsetting primary font ({} chars)...",
+        trace!(
+            "Subsetting primary font ({} chars)...",
             primary_text.len()
         );
         subset_single_font(chain.primary(), primary_text)?
@@ -814,14 +815,14 @@ fn subset_chain(
             .unwrap_or("");
 
         let subset_fallback = if !fallback_text.is_empty() {
-            eprintln!(
-                "  Subsetting fallback {} ({} chars)...",
+            trace!(
+                "Subsetting fallback {} ({} chars)...",
                 idx + 1,
                 fallback_text.len()
             );
             subset_single_font(fallback, fallback_text)?
         } else {
-            eprintln!("  Fallback {} not used, skipping subsetting", idx + 1);
+            trace!("Fallback {} not used, skipping subsetting", idx + 1);
             fallback.clone()
         };
 
@@ -842,15 +843,15 @@ fn subset_single_font(font: &FontData, text: &str) -> Result<FontData, Error> {
     let original_size = original_data.len();
 
     let subset_data = genpdfi::subsetting::subset_font(original_data, text).map_err(|e| {
-        eprintln!("\t Warning: Font subsetting failed: {}, using full font", e);
+        warn!("Font subsetting failed: {}, using full font", e);
         e
     })?;
 
     let subset_size = subset_data.len();
     let reduction = ((original_size - subset_size) as f64 / original_size as f64) * 100.0;
 
-    eprintln!(
-        "\t ✓ {} → {} ({:.1}% reduction)",
+    trace!(
+        "{} -> {} ({:.1}% reduction)",
         format_size(original_size),
         format_size(subset_size),
         reduction
@@ -926,11 +927,11 @@ pub fn load_unicode_system_font(text: Option<&str>) -> Result<FontFamily<FontDat
             if let Some(text) = text {
                 let coverage = family.regular.check_coverage(text);
                 if coverage.is_complete() {
-                    eprintln!("✓ Using system font '{}' (100% coverage)", font_name);
+                    info!("Using system font '{}' (100% coverage)", font_name);
                     return Ok(family);
                 } else {
-                    eprintln!(
-                        "⚠ Font '{}' has only {:.1}% coverage, trying next...",
+                    debug!(
+                        "Font '{}' has only {:.1}% coverage, trying next...",
                         font_name,
                         coverage.coverage_percent()
                     );
@@ -942,7 +943,7 @@ pub fn load_unicode_system_font(text: Option<&str>) -> Result<FontFamily<FontDat
                 }
             } else {
                 // No text to check, font found is good enough
-                eprintln!("✓ Using system font '{}'", font_name);
+                info!("Using system font '{}'", font_name);
                 return Ok(family);
             }
         } else {
@@ -950,18 +951,18 @@ pub fn load_unicode_system_font(text: Option<&str>) -> Result<FontFamily<FontDat
         }
     }
 
-    eprintln!(
-        "⚠ No suitable Unicode font found, falling back to Helvetica (limited character support)"
+    warn!(
+        "No suitable Unicode font found, falling back to Helvetica (limited character support)"
     );
     if !tried_fonts.is_empty() {
-        eprintln!("  Fonts tried:");
+        debug!("Fonts tried:");
         for font in &tried_fonts {
-            eprintln!("    - {}", font);
+            debug!("  - {}", font);
         }
     }
-    eprintln!("  💡 To fix this, install a Unicode font:");
-    eprintln!("     • brew install font-noto-sans  (Homebrew)");
-    eprintln!("     • Or download from https://fonts.google.com/noto");
+    debug!("To fix this, install a Unicode font:");
+    debug!("  brew install font-noto-sans  (Homebrew)");
+    debug!("  Or download from https://fonts.google.com/noto");
     load_builtin_font_family("helvetica")
 }
 
@@ -1078,10 +1079,10 @@ pub fn load_font_with_fallback_chain(
         };
 
         if let Ok(family) = fallback_family {
-            eprintln!("  ✓ Loaded fallback font '{}'", fallback_name);
+            info!("Loaded fallback font '{}'", fallback_name);
             fallback_families.push(family);
         } else {
-            eprintln!("  ⚠ Fallback font '{}' not found, skipping", fallback_name);
+            warn!("Fallback font '{}' not found, skipping", fallback_name);
         }
     }
 
@@ -1118,8 +1119,8 @@ pub fn load_font_with_fallback_chain(
         chain
     };
 
-    eprintln!(
-        "✓ Created fallback chain: {} + {} fallback(s)",
+    info!(
+        "Created fallback chain: {} + {} fallback(s)",
         primary_name,
         fallback_families.len()
     );
@@ -1178,16 +1179,16 @@ pub fn load_font_with_fallbacks(
         // Try fallbacks
         for fallback_name in fallback_names {
             if let Ok(font) = load_system_font_family_simple(fallback_name) {
-                eprintln!("✓ Using fallback font '{}'", fallback_name);
+                info!("Using fallback font '{}'", fallback_name);
                 return Ok(font);
             }
             tried_fonts.push(format!("{} (not found)", fallback_name));
         }
 
-        eprintln!("❌ Could not load font '{}' or any fallbacks", primary_name);
-        eprintln!("  Fonts tried:");
+        warn!("Could not load font '{}' or any fallbacks", primary_name);
+        debug!("Fonts tried:");
         for font in &tried_fonts {
-            eprintln!("    - {}", font);
+            debug!("  - {}", font);
         }
         return Err(Error::new(
             format!("Could not load font '{}' or any fallbacks", primary_name),
@@ -1204,12 +1205,12 @@ pub fn load_font_with_fallbacks(
     if let Ok(font) = primary {
         let coverage = font.regular.check_coverage(text);
         if coverage.is_complete() {
-            eprintln!("✓ Primary font '{}' has 100% coverage", primary_name);
+            info!("Primary font '{}' has 100% coverage", primary_name);
             return Ok(font);
         }
 
-        eprintln!(
-            "  Primary font '{}' coverage: {:.1}%",
+        debug!(
+            "Primary font '{}' coverage: {:.1}%",
             primary_name,
             coverage.coverage_percent()
         );
@@ -1239,12 +1240,12 @@ pub fn load_font_with_fallbacks(
             let coverage = font.regular.check_coverage(text);
 
             if coverage.is_complete() {
-                eprintln!("✓ Fallback font '{}' has 100% coverage", fallback_name);
+                info!("Fallback font '{}' has 100% coverage", fallback_name);
                 return Ok(font);
             }
 
-            eprintln!(
-                "  Fallback font '{}' coverage: {:.1}%",
+            debug!(
+                "Fallback font '{}' coverage: {:.1}%",
                 fallback_name,
                 coverage.coverage_percent()
             );
@@ -1267,33 +1268,33 @@ pub fn load_font_with_fallbacks(
     // Return the font with best coverage
     if let Some(font) = best_font {
         if best_coverage < 100.0 {
-            eprintln!(
-                "⚠️  Selected font '{}' with {:.1}% coverage (some characters may not display)",
+            warn!(
+                "Selected font '{}' with {:.1}% coverage (some characters may not display)",
                 best_name, best_coverage
             );
-            eprintln!("  Fonts tried:");
+            debug!("Fonts tried:");
             for font in &tried_fonts {
-                eprintln!("    - {}", font);
+                debug!("  - {}", font);
             }
-            eprintln!("  💡 To fix this, install a Unicode font:");
-            eprintln!("     • brew install font-noto-sans  (Homebrew)");
-            eprintln!("     • Or download from https://fonts.google.com/noto");
+            debug!("To fix this, install a Unicode font:");
+            debug!("  brew install font-noto-sans  (Homebrew)");
+            debug!("  Or download from https://fonts.google.com/noto");
         } else {
-            eprintln!(
-                "✓ Selected font '{}' with {:.1}% coverage",
+            info!(
+                "Selected font '{}' with {:.1}% coverage",
                 best_name, best_coverage
             );
         }
         Ok(font)
     } else {
-        eprintln!("❌ Could not load font '{}' or any fallbacks", primary_name);
-        eprintln!("  Fonts tried:");
+        warn!("Could not load font '{}' or any fallbacks", primary_name);
+        debug!("Fonts tried:");
         for font in &tried_fonts {
-            eprintln!("    - {}", font);
+            debug!("  - {}", font);
         }
-        eprintln!("  💡 To fix this, install a Unicode font:");
-        eprintln!("     • brew install font-noto-sans  (Homebrew)");
-        eprintln!("     • Or download from https://fonts.google.com/noto");
+        debug!("To fix this, install a Unicode font:");
+        debug!("  brew install font-noto-sans  (Homebrew)");
+        debug!("  Or download from https://fonts.google.com/noto");
         Err(Error::new(
             format!("Could not load font '{}' or any fallbacks", primary_name),
             ErrorKind::InvalidFont,
