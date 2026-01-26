@@ -189,6 +189,10 @@ Font subsetting is enabled by default, analyzing text to create minimal subsets 
 
 For advanced usage, work directly with the lexer and PDF components via `load_config_from_source()`.
 
+## Logging
+
+The library uses the [`log`](https://crates.io/crates/log) crate. No output by default. Enable with any `log`-compatible backend (e.g., `env_logger`) and set `RUST_LOG=markdown2pdf=info` or `debug` for diagnostics.
+
 ## Configuration
 
 TOML configuration customizes fonts, colors, spacing, and visual properties. Configuration translates to a `StyleMatch` instance. Three loading methods: default styles, runtime files, or compile-time embedding.
