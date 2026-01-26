@@ -209,28 +209,33 @@ fn main() {
                 .long("path")
                 .value_name("FILE_PATH")
                 .help("Path to the markdown file")
-                .conflicts_with_all(["string", "url"]),
+                .conflicts_with("string"),
         );
 
-    #[cfg(feature = "fetch")]
-    let cmd = cmd.arg(
-        Arg::new("url")
-            .short('u')
-            .long("url")
-            .value_name("URL")
-            .help("URL to fetch markdown content from (requires 'fetch' feature)")
-            .conflicts_with_all(["string", "path"]),
-    );
-
-    let mut cmd = cmd
+    let cmd = cmd
         .arg(
             Arg::new("string")
                 .short('s')
                 .long("string")
                 .value_name("MARKDOWN_STRING")
                 .help("Markdown content as a string")
-                .conflicts_with_all(["path", "url"]),
-        )
+                .conflicts_with("path"),
+        );
+
+    #[cfg(feature = "fetch")]
+    let cmd = cmd
+        .mut_arg("path", |a| a.conflicts_with("url"))
+        .mut_arg("string", |a| a.conflicts_with("url"))
+        .arg(
+            Arg::new("url")
+                .short('u')
+                .long("url")
+                .value_name("URL")
+                .help("URL to fetch markdown content from (requires 'fetch' feature)")
+                .conflicts_with_all(["string", "path"]),
+        );
+
+    let mut cmd = cmd
         .arg(
             Arg::new("output")
                 .short('o')
