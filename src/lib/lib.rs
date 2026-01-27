@@ -625,4 +625,60 @@ Final paragraph.
         let result = parse_into_bytes(markdown, config::ConfigSource::Default, None);
         assert!(matches!(result, Err(MdpError::ParseError { .. })));
     }
+
+    #[test]
+    fn test_link_styling_with_underline() {
+        const LINK_STYLE_CONFIG: &str = r#"
+            [link]
+            size = 10
+            textcolor = { r = 0, g = 0, b = 200 }
+            bold = true
+            italic = false
+            underline = true
+            strikethrough = false
+        "#;
+
+        let markdown = r#"
+# Links Test
+
+- [Styled link](https://example.com)
+- [Another styled link](https://example.org)
+        "#
+        .to_string();
+
+        let result = parse_into_bytes(
+            markdown,
+            config::ConfigSource::Embedded(LINK_STYLE_CONFIG),
+            None,
+        );
+        assert!(result.is_ok());
+        let pdf_bytes = result.unwrap();
+        assert!(!pdf_bytes.is_empty());
+        assert!(pdf_bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn test_link_styling_with_strikethrough() {
+        const LINK_STYLE_CONFIG: &str = r#"
+            [link]
+            size = 10
+            textcolor = { r = 200, g = 0, b = 0 }
+            bold = false
+            italic = true
+            underline = false
+            strikethrough = true
+        "#;
+
+        let markdown = "[Strikethrough link](https://example.com)".to_string();
+
+        let result = parse_into_bytes(
+            markdown,
+            config::ConfigSource::Embedded(LINK_STYLE_CONFIG),
+            None,
+        );
+        assert!(result.is_ok());
+        let pdf_bytes = result.unwrap();
+        assert!(!pdf_bytes.is_empty());
+        assert!(pdf_bytes.starts_with(b"%PDF-"));
+    }
 }
