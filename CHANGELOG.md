@@ -1,3 +1,18 @@
+## [0.2.1] - 2026-01-27
+
+### Features
+
+- *(pdf)* Apply bold/italic/underline/strikethrough styles to links
+
+### Testing
+
+- *(lib)* Add link styling tests for underline and strikethrough
+
+### Miscellaneous Tasks
+
+- *(cargo)* Update version to v0.2.1 and use genpdfi v0.2.7
+- *(docs)* Remove donation information and related funding references
+
 ## [0.2.0] - 2026-01-27
 
 ### Features

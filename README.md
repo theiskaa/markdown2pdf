@@ -61,7 +61,7 @@ cargo add markdown2pdf
 Or add to your Cargo.toml:
 
 ```toml
-markdown2pdf = "0.2.0"
+markdown2pdf = "0.2.1"
 ```
 
 ### Feature Flags
@@ -75,13 +75,13 @@ The library provides optional feature flags to control dependencies:
 
 ```toml
 # Minimal installation (no network dependencies)
-markdown2pdf = "0.2.0"
+markdown2pdf = "0.2.1"
 
 # With URL fetching support (native TLS)
-markdown2pdf = { version = "0.2.0", features = ["native-tls"] }
+markdown2pdf = { version = "0.2.1", features = ["native-tls"] }
 
 # With URL fetching support (rustls)
-markdown2pdf = { version = "0.2.0", features = ["rustls-tls"] }
+markdown2pdf = { version = "0.2.1", features = ["rustls-tls"] }
 ```
 
 **Note**: Binary installations via cargo or prebuilt downloads do not include URL fetching by default. To build the binary with URL support:

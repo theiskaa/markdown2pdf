@@ -1,6 +1,6 @@
 [package]
 name = "markdown2pdf"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Ismael Sh <me@theiskaa.com>"]
 description = "Create PDF with Markdown files (a md to pdf transpiler)"
@@ -25,7 +25,7 @@ native-tls = ["fetch", "reqwest/native-tls"]
 
 [dependencies]
 log = "0.4"
-genpdfi = "0.2.6"
+genpdfi = "0.2.7"
 dirs = "4.0.0"
 toml = "0.8.19"
 rust-embed = "8.5.0"
