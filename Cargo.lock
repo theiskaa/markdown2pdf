@@ -614,7 +614,8 @@ dependencies = [
 [[package]]
 name = "genpdfi"
 version = "0.2.6"
-source = "git+https://github.com/theiskaa/genpdfi?branch=feat%2Fsubset-glyph-mapping#8cfcd8cd5d91c46ac36209fe0813319e882ddd6a"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b7511bcb67a14d7da9c279d2193398c3f07552da211b4cf868c9e8b4288664c"
 dependencies = [
  "derive_more",
  "lopdf 0.26.0",
@@ -1078,7 +1079,7 @@ checksum = "7d947cbb889ed21c2a84be6ffbaebf5b4e0f4340638cba0444907e38b56be084"
 
 [[package]]
 name = "markdown2pdf"
-version = "0.1.9"
+version = "0.2.0"
 dependencies = [
  "clap",
  "dirs",
