@@ -1,3 +1,51 @@
+## [0.2.0] - 2026-01-27
+
+### Features
+
+- *(dependencies)* Use new genpdfi version 0.2.6
+- *(styling,config)* Add basic styling config to table header rows and cells
+- *(pdf)* Implement table rendering
+- *(debug)* Add table debug
+- *(markdown)* Support tables
+
+### Bug Fixes
+
+- *(ci)* Allow dirty workflow for manual trigger support
+- *(ci)* Workflow_dispatch to run in plan mode
+- *(markdown)* Only use text tokens in table cells
+- *(markdown)* Ignore `>` again in parse_text
+
+### Refactor
+
+- *(fonts)* Simplify font system and remove fontdb dependency
+- *(bin)* Update argument conflict handling for markdown options
+- *(fonts)* Implement global cached font database
+- *(logging)* Replace eprintln! with log macros for improved logging
+- *(markdown)* Intruduce ParseContext for context-aware parsing
+
+### Documentation
+
+- *(README)* Update Markdown features and font handling details
+- *(readme)* Add logging section to documentation for log crate integration
+
+### Performance
+
+- *(pdf)* Reduce overhead in rendering
+- *(fonts)* Speed up font loading
+
+### Testing
+
+- *(markdown)* Add test for table parsing
+
+### Miscellaneous Tasks
+
+- *(ci)* Add manual workflow trigger
+- *(ci)* Update macos runner version to 14
+- *(release)* Update cargo-dist version to 0.30.3 in configuration and CI workflow
+- *(dependendies)* Update cargo lock
+- *(release)* Update version to v0.2.0
+- *(dependencies)* Add log:0.4 dependency to cargo
+
 ## [0.1.9] - 2025-11-14
 
 ### Features
