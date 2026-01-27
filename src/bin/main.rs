@@ -78,21 +78,7 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         .ok_or_else(|| AppError::PathError("Invalid output path".to_string()))?;
 
     // Extract font configuration from CLI arguments
-    let fallback_fonts: Vec<String> = matches
-        .get_many::<String>("fallback-font")
-        .map(|values| values.map(|s| s.to_string()).collect())
-        .unwrap_or_default();
-
-    let font_config = if matches.contains_id("font-path")
-        || matches.contains_id("default-font")
-        || matches.contains_id("code-font")
-        || !fallback_fonts.is_empty()
-    {
-        let custom_paths: Vec<PathBuf> = matches
-            .get_many::<String>("font-path")
-            .map(|values| values.map(PathBuf::from).collect())
-            .unwrap_or_default();
-
+    let font_config = if matches.contains_id("default-font") || matches.contains_id("code-font") {
         let default_font = matches
             .get_one::<String>("default-font")
             .map(|s| s.to_string());
@@ -102,11 +88,9 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             .map(|s| s.to_string());
 
         Some(markdown2pdf::fonts::FontConfig {
-            custom_paths,
             default_font,
             code_font,
-            fallback_fonts,
-            enable_subsetting: true, // Enable subsetting by default for smaller PDFs
+            enable_subsetting: true,
         })
     } else {
         None
@@ -159,9 +143,6 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             if let Some(font) = &cfg.default_font {
                 eprintln!("   Font: {}", font);
             }
-            if !cfg.fallback_fonts.is_empty() {
-                eprintln!("   Fallbacks: {}", cfg.fallback_fonts.join(", "));
-            }
         }
     }
 
@@ -199,9 +180,8 @@ fn main() {
         .after_help(
             "EXAMPLES:\n  \
             markdown2pdf -p document.md -o output.pdf\n  \
-            markdown2pdf -s \"# Hello World\" --default-font \"Noto Sans\"\n  \
-            markdown2pdf -p doc.md --verbose --dry-run\n  \
-            markdown2pdf -p unicode.md --default-font \"Arial\" --fallback-font \"Noto Sans\"\n",
+            markdown2pdf -s \"# Hello World\" --default-font Georgia\n  \
+            markdown2pdf -p doc.md --verbose --dry-run\n",
         )
         .arg(
             Arg::new("path")
@@ -209,28 +189,33 @@ fn main() {
                 .long("path")
                 .value_name("FILE_PATH")
                 .help("Path to the markdown file")
-                .conflicts_with_all(["string", "url"]),
+                .conflicts_with("string"),
         );
 
-    #[cfg(feature = "fetch")]
-    let cmd = cmd.arg(
-        Arg::new("url")
-            .short('u')
-            .long("url")
-            .value_name("URL")
-            .help("URL to fetch markdown content from (requires 'fetch' feature)")
-            .conflicts_with_all(["string", "path"]),
-    );
-
-    let mut cmd = cmd
+    let cmd = cmd
         .arg(
             Arg::new("string")
                 .short('s')
                 .long("string")
                 .value_name("MARKDOWN_STRING")
                 .help("Markdown content as a string")
-                .conflicts_with_all(["path", "url"]),
-        )
+                .conflicts_with("path"),
+        );
+
+    #[cfg(feature = "fetch")]
+    let cmd = cmd
+        .mut_arg("path", |a| a.conflicts_with("url"))
+        .mut_arg("string", |a| a.conflicts_with("url"))
+        .arg(
+            Arg::new("url")
+                .short('u')
+                .long("url")
+                .value_name("URL")
+                .help("URL to fetch markdown content from (requires 'fetch' feature)")
+                .conflicts_with_all(["string", "path"]),
+        );
+
+    let mut cmd = cmd
         .arg(
             Arg::new("output")
                 .short('o')
@@ -239,30 +224,16 @@ fn main() {
                 .help("Path to the output PDF file (defaults to ./output.pdf)"),
         )
         .arg(
-            Arg::new("font-path")
-                .long("font-path")
-                .value_name("PATH")
-                .help("Path to custom font directory or font file")
-                .action(clap::ArgAction::Append),
-        )
-        .arg(
             Arg::new("default-font")
                 .long("default-font")
                 .value_name("FONT_NAME")
-                .help("Default font family to use (default: helvetica)"),
+                .help("Default font family (e.g., Helvetica, Georgia, or system font name)"),
         )
         .arg(
             Arg::new("code-font")
                 .long("code-font")
                 .value_name("FONT_NAME")
-                .help("Font for code blocks (default: courier)"),
-        )
-        .arg(
-            Arg::new("fallback-font")
-                .long("fallback-font")
-                .value_name("FONT_NAME")
-                .help("Fallback font for missing characters (can be specified multiple times)")
-                .action(clap::ArgAction::Append),
+                .help("Font for code blocks (default: Courier)"),
         )
         .arg(
             Arg::new("verbose")
