@@ -613,7 +613,9 @@ dependencies = [
 
 [[package]]
 name = "genpdfi"
-version = "0.2.6"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f5529711a3864fa5ca32a6bf292af9cee2975f9e976e8a1aa11f866d96b43be"
 dependencies = [
  "derive_more",
  "lopdf 0.26.0",
@@ -1077,7 +1079,7 @@ checksum = "7d947cbb889ed21c2a84be6ffbaebf5b4e0f4340638cba0444907e38b56be084"
 
 [[package]]
 name = "markdown2pdf"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "dirs",
