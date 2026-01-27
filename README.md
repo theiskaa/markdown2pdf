@@ -14,7 +14,7 @@ markdown2pdf converts Markdown to PDF using a lexical analyzer and PDF rendering
 
 Both binary and library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
 
-Built in Rust for performance and memory safety. Handles standard Markdown syntax including headings, lists, code blocks, links, and images. Supports multiple input sources and outputs to files or bytes for in-memory processing.
+Built in Rust for performance and memory safety. Handles standard Markdown syntax including headings, lists, code blocks, links, tables, and images. Supports multiple input sources and outputs to files or bytes for in-memory processing.
 
 ## Install binary
 
@@ -61,7 +61,7 @@ cargo add markdown2pdf
 Or add to your Cargo.toml:
 
 ```toml
-markdown2pdf = "0.1.9"
+markdown2pdf = "0.2.0"
 ```
 
 ### Feature Flags
@@ -75,13 +75,13 @@ The library provides optional feature flags to control dependencies:
 
 ```toml
 # Minimal installation (no network dependencies)
-markdown2pdf = "0.1.9"
+markdown2pdf = "0.2.0"
 
 # With URL fetching support (native TLS)
-markdown2pdf = { version = "0.1.9", features = ["native-tls"] }
+markdown2pdf = { version = "0.2.0", features = ["native-tls"] }
 
 # With URL fetching support (rustls)
-markdown2pdf = { version = "0.1.9", features = ["rustls-tls"] }
+markdown2pdf = { version = "0.2.0", features = ["rustls-tls"] }
 ```
 
 **Note**: Binary installations via cargo or prebuilt downloads do not include URL fetching by default. To build the binary with URL support:
@@ -113,29 +113,30 @@ Convert from URL (requires `native-tls` or `rustls-tls` feature):
 markdown2pdf -u "https://raw.githubusercontent.com/user/repo/main/README.md" -o "readme.pdf"
 ```
 
-Use `--verbose` for detailed font selection output, `--quiet` for CI/CD pipelines, or `--dry-run` to validate syntax without generating PDF.
+Use `--verbose` for detailed output, `--quiet` for CI/CD pipelines, or `--dry-run` to validate syntax without generating PDF.
 
-## Font Handling and Unicode Support
+## Fonts
 
-The library automatically detects Unicode characters and selects system fonts with good coverage. Font subsetting reduces PDF size by 98% by including only used glyphs. A document with Noto Sans embeds ~31 KB instead of 1.2 MB.
+The font system supports three modes:
 
-Fallback font chains specify multiple fonts tried in sequence for missing characters. Useful for mixed-script documents with Latin, Cyrillic, Greek, or CJK. The system analyzes each character and selects the best font from the chain.
-
-When non-ASCII characters are detected, the library prioritizes Noto Sans, DejaVu Sans, and Liberation Sans. Coverage percentages are reported with suggestions if fonts lack support.
-
-The system loads actual Bold, Italic, and Bold-Italic font files rather than synthetic rendering. Font name resolution includes fuzzy matching and aliasing for cross-platform compatibility. "Arial" automatically maps to Helvetica on macOS.
-
-Custom fonts load from directories via `--font-path` with recursive search for TrueType and OpenType fonts.
+- **Built-in fonts**: Helvetica, Times, Courier (fastest, no file I/O)
+- **System fonts**: Searches standard OS font directories
+- **File paths**: Load directly from a TTF/OTF file
 
 ```bash
-# Unicode with fallback chain
-markdown2pdf -p international.md --default-font "Noto Sans" \
-  --fallback-font "Arial Unicode MS" -o output.pdf
+# Use built-in font (fastest)
+markdown2pdf -p document.md -o output.pdf
 
-# Custom fonts with subsetting
-markdown2pdf -p document.md --font-path "./fonts" \
-  --default-font "Roboto" --code-font "Fira Code" -o output.pdf
+# Use system font
+markdown2pdf -p document.md --default-font Georgia -o output.pdf
+
+# Use specific font file
+markdown2pdf -p document.md --default-font "/path/to/font.ttf" -o output.pdf
 ```
+
+Font subsetting is enabled by default, reducing PDF size by embedding only the glyphs used in the document. A Unicode document with Arial Unicode MS produces ~45KB instead of 23MB.
+
+Performance is ~20ms for standard documents with built-in fonts.
 
 ## Library Usage
 
@@ -157,25 +158,14 @@ const CONFIG: &str = include_str!("../config.toml");
 parse_into_file(markdown, "output.pdf", ConfigSource::Embedded(CONFIG), None)?;
 ```
 
-Embedded configuration uses `include_str!()` at compile time, eliminating runtime file dependencies.
-
-Font configuration uses `FontConfig` for programmatic control over fonts, fallback chains, and subsetting.
+Font configuration uses `FontConfig` for programmatic control:
 
 ```rust
 use markdown2pdf::{parse_into_file, config::ConfigSource, fonts::FontConfig};
-use std::path::PathBuf;
 
-// Configure fonts for international document
-let font_config = FontConfig {
-    custom_paths: vec![PathBuf::from("./fonts")],
-    default_font: Some("Noto Sans".to_string()),
-    code_font: Some("Fira Code".to_string()),
-    fallback_fonts: vec![
-        "Arial Unicode MS".to_string(),
-        "DejaVu Sans".to_string(),
-    ],
-    enable_subsetting: true,
-};
+let font_config = FontConfig::new()
+    .with_default_font("Georgia")
+    .with_code_font("Courier");
 
 parse_into_file(
     markdown,
@@ -185,21 +175,15 @@ parse_into_file(
 )?;
 ```
 
-Font subsetting is enabled by default, analyzing text to create minimal subsets while maintaining full fidelity.
-
-For advanced usage, work directly with the lexer and PDF components via `load_config_from_source()`.
-
 ## Logging
 
 The library uses the [`log`](https://crates.io/crates/log) crate. No output by default. Enable with any `log`-compatible backend (e.g., `env_logger`) and set `RUST_LOG=markdown2pdf=info` or `debug` for diagnostics.
 
 ## Configuration
 
-TOML configuration customizes fonts, colors, spacing, and visual properties. Configuration translates to a `StyleMatch` instance. Three loading methods: default styles, runtime files, or compile-time embedding.
+TOML configuration customizes fonts, colors, spacing, and visual properties. Three loading methods: default styles, runtime files, or compile-time embedding.
 
-Embedded configuration creates self-contained binaries for Docker and containers with compile-time validation. Error handling falls back to default styling if files are missing or invalid.
-
-For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the example configuration from `markdown2pdfrc.example.toml`. For library usage with embedded config, create your configuration file and embed it using `include_str!()` or define it as a string literal, then use it with `ConfigSource::Embedded(content)`.
+For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the example configuration from `markdown2pdfrc.example.toml`. For library usage with embedded config, create your configuration file and embed it using `include_str!()`.
 
 ## Contributing
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.
