@@ -25,7 +25,7 @@ native-tls = ["fetch", "reqwest/native-tls"]
 
 [dependencies]
 log = "0.4"
-genpdfi = { git = "https://github.com/theiskaa/genpdfi", branch = "feat/subset-glyph-mapping" }
+genpdfi = "0.2.6"
 dirs = "4.0.0"
 toml = "0.8.19"
 rust-embed = "8.5.0"
