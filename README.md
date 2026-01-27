@@ -187,6 +187,3 @@ For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the e
 
 ## Contributing
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.
-
-## Donations
-For information regarding donations please refer to [DONATE.md](DONATE.md)
