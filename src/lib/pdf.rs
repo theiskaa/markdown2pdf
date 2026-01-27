@@ -347,6 +347,18 @@ impl Pdf {
                         link_style = link_style
                             .with_color(genpdfi::style::Color::Rgb(color.0, color.1, color.2));
                     }
+                    if self.style.link.bold {
+                        link_style = link_style.bold();
+                    }
+                    if self.style.link.italic {
+                        link_style = link_style.italic();
+                    }
+                    if self.style.link.underline {
+                        link_style = link_style.underline();
+                    }
+                    if self.style.link.strikethrough {
+                        link_style = link_style.strikethrough();
+                    }
                     para.push_link(text.clone(), url.clone(), link_style);
                 }
                 Token::Code(_, content) => {
