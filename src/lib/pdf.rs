@@ -16,19 +16,12 @@
 //! The module is designed to be both robust for production use and flexible enough to accommodate various document structures
 //! and styling needs.
 
-use crate::{fonts::load_unicode_system_font, styling::StyleMatch, Token};
+use crate::{styling::StyleMatch, Token};
 use genpdfi::{
     fonts::{FontData, FontFamily},
     Alignment, Document,
 };
-use log::{info, warn};
-
-/// Returns true if all characters in the text are ASCII (0-127).
-/// Used to determine if we can skip loading Unicode fallback fonts.
-#[inline]
-fn is_ascii_only(text: &str) -> bool {
-    text.bytes().all(|b| b < 128)
-}
+use log::warn;
 
 /// The main PDF document generator that orchestrates the conversion process from markdown to PDF.
 /// This struct serves as the central coordinator for document generation, managing the overall
@@ -39,37 +32,25 @@ fn is_ascii_only(text: &str) -> bool {
 /// content and a specialized monospace font specifically for code sections.
 /// These fonts are loaded based on the style configuration and stored internally for use during
 /// the PDF generation process.
-#[allow(dead_code)]
 pub struct Pdf {
     input: Vec<Token>,
     style: StyleMatch,
     font_family: FontFamily<FontData>,
+    #[allow(dead_code)] // Reserved for future code block font support
     code_font_family: FontFamily<FontData>,
-    font_fallback_chain: Option<FontFamily<genpdfi::fonts::FontFallbackChain>>,
-    code_font_fallback_chain: Option<FontFamily<genpdfi::fonts::FontFallbackChain>>,
 }
 
 impl Pdf {
     /// Creates a new PDF generator instance to process markdown tokens.
-    /// The generator maintains document structure and applies styling/layout rules during conversion.
     ///
-    /// It automatically loads two font families based on the style configuration:
-    /// - A main text font for regular content
-    /// - A code font specifically for code blocks and inline code segments
-    ///
-    /// Font loading is handled automatically but will panic if the specified fonts cannot be loaded
-    /// successfully. The generator internally stores the input tokens, style configuration, and loaded
-    /// font families for use during PDF generation.
-    ///
-    /// Through the style configuration, the generator controls all visual aspects of the output PDF
-    /// including typography, dimensions, colors and spacing between elements. The style settings
-    /// determine the complete visual appearance and layout characteristics of the final generated
-    /// PDF document.
+    /// Loads two font families based on configuration:
+    /// - Main text font for regular content
+    /// - Code font for code blocks and inline code
     ///
     /// # Arguments
     /// * `input` - The markdown tokens to convert
     /// * `style` - Style configuration for the document
-    /// * `font_config` - Optional font configuration with custom paths and font overrides
+    /// * `font_config` - Optional font configuration
     pub fn new(
         input: Vec<Token>,
         style: StyleMatch,
@@ -79,137 +60,60 @@ impl Pdf {
         let family_name = font_config
             .and_then(|cfg| cfg.default_font.as_deref())
             .or(style.text.font_family)
-            .unwrap_or("helvetica");
+            .unwrap_or("Helvetica");
 
-        // Check if this is a built-in PDF font (fast path - no system lookup needed)
-        let is_builtin_font = matches!(
+        // Check if this is a built-in PDF font (fast path)
+        let is_builtin = matches!(
             family_name.to_lowercase().as_str(),
-            "helvetica" | "arial" | "sans" | "sans-serif" |
-            "times" | "timesnewroman" | "times new roman" | "serif" |
-            "courier" | "couriernew" | "courier new" | "monospace"
+            "helvetica"
+                | "arial"
+                | "sans-serif"
+                | "times"
+                | "times new roman"
+                | "serif"
+                | "courier"
+                | "courier new"
+                | "monospace"
         );
 
-        // FAST PATH: Built-in fonts - no text collection, no system lookup, no fallbacks needed
-        let (font_family, font_fallback_chain, all_text) = if is_builtin_font && font_config.map(|c| c.fallback_fonts.is_empty()).unwrap_or(true) {
-            let font = crate::fonts::load_builtin_font_family(family_name)
-                .expect("Failed to load built-in font family");
-            (font, None, None)
+        // Load main font
+        let font_family = if is_builtin {
+            // Fast path: built-in fonts need no file I/O for rendering
+            crate::fonts::load_builtin_font_family(family_name)
+                .expect("Failed to load built-in font")
         } else {
-            // SLOW PATH: Custom fonts or explicit fallbacks requested
-            // Collect text for subsetting and Unicode detection
-            let all_text = if font_config.map(|c| c.enable_subsetting).unwrap_or(true) {
+            // Custom font: collect text for subsetting if enabled
+            let text = if font_config.map(|c| c.enable_subsetting).unwrap_or(true) {
                 Some(Token::collect_all_text(&input))
             } else {
                 None
             };
 
-            // Check if document needs Unicode fallbacks
-            let needs_unicode_fallbacks = all_text
-                .as_ref()
-                .map(|t| !is_ascii_only(t))
-                .unwrap_or(false);
-
-            // Check if user explicitly requested fallbacks
-            let explicit_fallbacks = font_config
-                .map(|cfg| !cfg.fallback_fonts.is_empty())
-                .unwrap_or(false);
-
-            let (font_family, font_fallback_chain) = if explicit_fallbacks {
-                // User explicitly requested fallback fonts - use fallback chain
-                let fallback_fonts = font_config.unwrap().fallback_fonts.clone();
-                info!(
-                    "Loading font '{}' with {} explicit fallback(s)...",
-                    family_name,
-                    fallback_fonts.len()
+            crate::fonts::load_font(family_name, font_config, text.as_deref()).unwrap_or_else(|e| {
+                warn!(
+                    "Could not load font '{}': {}. Using Helvetica.",
+                    family_name, e
                 );
-                let custom_paths = font_config
-                    .map(|c| c.custom_paths.as_slice())
-                    .unwrap_or(&[]);
-
-                if let Ok(chain_family) = crate::fonts::load_font_with_fallback_chain(
-                    family_name,
-                    &fallback_fonts,
-                    custom_paths,
-                    all_text.as_deref(),
-                ) {
-                    let primary_fonts = crate::fonts::extract_primary_fonts(&chain_family);
-                    (primary_fonts, Some(chain_family))
-                } else {
-                    warn!("Fallback chain failed, using single font with subsetting...");
-                    let single_font = crate::fonts::load_font_with_config(
-                        family_name,
-                        font_config,
-                        all_text.as_deref(),
-                    )
-                    .unwrap_or_else(|_| {
-                        load_unicode_system_font(all_text.as_deref()).unwrap_or_else(|_| {
-                            crate::fonts::load_builtin_font_family("helvetica")
-                                .expect("Failed to load font")
-                        })
-                    });
-                    (single_font, None)
-                }
-            } else if needs_unicode_fallbacks {
-                // Unicode detected but no explicit fallbacks - use single font with subsetting
-                // This produces smaller PDFs than the fallback chain
-                info!("Loading font '{}' with subsetting for Unicode...", family_name);
-                let single_font = crate::fonts::load_font_with_config(
-                    family_name,
-                    font_config,
-                    all_text.as_deref(),
-                )
-                .unwrap_or_else(|_| {
-                    load_unicode_system_font(all_text.as_deref()).unwrap_or_else(|_| {
-                        crate::fonts::load_builtin_font_family("helvetica")
-                            .expect("Failed to load font")
-                    })
-                });
-                (single_font, None)
-            } else {
-                // ASCII-only document with custom font
-                // Use load_font_with_config which handles subsetting
-                let single_font = crate::fonts::load_font_with_config(
-                    family_name,
-                    font_config,
-                    all_text.as_deref(),
-                )
-                .unwrap_or_else(|_| {
-                    warn!("Could not load font '{}', falling back to Helvetica", family_name);
-                    crate::fonts::load_builtin_font_family("helvetica")
-                        .expect("Failed to load font")
-                });
-                (single_font, None)
-            };
-            (font_family, font_fallback_chain, all_text)
+                crate::fonts::load_builtin_font_family("Helvetica")
+                    .expect("Failed to load Helvetica")
+            })
         };
 
-        // Code font: use built-in Courier directly for speed (unless custom specified)
+        // Load code font (built-in Courier is fastest)
         let code_font_name = font_config
             .and_then(|cfg| cfg.code_font.as_deref())
-            .unwrap_or("courier");
+            .unwrap_or("Courier");
 
-        let code_font_family = if matches!(
-            code_font_name.to_lowercase().as_str(),
-            "courier" | "couriernew" | "courier new" | "monospace"
-        ) {
-            crate::fonts::load_builtin_font_family("courier")
-                .expect("Failed to load code font")
-        } else {
-            crate::fonts::load_font_with_config(code_font_name, font_config, all_text.as_deref())
-                .unwrap_or_else(|_| {
-                    warn!("Could not load code font '{}', using Courier", code_font_name);
-                    crate::fonts::load_builtin_font_family("courier")
-                        .expect("Failed to load code font")
-                })
-        };
+        let code_font_family = crate::fonts::load_builtin_font_family(code_font_name)
+            .unwrap_or_else(|_| {
+                crate::fonts::load_builtin_font_family("Courier").expect("Failed to load Courier")
+            });
 
         Self {
             input,
             style,
             font_family,
             code_font_family,
-            font_fallback_chain,
-            code_font_fallback_chain: None,
         }
     }
 

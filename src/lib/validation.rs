@@ -163,14 +163,6 @@ fn has_unicode_font(font_config: Option<&FontConfig>) -> bool {
                 return true;
             }
         }
-        // Check fallback fonts
-        for fallback in &config.fallback_fonts {
-            let fallback_lower = fallback.to_lowercase();
-            let unicode_fonts = ["noto", "dejavu", "liberation", "arial unicode"];
-            if unicode_fonts.iter().any(|uf| fallback_lower.contains(uf)) {
-                return true;
-            }
-        }
     }
     false
 }

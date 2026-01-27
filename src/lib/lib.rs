@@ -277,13 +277,8 @@ impl MdpError {
 ///         size = 18
 ///         bold = true
 ///     "#;
-///     let font_config = FontConfig {
-///         custom_paths: vec!["./fonts".into()],
-///         default_font: Some("Roboto".to_string()),
-///         code_font: None,
-///         fallback_fonts: vec![],
-///         enable_subsetting: true,
-///     };
+///     let font_config = FontConfig::new()
+///         .with_default_font("Georgia");
 ///     markdown2pdf::parse_into_file(markdown, "output3.pdf", ConfigSource::Embedded(EMBEDDED), Some(&font_config))?;
 ///
 ///     Ok(())
