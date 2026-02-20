@@ -91,6 +91,8 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             default_font,
             code_font,
             enable_subsetting: true,
+            default_font_source: None,
+            code_font_source: None,
         })
     } else {
         None
@@ -192,15 +194,14 @@ fn main() {
                 .conflicts_with("string"),
         );
 
-    let cmd = cmd
-        .arg(
-            Arg::new("string")
-                .short('s')
-                .long("string")
-                .value_name("MARKDOWN_STRING")
-                .help("Markdown content as a string")
-                .conflicts_with("path"),
-        );
+    let cmd = cmd.arg(
+        Arg::new("string")
+            .short('s')
+            .long("string")
+            .value_name("MARKDOWN_STRING")
+            .help("Markdown content as a string")
+            .conflicts_with("path"),
+    );
 
     #[cfg(feature = "fetch")]
     let cmd = cmd
