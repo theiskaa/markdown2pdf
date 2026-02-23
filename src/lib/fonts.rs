@@ -42,6 +42,8 @@ pub enum FontSource {
     System(String),
     /// Direct file path to a TTF/OTF file.
     File(PathBuf),
+    /// Font bytes
+    Bytes(&'static [u8]),
 }
 
 impl FontSource {
@@ -214,6 +216,7 @@ fn load_font_family_impl(
         FontSource::Builtin(name) => load_builtin_family(name),
         FontSource::System(name) => load_system_family(&name, text),
         FontSource::File(path) => load_file_family(&path, text),
+        FontSource::Bytes(data) => load_bytes_family(data, text),
     }
 }
 
@@ -334,6 +337,35 @@ fn load_file_family(path: &Path, text: Option<&str>) -> Result<FontFamily<FontDa
     Ok(family)
 }
 
+/// Load a font family from raw bytes (e.g. embedded with include_bytes!).
+fn load_bytes_family(
+    data: &'static [u8],
+    text: Option<&str>,
+) -> Result<FontFamily<FontData>, Error> {
+    let shared = Arc::new(data.to_vec());
+
+    let family = if let Some(text) = text {
+        if text.is_empty() {
+            create_font_family_from_data(shared)?
+        } else {
+            match subset_font_data(&shared, text) {
+                Ok((subset_data, glyph_map)) => {
+                    create_subset_font_family(shared, Arc::new(subset_data), glyph_map)?
+                }
+                Err(e) => {
+                    warn!("Subsetting failed: {}. Using full font.", e);
+                    create_font_family_from_data(shared)?
+                }
+            }
+        }
+    } else {
+        create_font_family_from_data(shared)?
+    };
+
+    info!("Loaded font from embedded bytes");
+    Ok(family)
+}
+
 /// Create a font family from shared font data (no subsetting).
 fn create_font_family_from_data(data: Arc<Vec<u8>>) -> Result<FontFamily<FontData>, Error> {
     let regular = FontData::new_shared(data.clone(), None)?;
@@ -398,6 +430,10 @@ pub struct FontConfig {
     pub default_font: Option<String>,
     /// Font name for code blocks.
     pub code_font: Option<String>,
+    /// Allows specifying a concrete [`FontSource`] for body text
+    pub default_font_source: Option<FontSource>,
+    /// Allows specifying a concrete [`FontSource`] for code text
+    pub code_font_source: Option<FontSource>,
     /// Enable font subsetting for smaller PDFs.
     pub enable_subsetting: bool,
 }
@@ -408,6 +444,8 @@ impl FontConfig {
         Self {
             default_font: None,
             code_font: None,
+            default_font_source: None,
+            code_font_source: None,
             enable_subsetting: true,
         }
     }
@@ -421,6 +459,18 @@ impl FontConfig {
     /// Set the code font.
     pub fn with_code_font(mut self, font: impl Into<String>) -> Self {
         self.code_font = Some(font.into());
+        self
+    }
+
+    /// Set the default font source
+    pub fn with_default_font_source(mut self, source: FontSource) -> Self {
+        self.default_font_source = Some(source);
+        self
+    }
+
+    /// Set the code font source
+    pub fn with_code_font_source(mut self, source: FontSource) -> Self {
+        self.code_font_source = Some(source);
         self
     }
 

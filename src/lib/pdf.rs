@@ -77,7 +77,11 @@ impl Pdf {
         );
 
         // Load main font
-        let font_family = if is_builtin {
+        let font_family = if let Some(source) =
+            font_config.and_then(|c| c.default_font_source.clone())
+        {
+            crate::fonts::load_font_family(source).expect("Failed to load font from source")
+        } else if is_builtin {
             // Fast path: built-in fonts need no file I/O for rendering
             crate::fonts::load_builtin_font_family(family_name)
                 .expect("Failed to load built-in font")
@@ -104,10 +108,15 @@ impl Pdf {
             .and_then(|cfg| cfg.code_font.as_deref())
             .unwrap_or("Courier");
 
-        let code_font_family = crate::fonts::load_builtin_font_family(code_font_name)
-            .unwrap_or_else(|_| {
+        let code_font_family = if let Some(source) =
+            font_config.and_then(|c| c.code_font_source.clone())
+        {
+            crate::fonts::load_font_family(source).expect("Failed to load code font from source")
+        } else {
+            crate::fonts::load_builtin_font_family(code_font_name).unwrap_or_else(|_| {
                 crate::fonts::load_builtin_font_family("Courier").expect("Failed to load Courier")
-            });
+            })
+        };
 
         Self {
             input,
