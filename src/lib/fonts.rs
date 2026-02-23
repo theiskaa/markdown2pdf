@@ -41,10 +41,6 @@ use genpdfi::fonts::{FontData, FontFamily};
 use log::{debug, info, warn};
 use printpdf::BuiltinFont;
 
-// =============================================================================
-// Font Source
-// =============================================================================
-
 /// Specifies where to load a font from.
 #[derive(Debug, Clone)]
 pub enum FontSource {
@@ -74,10 +70,6 @@ impl FontSource {
         FontSource::Bytes(data)
     }
 }
-
-// =============================================================================
-// Built-in Fonts
-// =============================================================================
 
 /// Maps font name to built-in PDF font.
 fn get_builtin_font(name: &str) -> Option<BuiltinFont> {
@@ -126,10 +118,6 @@ fn get_builtin_variants(base: BuiltinFont) -> BuiltinVariants {
         },
     }
 }
-
-// =============================================================================
-// System Font Directories
-// =============================================================================
 
 /// Returns known font directories for the current platform.
 fn system_font_dirs() -> Vec<&'static str> {
@@ -202,10 +190,6 @@ fn find_system_font(name: &str) -> Option<PathBuf> {
 
     None
 }
-
-// =============================================================================
-// Font Loading
-// =============================================================================
 
 /// Load a font family from the specified source.
 ///
@@ -436,10 +420,6 @@ fn format_bytes(bytes: usize) -> String {
     }
 }
 
-// =============================================================================
-// Font Configuration
-// =============================================================================
-
 /// Configuration for font loading.
 ///
 /// When both a font name (e.g. `default_font`) and a font source
@@ -504,10 +484,6 @@ impl FontConfig {
         self
     }
 }
-
-// =============================================================================
-// High-level API for markdown2pdf
-// =============================================================================
 
 /// Resolve a font name to a FontSource.
 ///
@@ -574,10 +550,6 @@ pub fn load_font_with_config(
 ) -> Result<FontFamily<FontData>, Error> {
     load_font(name, config, text)
 }
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 #[cfg(test)]
 mod tests {
