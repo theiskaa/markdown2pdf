@@ -5,9 +5,11 @@
 //! - **Built-in fonts**: Helvetica, Times, Courier (instant, no file I/O)
 //! - **System fonts**: Search known directories for TTF/OTF files
 //! - **File paths**: Load directly from a specified path
+//! - **Embedded bytes**: Load from compile-time included font data
 //!
 //! # Example
 //! ```rust,no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use markdown2pdf::fonts::{FontSource, load_font_family};
 //!
 //! // Built-in (fastest)
@@ -18,6 +20,16 @@
 //!
 //! // Explicit path
 //! let font = load_font_family(FontSource::file("/path/to/font.ttf"))?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Loading from embedded bytes (great for GUI apps):
+//! ```rust,ignore
+//! use markdown2pdf::fonts::{FontSource, load_font_family};
+//!
+//! static FONT_DATA: &[u8] = include_bytes!("path/to/font.ttf");
+//! let font = load_font_family(FontSource::bytes(FONT_DATA))?;
 //! ```
 
 use std::fs;
@@ -29,10 +41,6 @@ use genpdfi::fonts::{FontData, FontFamily};
 use log::{debug, info, warn};
 use printpdf::BuiltinFont;
 
-// =============================================================================
-// Font Source
-// =============================================================================
-
 /// Specifies where to load a font from.
 #[derive(Debug, Clone)]
 pub enum FontSource {
@@ -42,7 +50,7 @@ pub enum FontSource {
     System(String),
     /// Direct file path to a TTF/OTF file.
     File(PathBuf),
-    /// Font bytes
+    /// Raw font bytes (e.g. from `include_bytes!`). Great for embedding fonts in GUI apps.
     Bytes(&'static [u8]),
 }
 
@@ -56,11 +64,12 @@ impl FontSource {
     pub fn file(path: impl Into<PathBuf>) -> Self {
         FontSource::File(path.into())
     }
-}
 
-// =============================================================================
-// Built-in Fonts
-// =============================================================================
+    /// Create a font source from raw bytes (e.g. `include_bytes!`).
+    pub fn bytes(data: &'static [u8]) -> Self {
+        FontSource::Bytes(data)
+    }
+}
 
 /// Maps font name to built-in PDF font.
 fn get_builtin_font(name: &str) -> Option<BuiltinFont> {
@@ -109,10 +118,6 @@ fn get_builtin_variants(base: BuiltinFont) -> BuiltinVariants {
         },
     }
 }
-
-// =============================================================================
-// System Font Directories
-// =============================================================================
 
 /// Returns known font directories for the current platform.
 fn system_font_dirs() -> Vec<&'static str> {
@@ -185,10 +190,6 @@ fn find_system_font(name: &str) -> Option<PathBuf> {
 
     None
 }
-
-// =============================================================================
-// Font Loading
-// =============================================================================
 
 /// Load a font family from the specified source.
 ///
@@ -419,20 +420,19 @@ fn format_bytes(bytes: usize) -> String {
     }
 }
 
-// =============================================================================
-// Font Configuration
-// =============================================================================
-
 /// Configuration for font loading.
+///
+/// When both a font name (e.g. `default_font`) and a font source
+/// (e.g. `default_font_source`) are set, the source takes priority.
 #[derive(Debug, Clone, Default)]
 pub struct FontConfig {
     /// Default font name for body text.
     pub default_font: Option<String>,
     /// Font name for code blocks.
     pub code_font: Option<String>,
-    /// Allows specifying a concrete [`FontSource`] for body text
+    /// Font source for body text. Takes priority over `default_font` if both are set.
     pub default_font_source: Option<FontSource>,
-    /// Allows specifying a concrete [`FontSource`] for code text
+    /// Font source for code blocks. Takes priority over `code_font` if both are set.
     pub code_font_source: Option<FontSource>,
     /// Enable font subsetting for smaller PDFs.
     pub enable_subsetting: bool,
@@ -462,13 +462,17 @@ impl FontConfig {
         self
     }
 
-    /// Set the default font source
+    /// Set the font source for body text directly.
+    ///
+    /// This takes priority over `with_default_font` if both are set.
     pub fn with_default_font_source(mut self, source: FontSource) -> Self {
         self.default_font_source = Some(source);
         self
     }
 
-    /// Set the code font source
+    /// Set the font source for code blocks directly.
+    ///
+    /// This takes priority over `with_code_font` if both are set.
     pub fn with_code_font_source(mut self, source: FontSource) -> Self {
         self.code_font_source = Some(source);
         self
@@ -480,10 +484,6 @@ impl FontConfig {
         self
     }
 }
-
-// =============================================================================
-// High-level API for markdown2pdf
-// =============================================================================
 
 /// Resolve a font name to a FontSource.
 ///
@@ -551,10 +551,6 @@ pub fn load_font_with_config(
     load_font(name, config, text)
 }
 
-// =============================================================================
-// Tests
-// =============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,5 +599,14 @@ mod tests {
     fn test_system_font_dirs() {
         let dirs = system_font_dirs();
         assert!(!dirs.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_bytes() {
+        let data: &'static [u8] = b"not a real font";
+        let source = FontSource::bytes(data);
+        assert!(matches!(source, FontSource::Bytes(_)));
+        // Loading should fail gracefully, not panic
+        assert!(load_font_family(source).is_err());
     }
 }
