@@ -80,7 +80,11 @@ impl Pdf {
         let font_family = if let Some(source) =
             font_config.and_then(|c| c.default_font_source.clone())
         {
-            crate::fonts::load_font_family(source).expect("Failed to load font from source")
+            crate::fonts::load_font_family(source).unwrap_or_else(|e| {
+                warn!("Could not load font from source: {}. Using Helvetica.", e);
+                crate::fonts::load_builtin_font_family("Helvetica")
+                    .expect("Failed to load Helvetica")
+            })
         } else if is_builtin {
             // Fast path: built-in fonts need no file I/O for rendering
             crate::fonts::load_builtin_font_family(family_name)
@@ -111,7 +115,11 @@ impl Pdf {
         let code_font_family = if let Some(source) =
             font_config.and_then(|c| c.code_font_source.clone())
         {
-            crate::fonts::load_font_family(source).expect("Failed to load code font from source")
+            crate::fonts::load_font_family(source).unwrap_or_else(|e| {
+                warn!("Could not load code font from source: {}. Using Courier.", e);
+                crate::fonts::load_builtin_font_family("Courier")
+                    .expect("Failed to load Courier")
+            })
         } else {
             crate::fonts::load_builtin_font_family(code_font_name).unwrap_or_else(|_| {
                 crate::fonts::load_builtin_font_family("Courier").expect("Failed to load Courier")
