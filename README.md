@@ -117,11 +117,12 @@ Use `--verbose` for detailed output, `--quiet` for CI/CD pipelines, or `--dry-ru
 
 ## Fonts
 
-The font system supports three modes:
+The font system supports four modes:
 
 - **Built-in fonts**: Helvetica, Times, Courier (fastest, no file I/O)
 - **System fonts**: Searches standard OS font directories
 - **File paths**: Load directly from a TTF/OTF file
+- **Embedded bytes**: Load from compile-time included font data (great for GUI apps)
 
 ```bash
 # Use built-in font (fastest)
@@ -166,6 +167,26 @@ use markdown2pdf::{parse_into_file, config::ConfigSource, fonts::FontConfig};
 let font_config = FontConfig::new()
     .with_default_font("Georgia")
     .with_code_font("Courier");
+
+parse_into_file(
+    markdown,
+    "output.pdf",
+    ConfigSource::Default,
+    Some(&font_config),
+)?;
+```
+
+You can also load fonts directly from embedded bytes using `FontSource`, which is useful for GUI applications or environments without filesystem access:
+
+```rust
+use markdown2pdf::{parse_into_file, config::ConfigSource, fonts::{FontConfig, FontSource}};
+
+static BODY_FONT: &[u8] = include_bytes!("path/to/body_font.ttf");
+static CODE_FONT: &[u8] = include_bytes!("path/to/code_font.ttf");
+
+let font_config = FontConfig::new()
+    .with_default_font_source(FontSource::bytes(BODY_FONT))
+    .with_code_font_source(FontSource::bytes(CODE_FONT));
 
 parse_into_file(
     markdown,
