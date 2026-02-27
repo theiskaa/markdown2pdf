@@ -1,6 +1,6 @@
 [package]
 name = "markdown2pdf"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 authors = ["Ismael Sh <me@theiskaa.com>"]
 description = "Create PDF with Markdown files (a md to pdf transpiler)"

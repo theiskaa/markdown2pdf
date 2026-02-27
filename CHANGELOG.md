@@ -1,3 +1,31 @@
+## [0.2.2] - 2026-02-27
+
+### Features
+
+- *(fonts)* Embed minimal TrueType font for built-in metrics fallback
+- *(fonts)* Add FontSource::bytes() constructor and document priority behavior
+
+### Bug Fixes
+
+- *(lib)* Propagate Pdf::new errors in parse_into_file and parse_into_bytes
+- *(pdf)* Replace .expect() with graceful fallback on font source loading
+
+### Other
+
+- Don't check builtinfirst if providing font source
+- Allow loading a font as bytes
+
+### Refactor
+
+- *(pdf)* Replace .expect() panics with Result propagation in Pdf::new
+- *(fonts)* Remove section separator comments
+
+
+### Documentation
+
+- *(readme)* Note that built-in fonts work without system fonts installed
+- *(readme)* Add embedded bytes font loading mode and usage example
+
 ## [0.2.1] - 2026-01-27
 
 ### Features
