@@ -254,7 +254,139 @@ fn load_builtin_family(name: &str) -> Result<FontFamily<FontData>, Error> {
     })
 }
 
-/// Load metrics data for built-in fonts from a system Helvetica-compatible font.
+/// Minimal TrueType font with Helvetica-compatible vertical metrics.
+///
+/// Contains only the tables needed by rusttype for metrics extraction:
+/// `head` (unitsPerEm=1000), `hhea` (ascent=770, descent=-230, lineGap=0),
+/// `maxp`, `hmtx`, `loca`, `glyf`, `cmap`, `post`.
+///
+/// genpdfi discards these bytes for built-in fonts (using `BuiltinFont` for PDF
+/// embedding) and only needs them to extract ascent/descent/lineGap via rusttype.
+/// Horizontal char widths are already hardcoded in genpdfi's `builtin_char_h_metrics()`.
+#[rustfmt::skip]
+const FALLBACK_METRICS_FONT: &[u8] = &[
+    // === Offset Table (12 bytes) ===
+    0x00, 0x01, 0x00, 0x00, // sfVersion = 1.0
+    0x00, 0x08,             // numTables = 8
+    0x00, 0x80,             // searchRange = 128
+    0x00, 0x03,             // entrySelector = 3
+    0x00, 0x00,             // rangeShift = 0
+
+    // === Table Directory (128 bytes, 8 entries, alphabetical) ===
+    // cmap
+    0x63, 0x6D, 0x61, 0x70, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xF6, 0x00, 0x00, 0x00, 0x24,
+    // glyf
+    0x67, 0x6C, 0x79, 0x66, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xF4, 0x00, 0x00, 0x00, 0x02,
+    // head
+    0x68, 0x65, 0x61, 0x64, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x8C, 0x00, 0x00, 0x00, 0x36,
+    // hhea
+    0x68, 0x68, 0x65, 0x61, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xC2, 0x00, 0x00, 0x00, 0x24,
+    // hmtx
+    0x68, 0x6D, 0x74, 0x78, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xEC, 0x00, 0x00, 0x00, 0x04,
+    // loca
+    0x6C, 0x6F, 0x63, 0x61, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xF0, 0x00, 0x00, 0x00, 0x04,
+    // maxp
+    0x6D, 0x61, 0x78, 0x70, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xE6, 0x00, 0x00, 0x00, 0x06,
+    // post
+    0x70, 0x6F, 0x73, 0x74, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x1A, 0x00, 0x00, 0x00, 0x20,
+
+    // === head table (54 bytes) at offset 140 ===
+    0x00, 0x01, 0x00, 0x00, // version = 1.0
+    0x00, 0x01, 0x00, 0x00, // fontRevision = 1.0
+    0x00, 0x00, 0x00, 0x00, // checksumAdjustment = 0
+    0x5F, 0x0F, 0x3C, 0xF5, // magicNumber
+    0x00, 0x0B,             // flags
+    0x03, 0xE8,             // unitsPerEm = 1000
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // created
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // modified
+    0x00, 0x00,             // xMin
+    0x00, 0x00,             // yMin
+    0x03, 0xE8,             // xMax = 1000
+    0x03, 0xE8,             // yMax = 1000
+    0x00, 0x00,             // macStyle
+    0x00, 0x08,             // lowestRecPPEM = 8
+    0x00, 0x02,             // fontDirectionHint
+    0x00, 0x00,             // indexToLocFormat = 0 (short)
+    0x00, 0x00,             // glyphDataFormat
+
+    // === hhea table (36 bytes) at offset 194 ===
+    0x00, 0x01, 0x00, 0x00, // version = 1.0
+    0x03, 0x02,             // ascent = 770
+    0xFF, 0x1A,             // descent = -230
+    0x00, 0x00,             // lineGap = 0
+    0x03, 0xE8,             // advanceWidthMax = 1000
+    0x00, 0x00,             // minLeftSideBearing
+    0x00, 0x00,             // minRightSideBearing
+    0x03, 0xE8,             // xMaxExtent = 1000
+    0x00, 0x01,             // caretSlopeRise = 1
+    0x00, 0x00,             // caretSlopeRun = 0
+    0x00, 0x00,             // caretOffset
+    0x00, 0x00,             // reserved
+    0x00, 0x00,             // reserved
+    0x00, 0x00,             // reserved
+    0x00, 0x00,             // reserved
+    0x00, 0x00,             // metricDataFormat
+    0x00, 0x01,             // numOfLongHorMetrics = 1
+
+    // === maxp table (6 bytes) at offset 230 ===
+    0x00, 0x00, 0x50, 0x00, // version = 0.5
+    0x00, 0x01,             // numGlyphs = 1
+
+    // === hmtx table (4 bytes) at offset 236 ===
+    0x01, 0xF4,             // advanceWidth = 500
+    0x00, 0x00,             // leftSideBearing = 0
+
+    // === loca table (4 bytes) at offset 240 ===
+    0x00, 0x00,             // offset[0] = 0
+    0x00, 0x00,             // offset[1] = 0 (glyph 0 is empty)
+
+    // === glyf table (2 bytes) at offset 244 ===
+    0x00, 0x00,             // empty glyph data
+
+    // === cmap table (36 bytes) at offset 246 ===
+    0x00, 0x00,             // version = 0
+    0x00, 0x01,             // numSubtables = 1
+    0x00, 0x00,             // platformID = 0 (Unicode)
+    0x00, 0x03,             // encodingID = 3
+    0x00, 0x00, 0x00, 0x0C, // offset = 12 (to format 4 subtable)
+    // Format 4 subtable
+    0x00, 0x04,             // format = 4
+    0x00, 0x18,             // length = 24
+    0x00, 0x00,             // language = 0
+    0x00, 0x02,             // segCountX2 = 2
+    0x00, 0x02,             // searchRange = 2
+    0x00, 0x00,             // entrySelector = 0
+    0x00, 0x00,             // rangeShift = 0
+    0xFF, 0xFF,             // endCode[0] = 0xFFFF
+    0x00, 0x00,             // reservedPad
+    0xFF, 0xFF,             // startCode[0] = 0xFFFF
+    0x00, 0x01,             // idDelta[0] = 1
+    0x00, 0x00,             // idRangeOffset[0] = 0
+
+    // === post table (32 bytes) at offset 282 ===
+    0x00, 0x03, 0x00, 0x00, // format = 3.0
+    0x00, 0x00, 0x00, 0x00, // italicAngle = 0
+    0xFF, 0x9C,             // underlinePosition = -100
+    0x00, 0x32,             // underlineThickness = 50
+    0x00, 0x00, 0x00, 0x00, // isFixedPitch = 0
+    0x00, 0x00, 0x00, 0x00, // minMemType42
+    0x00, 0x00, 0x00, 0x00, // maxMemType42
+    0x00, 0x00, 0x00, 0x00, // minMemType1
+    0x00, 0x00, 0x00, 0x00, // maxMemType1
+];
+
+/// Load metrics data for built-in fonts.
+///
+/// Tries system fonts first for best metrics accuracy, then falls back to the
+/// embedded minimal TrueType font with standard Helvetica metrics.
 fn load_builtin_metrics() -> Result<Vec<u8>, Error> {
     // Try to find a Helvetica-compatible font for metrics
     let candidates = [
@@ -274,10 +406,11 @@ fn load_builtin_metrics() -> Result<Vec<u8>, Error> {
         }
     }
 
-    Err(Error::new(
-        "Could not find a font for built-in metrics. Install Arial or Helvetica.",
-        ErrorKind::InvalidFont,
-    ))
+    info!(
+        "No system font found for metrics; using embedded fallback \
+         (ascent=770, descent=-230, unitsPerEm=1000)"
+    );
+    Ok(FALLBACK_METRICS_FONT.to_vec())
 }
 
 /// Load a system font family by name.
@@ -608,5 +741,107 @@ mod tests {
         assert!(matches!(source, FontSource::Bytes(_)));
         // Loading should fail gracefully, not panic
         assert!(load_font_family(source).is_err());
+    }
+
+    #[test]
+    fn test_fallback_metrics_font_is_valid() {
+        // The embedded fallback font must be parseable by genpdfi/rusttype
+        let data = FALLBACK_METRICS_FONT.to_vec();
+        let shared = std::sync::Arc::new(data);
+        let result = FontData::new_shared(shared, Some(BuiltinFont::Helvetica));
+        assert!(result.is_ok(), "Fallback font should be parseable by rusttype");
+    }
+
+    #[test]
+    fn test_load_builtin_metrics_always_succeeds() {
+        // load_builtin_metrics should never fail thanks to the embedded fallback
+        let result = load_builtin_metrics();
+        assert!(result.is_ok(), "load_builtin_metrics should always succeed");
+        assert!(!result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_fallback_font_produces_valid_pdf() {
+        // Simulate a fontless environment (Docker/CI): build font families
+        // purely from FALLBACK_METRICS_FONT, then render a full PDF to bytes.
+        // This bypasses system font search entirely.
+        let metrics = FALLBACK_METRICS_FONT.to_vec();
+        let shared = Arc::new(metrics);
+
+        // Build all 4 Helvetica variants — same as load_builtin_family()
+        let regular = FontData::new_shared(shared.clone(), Some(BuiltinFont::Helvetica)).unwrap();
+        let bold = FontData::new_shared(shared.clone(), Some(BuiltinFont::HelveticaBold)).unwrap();
+        let italic =
+            FontData::new_shared(shared.clone(), Some(BuiltinFont::HelveticaOblique)).unwrap();
+        let bold_italic =
+            FontData::new_shared(shared, Some(BuiltinFont::HelveticaBoldOblique)).unwrap();
+
+        let family = FontFamily {
+            regular,
+            bold,
+            italic,
+            bold_italic,
+        };
+
+        // Create a document and render content with bold/italic
+        let mut doc = genpdfi::Document::new(family);
+        let mut decorator = genpdfi::SimplePageDecorator::new();
+        decorator.set_margins(genpdfi::Margins::trbl(10, 10, 10, 10));
+        doc.set_page_decorator(decorator);
+        doc.set_font_size(12);
+
+        let mut para = genpdfi::elements::Paragraph::default();
+        para.push_styled("Normal, ", genpdfi::style::Style::new());
+        para.push_styled("bold, ", genpdfi::style::Style::new().bold());
+        para.push_styled("italic, ", genpdfi::style::Style::new().italic());
+        para.push_styled("bold-italic.", genpdfi::style::Style::new().bold().italic());
+        doc.push(para);
+
+        // Render to bytes and verify it's a valid PDF
+        let mut buf = std::io::Cursor::new(Vec::new());
+        doc.render(&mut buf).expect("PDF rendering should succeed");
+        let pdf_bytes = buf.into_inner();
+        assert!(pdf_bytes.starts_with(b"%PDF-"), "Output must be a valid PDF");
+        assert!(pdf_bytes.len() > 100, "PDF should have meaningful content");
+    }
+
+    #[test]
+    fn test_fallback_all_builtin_variants() {
+        // Verify all 3 built-in font families work with the fallback
+        let metrics = FALLBACK_METRICS_FONT.to_vec();
+        let shared = Arc::new(metrics);
+
+        for (name, regular, bold, italic, bold_italic) in [
+            (
+                "Helvetica",
+                BuiltinFont::Helvetica,
+                BuiltinFont::HelveticaBold,
+                BuiltinFont::HelveticaOblique,
+                BuiltinFont::HelveticaBoldOblique,
+            ),
+            (
+                "Times",
+                BuiltinFont::TimesRoman,
+                BuiltinFont::TimesBold,
+                BuiltinFont::TimesItalic,
+                BuiltinFont::TimesBoldItalic,
+            ),
+            (
+                "Courier",
+                BuiltinFont::Courier,
+                BuiltinFont::CourierBold,
+                BuiltinFont::CourierOblique,
+                BuiltinFont::CourierBoldOblique,
+            ),
+        ] {
+            FontData::new_shared(shared.clone(), Some(regular))
+                .unwrap_or_else(|e| panic!("{} regular failed: {}", name, e));
+            FontData::new_shared(shared.clone(), Some(bold))
+                .unwrap_or_else(|e| panic!("{} bold failed: {}", name, e));
+            FontData::new_shared(shared.clone(), Some(italic))
+                .unwrap_or_else(|e| panic!("{} italic failed: {}", name, e));
+            FontData::new_shared(shared.clone(), Some(bold_italic))
+                .unwrap_or_else(|e| panic!("{} bold_italic failed: {}", name, e));
+        }
     }
 }

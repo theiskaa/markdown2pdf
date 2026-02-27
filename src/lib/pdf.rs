@@ -55,7 +55,7 @@ impl Pdf {
         input: Vec<Token>,
         style: StyleMatch,
         font_config: Option<&crate::fonts::FontConfig>,
-    ) -> Self {
+    ) -> Result<Self, crate::MdpError> {
         // Get the requested font name
         let family_name = font_config
             .and_then(|cfg| cfg.default_font.as_deref())
@@ -76,19 +76,28 @@ impl Pdf {
                 | "monospace"
         );
 
+        let font_err = |name: &str, e: &dyn std::fmt::Display| crate::MdpError::FontError {
+            font_name: name.to_string(),
+            message: e.to_string(),
+            suggestion: "Ensure font files are accessible or use a built-in font (Helvetica, Times, Courier).".to_string(),
+        };
+
         // Load main font
         let font_family = if let Some(source) =
             font_config.and_then(|c| c.default_font_source.clone())
         {
-            crate::fonts::load_font_family(source).unwrap_or_else(|e| {
-                warn!("Could not load font from source: {}. Using Helvetica.", e);
-                crate::fonts::load_builtin_font_family("Helvetica")
-                    .expect("Failed to load Helvetica")
-            })
+            match crate::fonts::load_font_family(source) {
+                Ok(font) => font,
+                Err(e) => {
+                    warn!("Could not load font from source: {}. Using Helvetica.", e);
+                    crate::fonts::load_builtin_font_family("Helvetica")
+                        .map_err(|e| font_err("Helvetica", &e))?
+                }
+            }
         } else if is_builtin {
             // Fast path: built-in fonts need no file I/O for rendering
             crate::fonts::load_builtin_font_family(family_name)
-                .expect("Failed to load built-in font")
+                .map_err(|e| font_err(family_name, &e))?
         } else {
             // Custom font: collect text for subsetting if enabled
             let text = if font_config.map(|c| c.enable_subsetting).unwrap_or(true) {
@@ -97,14 +106,17 @@ impl Pdf {
                 None
             };
 
-            crate::fonts::load_font(family_name, font_config, text.as_deref()).unwrap_or_else(|e| {
-                warn!(
-                    "Could not load font '{}': {}. Using Helvetica.",
-                    family_name, e
-                );
-                crate::fonts::load_builtin_font_family("Helvetica")
-                    .expect("Failed to load Helvetica")
-            })
+            match crate::fonts::load_font(family_name, font_config, text.as_deref()) {
+                Ok(font) => font,
+                Err(e) => {
+                    warn!(
+                        "Could not load font '{}': {}. Using Helvetica.",
+                        family_name, e
+                    );
+                    crate::fonts::load_builtin_font_family("Helvetica")
+                        .map_err(|e| font_err("Helvetica", &e))?
+                }
+            }
         };
 
         // Load code font (built-in Courier is fastest)
@@ -115,23 +127,28 @@ impl Pdf {
         let code_font_family = if let Some(source) =
             font_config.and_then(|c| c.code_font_source.clone())
         {
-            crate::fonts::load_font_family(source).unwrap_or_else(|e| {
-                warn!("Could not load code font from source: {}. Using Courier.", e);
-                crate::fonts::load_builtin_font_family("Courier")
-                    .expect("Failed to load Courier")
-            })
+            match crate::fonts::load_font_family(source) {
+                Ok(font) => font,
+                Err(e) => {
+                    warn!("Could not load code font from source: {}. Using Courier.", e);
+                    crate::fonts::load_builtin_font_family("Courier")
+                        .map_err(|e| font_err("Courier", &e))?
+                }
+            }
         } else {
-            crate::fonts::load_builtin_font_family(code_font_name).unwrap_or_else(|_| {
-                crate::fonts::load_builtin_font_family("Courier").expect("Failed to load Courier")
-            })
+            match crate::fonts::load_builtin_font_family(code_font_name) {
+                Ok(font) => font,
+                Err(_) => crate::fonts::load_builtin_font_family("Courier")
+                    .map_err(|e| font_err("Courier", &e))?,
+            }
         };
 
-        Self {
+        Ok(Self {
             input,
             style,
             font_family,
             code_font_family,
-        }
+        })
     }
 
     /// Finalizes and outputs the processed document to a PDF file at the specified path.
@@ -569,7 +586,7 @@ mod tests {
 
     // Helper function to create a basic PDF instance for testing
     fn create_test_pdf(tokens: Vec<Token>) -> Pdf {
-        Pdf::new(tokens, StyleMatch::default(), None)
+        Pdf::new(tokens, StyleMatch::default(), None).expect("Failed to create test PDF")
     }
 
     #[test]
