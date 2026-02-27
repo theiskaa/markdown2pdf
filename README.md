@@ -119,7 +119,7 @@ Use `--verbose` for detailed output, `--quiet` for CI/CD pipelines, or `--dry-ru
 
 The font system supports four modes:
 
-- **Built-in fonts**: Helvetica, Times, Courier (fastest, no file I/O)
+- **Built-in fonts**: Helvetica, Times, Courier (fastest, no file I/O, works everywhere including Docker/CI with no system fonts)
 - **System fonts**: Searches standard OS font directories
 - **File paths**: Load directly from a TTF/OTF file
 - **Embedded bytes**: Load from compile-time included font data (great for GUI apps)
@@ -136,6 +136,8 @@ markdown2pdf -p document.md --default-font "/path/to/font.ttf" -o output.pdf
 ```
 
 Font subsetting is enabled by default, reducing PDF size by embedding only the glyphs used in the document. A Unicode document with Arial Unicode MS produces ~45KB instead of 23MB.
+
+Built-in fonts work out of the box in any environment, including minimal Docker images (`rust:slim`, `debian:slim`, Alpine) and CI runners with no fonts installed. The library ships with embedded font metrics so no external font files are needed for Helvetica, Times, or Courier.
 
 Performance is ~20ms for standard documents with built-in fonts.
 
