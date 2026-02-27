@@ -317,7 +317,7 @@ pub fn parse_into_file(
     })?;
 
     let style = config::load_config_from_source(config);
-    let pdf = Pdf::new(tokens, style, font_config);
+    let pdf = Pdf::new(tokens, style, font_config)?;
     let document = pdf.render_into_document();
 
     if let Some(err) = Pdf::render(document, path) {
@@ -397,7 +397,7 @@ pub fn parse_into_bytes(
     })?;
 
     let style = config::load_config_from_source(config);
-    let pdf = Pdf::new(tokens, style, font_config);
+    let pdf = Pdf::new(tokens, style, font_config)?;
     let document = pdf.render_into_document();
 
     Pdf::render_to_bytes(document).map_err(|err| MdpError::PdfError {
