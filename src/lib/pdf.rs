@@ -280,6 +280,13 @@ impl Pdf {
                     self.flush_paragraph(doc, &current_tokens);
                     current_tokens.clear();
                 }
+                Token::HardBreak => {
+                    // Flush current paragraph and force a line break — the
+                    // visual effect for a hard break in our renderer is the
+                    // same as a paragraph boundary at the moment.
+                    self.flush_paragraph(doc, &current_tokens);
+                    current_tokens.clear();
+                }
                 Token::Table {
                     headers,
                     aligns,
