@@ -248,7 +248,13 @@ impl Lexer {
             let ch = self.current_char();
 
             if is_delimiter(ch) {
-                break;
+                // `_` runs flanked by alphanumerics on both sides are intra-word
+                // and per CommonMark must not close emphasis (e.g. `_foo_bar_`).
+                if ch == '_' && self.is_intra_word_underscore_run(self.position) {
+                    // fall through and consume as regular content
+                } else {
+                    break;
+                }
             }
 
             // Handle nested content
@@ -323,7 +329,9 @@ impl Lexer {
             '*' if is_line_start && allow_block_tokens(ctx) && self.is_list_marker('*') => {
                 self.parse_list_item(false, 0, ctx)?
             }
-            '*' | '_' => self.parse_emphasis()?,
+            '*' => self.parse_emphasis()?,
+            '_' if !self.is_intra_word_underscore_run(self.position) => self.parse_emphasis()?,
+            '_' => self.parse_text(ctx)?,
             '`' => self.parse_code()?,
             '>' if is_line_start && allow_block_tokens(ctx) => self.parse_blockquote()?,
             '-' | '+' if is_line_start && allow_block_tokens(ctx) => {
@@ -395,9 +403,10 @@ impl Lexer {
         // Ensure proper closing
         for _ in 0..level {
             if self.current_char() != delimiter {
+                let (line, col) = self.pos_to_line_col(start_pos);
                 return Err(LexerError::UnknownToken(format!(
-                    "Unmatched emphasis at position {}",
-                    start_pos
+                    "Unmatched emphasis at line {}, column {}",
+                    line, col
                 )));
             }
             self.advance();
@@ -506,7 +515,11 @@ impl Lexer {
                 self.advance(); // skip ')'
                 Ok(Token::Image(alt_text, url))
             } else {
-                Err(LexerError::UnknownToken(alt_text))
+                let (line, col) = self.pos_to_line_col(start_pos);
+                Err(LexerError::UnknownToken(format!(
+                    "Malformed image (missing URL) at line {}, column {}",
+                    line, col
+                )))
             }
         } else {
             // If '!' is not followed by '[', treat it as regular text
@@ -545,9 +558,10 @@ impl Lexer {
         }
 
         if content.is_empty() {
+            let (line, col) = self.pos_to_line_col(start_pos);
             Err(LexerError::UnknownToken(format!(
-                "Unexpected character at position {}",
-                start_pos
+                "Unexpected character at line {}, column {}",
+                line, col
             )))
         } else {
             Ok(Token::Text(content))
@@ -634,10 +648,16 @@ impl Lexer {
     fn is_start_of_special_token(&self, ctx: ParseContext) -> bool {
         let ch = self.current_char();
         match ch {
-            '#' if matches!(ctx, ParseContext::Root) => true,
+            // `#` is not listed: heading detection is gated on `is_line_start` in
+            // `next_token`, and `parse_text` already breaks on '\n'. Treating mid-paragraph
+            // `#` as special caused inputs like "C# is great" to fail with UnknownToken.
 
             // inline-compatible tokens
-            '*' | '_' | '`' | '[' => true,
+            '*' | '`' | '[' => true,
+
+            // `_` only opens emphasis when the run is not intra-word.
+            // `phpmyadmin/localized_docs` keeps the underscore as literal text.
+            '_' => !self.is_intra_word_underscore_run(self.position),
 
             '!' => {
                 if self.position + 1 < self.input.len() {
@@ -657,6 +677,55 @@ impl Lexer {
 
             _ => false,
         }
+    }
+
+    /// Converts a flat character offset into a 1-based (line, column) pair so
+    /// error messages point users at a specific spot in the input.
+    fn pos_to_line_col(&self, pos: usize) -> (usize, usize) {
+        let mut line = 1usize;
+        let mut col = 1usize;
+        let limit = pos.min(self.input.len());
+        for ch in &self.input[..limit] {
+            if *ch == '\n' {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
+
+    /// Returns true when the `_` run at `pos` is "intra-word" — i.e. flanked on
+    /// both sides by alphanumeric characters. CommonMark forbids such runs from
+    /// opening or closing emphasis, so things like `foo_bar` and `foo__bar`
+    /// stay as literal text.
+    fn is_intra_word_underscore_run(&self, pos: usize) -> bool {
+        if self.input.get(pos) != Some(&'_') {
+            return false;
+        }
+
+        let mut start = pos;
+        while start > 0 && self.input[start - 1] == '_' {
+            start -= 1;
+        }
+
+        let mut end = pos;
+        while end + 1 < self.input.len() && self.input[end + 1] == '_' {
+            end += 1;
+        }
+
+        let before = if start == 0 {
+            None
+        } else {
+            self.input.get(start - 1).copied()
+        };
+        let after = self.input.get(end + 1).copied();
+
+        matches!(
+            (before, after),
+            (Some(a), Some(b)) if a.is_alphanumeric() && b.is_alphanumeric()
+        )
     }
 
     /// Checks if we're immediately after a special token that should preserve following spaces
@@ -1359,5 +1428,387 @@ A paragraph with `code` and [link](url).
                 ],
             }]
         );
+    }
+}
+
+#[cfg(test)]
+mod heading_hash_in_paragraph_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn csharp_in_paragraph_is_text() {
+        let tokens = parse("This uses C# heavily");
+        assert_eq!(tokens, vec![Token::Text("This uses C# heavily".to_string())]);
+    }
+
+    #[test]
+    fn multiple_hashes_in_paragraph() {
+        let tokens = parse("Compare C# and F# please");
+        assert_eq!(
+            tokens,
+            vec![Token::Text("Compare C# and F# please".to_string())]
+        );
+    }
+
+    #[test]
+    fn trailing_hash_in_paragraph() {
+        let tokens = parse("ends with C#");
+        assert_eq!(tokens, vec![Token::Text("ends with C#".to_string())]);
+    }
+
+    #[test]
+    fn line_start_heading_still_works() {
+        let tokens = parse("# Real heading");
+        assert_eq!(
+            tokens,
+            vec![Token::Heading(
+                vec![Token::Text("Real heading".to_string())],
+                1
+            )]
+        );
+    }
+
+    #[test]
+    fn heading_with_hash_in_content() {
+        let tokens = parse("## Summary about C#");
+        assert_eq!(
+            tokens,
+            vec![Token::Heading(
+                vec![Token::Text("Summary about C#".to_string())],
+                2
+            )]
+        );
+    }
+
+    #[test]
+    fn paragraph_then_heading() {
+        let tokens = parse("first uses C#\n# heading");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Text("first uses C#".to_string()),
+                Token::Newline,
+                Token::Heading(vec![Token::Text("heading".to_string())], 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn heading_then_paragraph_with_hash() {
+        let tokens = parse("# Title\n\nbody mentions C# here");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Heading(vec![Token::Text("Title".to_string())], 1),
+                Token::Newline,
+                Token::Newline,
+                Token::Text("body mentions C# here".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn full_csharp_issue_repro() {
+        // Exact reproducer from issues/csharp.md
+        let input = "## Summary\n\nThis monorepo is a coordination layer over four independent implementations of the same problem set. Clojure defines the Clojure algorithmic source, and C#, Rust, and Elixir mirror that source in their own idioms. The container repo keeps the system organized through ZSH-based orchestration, documentation, and repo-wide conventions.";
+        let mut lexer = Lexer::new(input.to_string());
+        let tokens = lexer.parse().expect("must not error on C# in paragraph");
+
+        assert!(matches!(tokens[0], Token::Heading(_, 2)));
+        let body = Token::collect_all_text(&tokens);
+        assert!(body.contains("C#"));
+        assert!(body.contains("Rust"));
+        assert!(body.contains("Elixir"));
+    }
+}
+
+#[cfg(test)]
+mod intra_word_underscore_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn single_intra_word_underscore() {
+        let tokens = parse("foo_bar");
+        assert_eq!(tokens, vec![Token::Text("foo_bar".to_string())]);
+    }
+
+    #[test]
+    fn double_intra_word_underscore() {
+        let tokens = parse("foo__bar");
+        assert_eq!(tokens, vec![Token::Text("foo__bar".to_string())]);
+    }
+
+    #[test]
+    fn triple_intra_word_underscore() {
+        let tokens = parse("foo___bar");
+        assert_eq!(tokens, vec![Token::Text("foo___bar".to_string())]);
+    }
+
+    #[test]
+    fn multiple_intra_word_underscores() {
+        let tokens = parse("foo_bar_baz_qux");
+        assert_eq!(tokens, vec![Token::Text("foo_bar_baz_qux".to_string())]);
+    }
+
+    #[test]
+    fn snake_case_identifier() {
+        let tokens = parse("snake_case_variable");
+        assert_eq!(tokens, vec![Token::Text("snake_case_variable".to_string())]);
+    }
+
+    #[test]
+    fn upper_snake_case() {
+        let tokens = parse("UPPER_CASE_CONSTANT");
+        assert_eq!(tokens, vec![Token::Text("UPPER_CASE_CONSTANT".to_string())]);
+    }
+
+    #[test]
+    fn path_with_underscore() {
+        let tokens = parse("phpmyadmin/localized_docs");
+        assert_eq!(
+            tokens,
+            vec![Token::Text("phpmyadmin/localized_docs".to_string())]
+        );
+    }
+
+    #[test]
+    fn underscore_path_in_sentence() {
+        let tokens = parse("blabla phpmyadmin/localized_docs blabla");
+        assert_eq!(
+            tokens,
+            vec![Token::Text(
+                "blabla phpmyadmin/localized_docs blabla".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn heading_with_intra_word_underscore() {
+        let tokens = parse("## phpmyadmin/localized_docs (GitHub)");
+        assert_eq!(
+            tokens,
+            vec![Token::Heading(
+                vec![Token::Text("phpmyadmin/localized_docs (GitHub)".to_string())],
+                2
+            )]
+        );
+    }
+
+    #[test]
+    fn heading_with_code_containing_underscore() {
+        let tokens = parse("## `phpmyadmin/localized_docs` (GitHub)");
+        if let Token::Heading(content, 2) = &tokens[0] {
+            assert!(matches!(content[0], Token::Code(_, _)));
+            if let Token::Code(_, code) = &content[0] {
+                assert_eq!(code, "phpmyadmin/localized_docs");
+            }
+        } else {
+            panic!("expected H2 heading, got {:?}", tokens);
+        }
+    }
+
+    // Emphasis still works (regression)
+
+    #[test]
+    fn single_underscore_emphasis_still_works() {
+        let tokens = parse("_italic_");
+        assert!(matches!(tokens[0], Token::Emphasis { level: 1, .. }));
+    }
+
+    #[test]
+    fn double_underscore_strong_still_works() {
+        let tokens = parse("__bold__");
+        assert!(matches!(tokens[0], Token::Emphasis { level: 2, .. }));
+    }
+
+    #[test]
+    fn underscore_emphasis_with_space_flank() {
+        let tokens = parse("foo _bar_ baz");
+        // foo_<space> Text, then _bar_ Emphasis, then baz Text
+        // (existing whitespace handling collapses the space after closing `_`)
+        assert!(matches!(tokens[0], Token::Text(ref s) if s.starts_with("foo")));
+        assert!(matches!(tokens[1], Token::Emphasis { level: 1, .. }));
+        assert!(matches!(tokens[2], Token::Text(ref s) if s.contains("baz")));
+        if let Token::Emphasis { content, .. } = &tokens[1] {
+            let inner = Token::collect_all_text(content);
+            assert!(inner.contains("bar"));
+        }
+    }
+
+    #[test]
+    fn underscore_emphasis_in_parens() {
+        let tokens = parse("(_foo_)");
+        assert!(matches!(tokens[0], Token::Text(ref s) if s == "("));
+        assert!(matches!(tokens[1], Token::Emphasis { level: 1, .. }));
+        assert!(matches!(tokens[2], Token::Text(ref s) if s == ")"));
+    }
+
+    // CommonMark-tricky: outer _ open/close, inner _ is intra-word
+    #[test]
+    fn outer_emphasis_with_inner_intra_word_underscore() {
+        let tokens = parse("_foo_bar_");
+        // Should be one emphasis with text "foo_bar"
+        assert!(matches!(tokens[0], Token::Emphasis { level: 1, .. }));
+        let inner_text = Token::collect_all_text(&[tokens[0].clone()]);
+        assert!(
+            inner_text.contains("foo_bar"),
+            "expected emphasis to contain 'foo_bar', got {:?}",
+            tokens
+        );
+    }
+
+    // Star emphasis must remain unchanged
+
+    #[test]
+    fn star_emphasis_intra_word_still_emphasis() {
+        // Per CommonMark, * is allowed intra-word
+        let tokens = parse("a*b*c");
+        assert!(matches!(tokens[0], Token::Text(ref s) if s == "a"));
+        assert!(matches!(tokens[1], Token::Emphasis { level: 1, .. }));
+        assert!(matches!(tokens[2], Token::Text(ref s) if s == "c"));
+    }
+
+    #[test]
+    fn star_emphasis_basic() {
+        let tokens = parse("*italic*");
+        assert!(matches!(tokens[0], Token::Emphasis { level: 1, .. }));
+    }
+
+    #[test]
+    fn star_strong() {
+        let tokens = parse("**bold**");
+        assert!(matches!(tokens[0], Token::Emphasis { level: 2, .. }));
+    }
+
+    // Cross-context
+
+    #[test]
+    fn list_item_with_intra_word_underscore() {
+        let tokens = parse("- foo_bar item");
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("foo_bar"));
+        } else {
+            panic!("expected list item, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn blockquote_with_intra_word_underscore() {
+        let tokens = parse("> Quote with foo_bar inside");
+        assert_eq!(
+            tokens,
+            vec![Token::BlockQuote("Quote with foo_bar inside".to_string())]
+        );
+    }
+
+    #[test]
+    fn link_with_intra_word_underscore() {
+        let tokens = parse("[link_text](https://example.com)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link(
+                "link_text".to_string(),
+                "https://example.com".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn code_with_underscore() {
+        let tokens = parse("`foo_bar`");
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), "foo_bar".to_string())]
+        );
+    }
+
+    #[test]
+    fn image_alt_with_underscore() {
+        let tokens = parse("![alt_text](img.png)");
+        assert_eq!(
+            tokens,
+            vec![Token::Image("alt_text".to_string(), "img.png".to_string())]
+        );
+    }
+
+    // Real-world reproducer from issues/unmatching.md
+    #[test]
+    fn full_unmatching_issue_repro() {
+        let input = "## `phpmyadmin/localized_docs` (GitHub)\n## phpmyadmin/localized_docs (GitHub)";
+        let mut lexer = Lexer::new(input.to_string());
+        let tokens = lexer.parse().expect("must not error on intra-word _");
+
+        // Two headings, separated by Newline
+        assert!(matches!(tokens[0], Token::Heading(_, 2)));
+        let last_heading = tokens
+            .iter()
+            .rev()
+            .find(|t| matches!(t, Token::Heading(_, 2)))
+            .unwrap();
+        if let Token::Heading(content, _) = last_heading {
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("phpmyadmin/localized_docs"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod error_position_tests {
+    use super::*;
+
+    #[test]
+    fn error_message_uses_line_and_column() {
+        let mut lexer = Lexer::new("![Invalid".to_string());
+        let err = lexer.parse().unwrap_err();
+        match err {
+            LexerError::UnknownToken(msg) => {
+                assert!(
+                    msg.contains("line"),
+                    "error message should contain 'line', got: {}",
+                    msg
+                );
+                assert!(
+                    msg.contains("column"),
+                    "error message should contain 'column', got: {}",
+                    msg
+                );
+            }
+            other => panic!("expected UnknownToken, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn error_reports_correct_line() {
+        // Force an error on line 3 with an unmatched _ on its own
+        let input = "first line\nsecond line\n_unmatched";
+        let mut lexer = Lexer::new(input.to_string());
+        let err = lexer.parse().unwrap_err();
+        if let LexerError::UnknownToken(msg) = err {
+            assert!(
+                msg.contains("line 3"),
+                "expected 'line 3' in message, got: {}",
+                msg
+            );
+        } else {
+            panic!("expected UnknownToken");
+        }
+    }
+
+    #[test]
+    fn error_variant_still_matches() {
+        // Regression: existing test_error_cases pattern still works
+        let mut lexer = Lexer::new("![Invalid".to_string());
+        assert!(matches!(lexer.parse(), Err(LexerError::UnknownToken(_))));
     }
 }
