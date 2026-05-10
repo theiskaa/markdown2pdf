@@ -74,7 +74,7 @@ The library provides optional feature flags to control dependencies:
 
 ```toml
 # Minimal installation (no network dependencies)
-markdown2pdf = "0.2.2"
+markdown2pdf = "0.3.0"
 ```
 
 ```toml
