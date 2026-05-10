@@ -6,7 +6,6 @@
 [![Documentation](https://img.shields.io/docsrs/markdown2pdf)](https://docs.rs/markdown2pdf)
 [![License](https://img.shields.io/crates/l/markdown2pdf)](LICENSE)
 [![Downloads](https://img.shields.io/crates/d/markdown2pdf)](https://crates.io/crates/markdown2pdf)
-[![GitHub Stars](https://img.shields.io/github/stars/theiskaa/markdown2pdf)](https://github.com/theiskaa/markdown2pdf/stargazers)
 
 </p>
 
@@ -14,7 +13,7 @@ markdown2pdf converts Markdown to PDF using a lexical analyzer and PDF rendering
 
 Both binary and library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
 
-Built in Rust for performance and memory safety. The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions and currently covers around 85% of the spec, including escapes, emphasis flanking, reference links, indented and fenced code blocks, blockquotes with nested blocks, lazy list continuation, autolinks, entities, hard breaks, GFM tables, task lists and strikethrough. See [Markdown coverage](#markdown-coverage) below for the full breakdown. Supports multiple input sources and outputs to files or bytes for in-memory processing.
+The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions and currently covers around 85% of the spec, including escapes, emphasis flanking, reference links, indented and fenced code blocks, blockquotes with nested blocks, lazy list continuation, autolinks, entities, hard breaks, GFM tables, task lists and strikethrough. See [Markdown coverage](#markdown-coverage) below for the full breakdown. Supports multiple input sources and outputs to files or bytes for in-memory processing.
 
 ## Install binary
 
@@ -167,7 +166,7 @@ parse_into_file(markdown, "output.pdf", ConfigSource::Default, None)?;
 parse_into_file(markdown, "output.pdf", ConfigSource::File("config.toml"), None)?;
 ```
 
-```rust 
+```rust
 // Embedded configuration
 const CONFIG: &str = include_str!("../config.toml");
 parse_into_file(markdown, "output.pdf", ConfigSource::Embedded(CONFIG), None)?;
