@@ -253,10 +253,11 @@ impl Pdf {
                     content,
                     ordered,
                     number,
+                    checked,
                 } => {
                     self.flush_paragraph(doc, &current_tokens);
                     current_tokens.clear();
-                    self.render_list_item(doc, content, *ordered, *number, 0);
+                    self.render_list_item(doc, content, *ordered, *number, *checked, 0);
                 }
                 Token::Code(lang, content) if content.contains('\n') => {
                     self.flush_paragraph(doc, &current_tokens);
@@ -269,6 +270,11 @@ impl Pdf {
                     doc.push(genpdfi::elements::Break::new(
                         self.style.horizontal_rule.after_spacing,
                     ));
+                }
+                Token::BlockQuote(body) => {
+                    self.flush_paragraph(doc, &current_tokens);
+                    current_tokens.clear();
+                    self.render_blockquote(doc, body);
                 }
                 Token::Newline => {
                     self.flush_paragraph(doc, &current_tokens);
@@ -403,6 +409,13 @@ impl Pdf {
                     }
                     para.push_styled(content.clone(), code_style);
                 }
+                Token::Strikethrough(content) => {
+                    // genpdfi doesn't expose a strikethrough text decoration,
+                    // so we surround the content with literal `~~` markers
+                    // for now. TODO: real strikethrough once supported.
+                    let inner = Token::collect_all_text(content);
+                    para.push_styled(format!("~~{}~~", inner), style.clone());
+                }
                 _ => {}
             }
         }
@@ -416,6 +429,33 @@ impl Pdf {
     fn render_inline_content(&self, para: &mut genpdfi::elements::Paragraph, tokens: &[Token]) {
         let style = genpdfi::style::Style::new().with_font_size(self.style.text.size);
         self.render_inline_content_with_style(para, tokens, style);
+    }
+
+    /// Renders a blockquote with the configured blockquote style. Body tokens
+    /// are inline-rendered into a single paragraph with a leading "> " prefix.
+    /// Block-level tokens inside the body (headings, lists) are flattened to
+    /// their text representation for now — full nested-block rendering is a
+    /// future improvement.
+    fn render_blockquote(&self, doc: &mut Document, body: &[Token]) {
+        let bq = &self.style.block_quote;
+        doc.push(genpdfi::elements::Break::new(bq.before_spacing));
+
+        let mut style = genpdfi::style::Style::new().with_font_size(bq.size);
+        if bq.italic {
+            style = style.italic();
+        }
+        if bq.bold {
+            style = style.bold();
+        }
+        if let Some(color) = bq.text_color {
+            style = style.with_color(genpdfi::style::Color::Rgb(color.0, color.1, color.2));
+        }
+
+        let mut para = genpdfi::elements::Paragraph::default();
+        para.push_styled("> ".to_string(), style.clone());
+        self.render_inline_content_with_style(&mut para, body, style);
+        doc.push(para);
+        doc.push(genpdfi::elements::Break::new(bq.after_spacing));
     }
 
     /// Renders a code block with appropriate styling.
@@ -463,6 +503,7 @@ impl Pdf {
         content: &[Token],
         ordered: bool,
         number: Option<usize>,
+        checked: Option<bool>,
         nesting_level: usize,
     ) {
         doc.push(genpdfi::elements::Break::new(
@@ -472,11 +513,19 @@ impl Pdf {
         let style = genpdfi::style::Style::new().with_font_size(self.style.list_item.size);
 
         let indent = "    ".repeat(nesting_level);
-        if !ordered {
-            para.push_styled(format!("{}- ", indent), style.clone());
+        let marker_prefix = if !ordered {
+            format!("{}- ", indent)
         } else if let Some(n) = number {
-            para.push_styled(format!("{}{}. ", indent, n), style.clone());
-        }
+            format!("{}{}. ", indent, n)
+        } else {
+            indent.clone()
+        };
+        let bullet = match checked {
+            Some(true) => format!("{}[x] ", marker_prefix),
+            Some(false) => format!("{}[ ] ", marker_prefix),
+            None => marker_prefix,
+        };
+        para.push_styled(bullet, style.clone());
 
         let inline_content: Vec<Token> = content
             .iter()
@@ -494,6 +543,7 @@ impl Pdf {
                 content: nested_content,
                 ordered: nested_ordered,
                 number: nested_number,
+                checked: nested_checked,
             } = token
             {
                 self.render_list_item(
@@ -501,6 +551,7 @@ impl Pdf {
                     nested_content,
                     *nested_ordered,
                     *nested_number,
+                    *nested_checked,
                     nesting_level + 1,
                 );
             }
@@ -636,11 +687,13 @@ mod tests {
                 content: vec![Token::Text("First item".to_string())],
                 ordered: false,
                 number: None,
+                checked: None,
             },
             Token::ListItem {
                 content: vec![Token::Text("Second item".to_string())],
                 ordered: true,
                 number: Some(1),
+                checked: None,
             },
         ];
         let pdf = create_test_pdf(tokens);
@@ -657,10 +710,12 @@ mod tests {
                     content: vec![Token::Text("Child item".to_string())],
                     ordered: false,
                     number: None,
+                    checked: None,
                 },
             ],
             ordered: false,
             number: None,
+            checked: None,
         }];
         let pdf = create_test_pdf(tokens);
         let doc = pdf.render_into_document();
@@ -730,6 +785,7 @@ mod tests {
                 content: vec![Token::Text("List item".to_string())],
                 ordered: false,
                 number: None,
+                checked: None,
             },
             Token::Code("rust".to_string(), "let x = 42;".to_string()),
         ];
@@ -792,11 +848,13 @@ mod tests {
                 content: vec![Token::Text("First item".to_string())],
                 ordered: false,
                 number: None,
+                checked: None,
             },
             Token::ListItem {
                 content: vec![Token::Text("Second item".to_string())],
                 ordered: false,
                 number: None,
+                checked: None,
             },
             Token::Code(
                 "rust".to_string(),
