@@ -65,13 +65,17 @@ pub enum Token {
     StrongEmphasis(Vec<Token>),
     /// Code block with optional language specification and content
     Code(String, String),
-    /// Block quote containing quoted text
-    BlockQuote(String),
+    /// Block quote whose body is itself a sequence of tokens (so emphasis,
+    /// links, code, etc. inside `> …` lines are properly parsed).
+    BlockQuote(Vec<Token>),
     /// List item with nested content and type information
     ListItem {
         content: Vec<Token>,
         ordered: bool,
         number: Option<usize>, // For ordered lists (e.g., "1.", "2.")
+        /// GFM task list state: `None` = regular item, `Some(false)` = `[ ]`,
+        /// `Some(true)` = `[x]` / `[X]`.
+        checked: Option<bool>,
     },
     /// Link with display text and URL
     Link(String, String),
@@ -93,6 +97,8 @@ pub enum Token {
     Newline,
     /// Horizontal rule (---)
     HorizontalRule,
+    /// GFM strikethrough (`~~text~~`).
+    Strikethrough(Vec<Token>),
     /// Unknown or malformed token
     Unknown(String),
 }
@@ -144,7 +150,11 @@ impl Token {
                 }
             }
             Token::Code(_, code) => result.push_str(code),
-            Token::BlockQuote(text) => result.push_str(text),
+            Token::BlockQuote(body) => {
+                for token in body {
+                    token.collect_text_recursive(result);
+                }
+            }
             Token::ListItem { content, .. } => {
                 for token in content {
                     token.collect_text_recursive(result);
@@ -156,6 +166,11 @@ impl Token {
             Token::Unknown(text) => result.push_str(text),
             Token::Newline | Token::HorizontalRule => {
                 // These don't contain text
+            }
+            Token::Strikethrough(nested) => {
+                for token in nested {
+                    token.collect_text_recursive(result);
+                }
             }
             Token::Table {
                 headers,
@@ -180,6 +195,46 @@ impl Token {
             }
         }
     }
+}
+
+/// True for the 32 ASCII punctuation characters that CommonMark §2.4 allows
+/// to be backslash-escaped. Backslash before any other char (letters, digits,
+/// whitespace, end-of-input) leaves the backslash as literal text.
+fn is_ascii_punctuation(c: char) -> bool {
+    matches!(
+        c,
+        '!' | '"'
+            | '#'
+            | '$'
+            | '%'
+            | '&'
+            | '\''
+            | '('
+            | ')'
+            | '*'
+            | '+'
+            | ','
+            | '-'
+            | '.'
+            | '/'
+            | ':'
+            | ';'
+            | '<'
+            | '='
+            | '>'
+            | '?'
+            | '@'
+            | '['
+            | '\\'
+            | ']'
+            | '^'
+            | '_'
+            | '`'
+            | '{'
+            | '|'
+            | '}'
+            | '~'
+    )
 }
 
 /// Error types that can occur during lexical analysis
@@ -324,8 +379,25 @@ impl Lexer {
             )
         };
 
+        // CommonMark setext heading: paragraph line followed by `===` / `---`.
+        // Must run before the regular dispatch so that `Title\n---` becomes an
+        // H2 instead of being consumed as Text + HorizontalRule.
+        if is_line_start && matches!(ctx, ParseContext::Root) {
+            if let Some(level) = self.peek_setext_level() {
+                return Ok(Some(self.consume_setext_heading(level)?));
+            }
+        }
+
         let token = match current_char {
             '#' if is_line_start && allow_block_tokens(ctx) => self.parse_heading()?,
+            '*' if is_line_start && allow_block_tokens(ctx) && self.is_thematic_break_line() => {
+                self.consume_current_line();
+                Token::HorizontalRule
+            }
+            '_' if is_line_start && allow_block_tokens(ctx) && self.is_thematic_break_line() => {
+                self.consume_current_line();
+                Token::HorizontalRule
+            }
             '*' if is_line_start && allow_block_tokens(ctx) && self.is_list_marker('*') => {
                 self.parse_list_item(false, 0, ctx)?
             }
@@ -333,9 +405,20 @@ impl Lexer {
             '_' if !self.is_intra_word_underscore_run(self.position) => self.parse_emphasis()?,
             '_' => self.parse_text(ctx)?,
             '`' => self.parse_code()?,
+            '~' if is_line_start
+                && allow_block_tokens(ctx)
+                && self.count_consecutive('~') >= 3 =>
+            {
+                self.parse_tilde_fence()?
+            }
+            '~' if self.count_consecutive('~') >= 2 => self.parse_strikethrough()?,
+            '~' => self.parse_text(ctx)?,
             '>' if is_line_start && allow_block_tokens(ctx) => self.parse_blockquote()?,
             '-' | '+' if is_line_start && allow_block_tokens(ctx) => {
-                if self.check_horizontal_rule()? {
+                if self.is_thematic_break_line() {
+                    self.consume_current_line();
+                    Token::HorizontalRule
+                } else if self.check_horizontal_rule()? {
                     Token::HorizontalRule
                 } else {
                     self.parse_list_item(false, 0, ctx)?
@@ -358,6 +441,13 @@ impl Lexer {
                 }
             }
             '<' if self.is_html_comment_start() => self.parse_html_comment()?,
+            '<' => {
+                if let Some(autolink) = self.try_parse_autolink() {
+                    autolink
+                } else {
+                    self.parse_text(ctx)?
+                }
+            }
             '\n' => self.parse_newline()?,
             '|' if is_line_start => {
                 if self.is_table_start() {
@@ -386,8 +476,13 @@ impl Lexer {
 
     /// Parses emphasis tokens (* or _) with support for multiple levels (1-3).
     /// Ensures proper matching of opening and closing delimiters.
+    ///
+    /// Per CommonMark §6.2, an unmatched opener falls back to literal text
+    /// rather than raising an error. We implement this with rewind-on-failure:
+    /// if the closing delimiter isn't found, position is reset to right after
+    /// the opener run and the run is emitted as `Token::Text`. The body chars
+    /// are then re-tokenized by the main loop.
     fn parse_emphasis(&mut self) -> Result<Token, LexerError> {
-        let start_pos = self.position;
         let delimiter = self.current_char();
         let mut level = 0;
 
@@ -396,6 +491,7 @@ impl Lexer {
             level += 1;
             self.advance();
         }
+        let after_opener = self.position;
 
         let mut content = self.parse_nested_content(|c| c == delimiter, ParseContext::Inline)?;
         content.push(Token::Text(String::from(" ")));
@@ -403,11 +499,17 @@ impl Lexer {
         // Ensure proper closing
         for _ in 0..level {
             if self.current_char() != delimiter {
-                let (line, col) = self.pos_to_line_col(start_pos);
-                return Err(LexerError::UnknownToken(format!(
-                    "Unmatched emphasis at line {}, column {}",
-                    line, col
-                )));
+                // Fallback: rewind so the body re-tokenizes, and emit the
+                // opener as literal text. Preserve a single trailing space
+                // if present so `next_token`'s leading-whitespace skip
+                // doesn't swallow a meaningful gap (e.g. "Use * for bullets").
+                self.position = after_opener;
+                let mut run = delimiter.to_string().repeat(level);
+                if self.position < self.input.len() && self.current_char() == ' ' {
+                    run.push(' ');
+                    self.advance();
+                }
+                return Ok(Token::Text(run));
             }
             self.advance();
         }
@@ -468,6 +570,107 @@ impl Lexer {
         ))
     }
 
+    /// Returns the number of consecutive `c` chars starting at `self.position`,
+    /// without advancing.
+    fn count_consecutive(&self, c: char) -> usize {
+        let mut count = 0;
+        let mut p = self.position;
+        while p < self.input.len() && self.input[p] == c {
+            count += 1;
+            p += 1;
+        }
+        count
+    }
+
+    /// Parses a GFM strikethrough run (`~~text~~`). Falls back to literal text
+    /// if the closer isn't found, mirroring the emphasis fallback (Fix #2).
+    fn parse_strikethrough(&mut self) -> Result<Token, LexerError> {
+        let mut level = 0;
+        while self.current_char() == '~' {
+            level += 1;
+            self.advance();
+        }
+        let after_opener = self.position;
+
+        // Strikethrough opens with at least 2 tildes; we always close with 2.
+        let close_level = 2;
+        let content = self.parse_nested_content(|c| c == '~', ParseContext::Inline)?;
+
+        let mut found = 0usize;
+        while found < close_level && self.current_char() == '~' {
+            self.advance();
+            found += 1;
+        }
+
+        if found < close_level {
+            // Fallback: rewind and emit opener as literal text.
+            self.position = after_opener;
+            let mut run = "~".repeat(level);
+            if self.position < self.input.len() && self.current_char() == ' ' {
+                run.push(' ');
+                self.advance();
+            }
+            return Ok(Token::Text(run));
+        }
+
+        Ok(Token::Strikethrough(content))
+    }
+
+    /// Parses a `~~~`-fenced code block. Mirrors the backtick fence path but
+    /// distinct so the two fences don't accidentally close each other.
+    fn parse_tilde_fence(&mut self) -> Result<Token, LexerError> {
+        let mut start_tildes = 0;
+        while self.current_char() == '~' {
+            start_tildes += 1;
+            self.advance();
+        }
+        self.skip_whitespace();
+        let language = self.read_until_newline();
+        if self.position < self.input.len() && self.current_char() == '\n' {
+            self.advance();
+        }
+
+        let mut content = String::new();
+        while self.position < self.input.len() {
+            // Closing fence: line begins (with up to 3 leading spaces) with
+            // `start_tildes` or more `~` chars.
+            if self.is_at_line_start() {
+                let mut p = self.position;
+                let mut leading = 0usize;
+                while p < self.input.len() && self.input[p] == ' ' && leading < 3 {
+                    p += 1;
+                    leading += 1;
+                }
+                let mut close_count = 0usize;
+                while p < self.input.len() && self.input[p] == '~' {
+                    close_count += 1;
+                    p += 1;
+                }
+                if close_count >= start_tildes {
+                    while p < self.input.len() && self.input[p] != '\n' {
+                        p += 1;
+                    }
+                    self.position = p;
+                    if self.position < self.input.len() && self.current_char() == '\n' {
+                        self.advance();
+                    }
+                    return Ok(Token::Code(
+                        language.trim().to_string(),
+                        content.trim_end_matches('\n').to_string(),
+                    ));
+                }
+            }
+            content.push(self.current_char());
+            self.advance();
+        }
+
+        // Unclosed fence: still emit what we have.
+        Ok(Token::Code(
+            language.trim().to_string(),
+            content.trim_end_matches('\n').to_string(),
+        ))
+    }
+
     /// Helper method to count consecutive backticks
     fn count_backticks(&mut self) -> usize {
         let mut count = 0;
@@ -478,12 +681,42 @@ impl Lexer {
         count
     }
 
-    /// Parses a blockquote, collecting text until newline
+    /// Parses a blockquote, consuming consecutive `>`-prefixed lines and
+    /// recursively lexing the body so inline formatting works (CommonMark
+    /// §5.1). A blank line ends the quote; lazy continuation is not yet
+    /// supported.
     fn parse_blockquote(&mut self) -> Result<Token, LexerError> {
-        self.advance();
-        self.skip_whitespace();
-        let content = self.read_until_newline();
-        Ok(Token::BlockQuote(content))
+        let mut body_lines: Vec<String> = Vec::new();
+
+        loop {
+            // Consume the `>` marker.
+            if self.position >= self.input.len() || self.current_char() != '>' {
+                break;
+            }
+            self.advance();
+            // Optional single space after `>`.
+            if self.position < self.input.len() && self.current_char() == ' ' {
+                self.advance();
+            }
+            // Take the rest of the line.
+            let line = self.read_until_newline();
+            body_lines.push(line);
+            if self.position < self.input.len() && self.current_char() == '\n' {
+                self.advance();
+            }
+            // Continue if next line also starts with `>` (no blank line in between).
+            if self.position >= self.input.len() {
+                break;
+            }
+            if !self.is_at_line_start() || self.current_char() != '>' {
+                break;
+            }
+        }
+
+        let body_text = body_lines.join("\n");
+        let mut sub = Lexer::new(body_text);
+        let body = sub.parse_with_context(ParseContext::BlockQuote)?;
+        Ok(Token::BlockQuote(body))
     }
 
     /// Parses a link token, extracting display text and URL
@@ -493,11 +726,37 @@ impl Lexer {
         self.advance(); // skip ']'
         if self.current_char() == '(' {
             self.advance(); // skip '('
-            let url = self.read_until_char(')');
-            self.advance(); // skip ')'
+            let url = self.read_url_with_balanced_parens();
+            if self.position < self.input.len() && self.current_char() == ')' {
+                self.advance(); // skip ')'
+            }
             return Ok(Token::Link(text, url));
         }
         Ok(Token::Link(text, String::new()))
+    }
+
+    /// Reads a URL inside `(...)` allowing nested balanced parens. Stops at
+    /// the first unmatched `)` or at `\n`. Used by both link and image
+    /// parsing so that URLs like `Foo_(bar)` survive intact.
+    fn read_url_with_balanced_parens(&mut self) -> String {
+        let start = self.position;
+        let mut depth: i32 = 0;
+        while self.position < self.input.len() {
+            let c = self.current_char();
+            if c == '\n' {
+                break;
+            }
+            if c == '(' {
+                depth += 1;
+            } else if c == ')' {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            self.advance();
+        }
+        self.input[start..self.position].iter().collect()
     }
 
     /// Parses an image token, extracting alt text and URL
@@ -511,8 +770,10 @@ impl Lexer {
             self.advance(); // skip ']'
             if self.current_char() == '(' {
                 self.advance(); // skip '('
-                let url = self.read_until_char(')');
-                self.advance(); // skip ')'
+                let url = self.read_url_with_balanced_parens();
+                if self.position < self.input.len() && self.current_char() == ')' {
+                    self.advance(); // skip ')'
+                }
                 Ok(Token::Image(alt_text, url))
             } else {
                 let (line, col) = self.pos_to_line_col(start_pos);
@@ -526,6 +787,122 @@ impl Lexer {
             self.position = start_pos;
             self.parse_text(ParseContext::Inline)
         }
+    }
+
+    /// Cheap predicate used by `is_start_of_special_token`: scans the chars
+    /// after `<` looking for a closing `>` on the same line and a viable
+    /// autolink shape (URL scheme or `local@domain.tld`).
+    fn looks_like_autolink_start(&self) -> bool {
+        if self.current_char() != '<' {
+            return false;
+        }
+        let start = self.position + 1;
+        let mut p = start;
+        while p < self.input.len() {
+            let c = self.input[p];
+            if c == '>' {
+                break;
+            }
+            if c == '\n' || c == ' ' || c == '\t' || c == '<' {
+                return false;
+            }
+            p += 1;
+        }
+        if p >= self.input.len() || self.input[p] != '>' {
+            return false;
+        }
+        let body: String = self.input[start..p].iter().collect();
+        if body.is_empty() {
+            return false;
+        }
+        // URL scheme prefix?
+        let has_scheme = {
+            let mut chars = body.chars();
+            let first = chars.next();
+            matches!(first, Some(c) if c.is_ascii_alphabetic())
+                && body.contains(':')
+        };
+        if has_scheme {
+            return true;
+        }
+        // Email-ish?
+        if let Some(at_pos) = body.find('@') {
+            let (local, domain) = body.split_at(at_pos);
+            let domain = &domain[1..];
+            if !local.is_empty() && domain.contains('.') {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Tries to parse an autolink (`<https://…>` or `<user@host>`) at the
+    /// current `<`. Returns `Some(Token)` if successful, otherwise `None` so
+    /// the caller can dispatch to HTML-comment / text fallback.
+    fn try_parse_autolink(&mut self) -> Option<Token> {
+        if self.current_char() != '<' {
+            return None;
+        }
+        let start = self.position + 1;
+        let mut p = start;
+        // Body must not contain whitespace, `<`, or `>`.
+        while p < self.input.len() {
+            let c = self.input[p];
+            if c == '>' {
+                break;
+            }
+            if c == '\n' || c == ' ' || c == '\t' || c == '<' {
+                return None;
+            }
+            p += 1;
+        }
+        if p >= self.input.len() || self.input[p] != '>' {
+            return None;
+        }
+        let body: String = self.input[start..p].iter().collect();
+        if body.is_empty() {
+            return None;
+        }
+
+        // URL autolink: scheme = ALPHA + 1+ of [ALPHA|DIGIT|+|-|.] then `:`.
+        let mut chars = body.chars();
+        let first = chars.next();
+        let is_url_scheme = matches!(first, Some(c) if c.is_ascii_alphabetic())
+            && {
+                let mut found_colon = false;
+                let mut scheme_len = 1;
+                for c in chars {
+                    if c == ':' {
+                        found_colon = true;
+                        break;
+                    }
+                    if c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.' {
+                        scheme_len += 1;
+                    } else {
+                        break;
+                    }
+                }
+                found_colon && scheme_len >= 2
+            };
+
+        let is_email = !is_url_scheme && body.contains('@') && {
+            let mut parts = body.splitn(2, '@');
+            let local = parts.next().unwrap_or("");
+            let domain = parts.next().unwrap_or("");
+            !local.is_empty() && domain.contains('.')
+        };
+
+        if !is_url_scheme && !is_email {
+            return None;
+        }
+
+        self.position = p + 1; // skip past '>'
+
+        Some(if is_email {
+            Token::Link(body.clone(), format!("mailto:{}", body))
+        } else {
+            Token::Link(body.clone(), body)
+        })
     }
 
     /// Parses a newline token
@@ -548,6 +925,20 @@ impl Lexer {
 
         while self.position < self.input.len() {
             let ch = self.current_char();
+
+            // CommonMark §2.4: `\` before any ASCII punctuation char emits the
+            // punctuation as literal text (so `\*`, `\#`, `\[` etc. don't open
+            // their respective constructs). `\` before a non-punctuation char
+            // stays literal.
+            if ch == '\\' && self.position + 1 < self.input.len() {
+                let next = self.input[self.position + 1];
+                if is_ascii_punctuation(next) {
+                    content.push(next);
+                    self.advance();
+                    self.advance();
+                    continue;
+                }
+            }
 
             if ch == '\n' || self.is_start_of_special_token(ctx) {
                 break;
@@ -659,6 +1050,10 @@ impl Lexer {
             // `phpmyadmin/localized_docs` keeps the underscore as literal text.
             '_' => !self.is_intra_word_underscore_run(self.position),
 
+            // `~~` opens GFM strikethrough; lone `~` is literal text but we
+            // still break here so the dispatcher can decide.
+            '~' => self.count_consecutive('~') >= 2,
+
             '!' => {
                 if self.position + 1 < self.input.len() {
                     self.input[self.position + 1] == '['
@@ -668,11 +1063,11 @@ impl Lexer {
             }
 
             '<' => {
-                if matches!(ctx, ParseContext::Root) {
-                    self.is_html_comment_start()
-                } else {
-                    false
+                if matches!(ctx, ParseContext::Root) && self.is_html_comment_start() {
+                    return true;
                 }
+                // Autolinks (`<scheme:…>`, `<user@host>`) can appear inline.
+                self.looks_like_autolink_start()
             }
 
             _ => false,
@@ -761,6 +1156,119 @@ impl Lexer {
         Ok(false)
     }
 
+    /// CommonMark §4.1: a thematic break is a line of 3+ matching markers
+    /// from `-`/`*`/`_` (with optional internal/leading whitespace, up to 3
+    /// leading spaces). Caller must already be at line start.
+    fn is_thematic_break_line(&self) -> bool {
+        let mut p = self.position;
+        let mut leading = 0usize;
+        while p < self.input.len() && self.input[p] == ' ' && leading < 3 {
+            p += 1;
+            leading += 1;
+        }
+        let marker = match self.input.get(p) {
+            Some(&c) if c == '-' || c == '*' || c == '_' => c,
+            _ => return false,
+        };
+        let mut count = 0usize;
+        while p < self.input.len() && self.input[p] != '\n' {
+            let c = self.input[p];
+            if c == marker {
+                count += 1;
+            } else if c == ' ' || c == '\t' {
+                // permitted between markers
+            } else {
+                return false;
+            }
+            p += 1;
+        }
+        count >= 3
+    }
+
+    /// Advances `self.position` past the current line and the trailing `\n`.
+    fn consume_current_line(&mut self) {
+        while self.position < self.input.len() && self.current_char() != '\n' {
+            self.advance();
+        }
+        if self.position < self.input.len() && self.current_char() == '\n' {
+            self.advance();
+        }
+    }
+
+    /// If the line following the current line is a setext underline
+    /// (`===…` for H1, `---…` for H2, with optional 3-space indent and
+    /// trailing whitespace), returns the heading level. The current line
+    /// must contain non-whitespace content. Per CommonMark §4.3.
+    fn peek_setext_level(&self) -> Option<usize> {
+        // Scan the current line; require non-whitespace content.
+        let mut p = self.position;
+        let mut has_content = false;
+        while p < self.input.len() && self.input[p] != '\n' {
+            if !self.input[p].is_whitespace() {
+                has_content = true;
+            }
+            p += 1;
+        }
+        if !has_content {
+            return None;
+        }
+        if p >= self.input.len() {
+            return None;
+        }
+        // Skip the newline.
+        p += 1;
+        // Optional up to 3 leading spaces.
+        let mut leading = 0usize;
+        while p < self.input.len() && self.input[p] == ' ' && leading < 3 {
+            p += 1;
+            leading += 1;
+        }
+        let underline_char = match self.input.get(p) {
+            Some(&'=') => '=',
+            Some(&'-') => '-',
+            _ => return None,
+        };
+        let mut count = 0usize;
+        while p < self.input.len() && self.input[p] == underline_char {
+            count += 1;
+            p += 1;
+        }
+        if count == 0 {
+            return None;
+        }
+        // Optional trailing whitespace.
+        while p < self.input.len() && (self.input[p] == ' ' || self.input[p] == '\t') {
+            p += 1;
+        }
+        // Must reach \n or EOF.
+        if p < self.input.len() && self.input[p] != '\n' {
+            return None;
+        }
+        Some(if underline_char == '=' { 1 } else { 2 })
+    }
+
+    /// Consumes a setext heading: the current line is the heading content,
+    /// then `\n`, then the underline line. The text is re-lexed as inline.
+    fn consume_setext_heading(&mut self, level: usize) -> Result<Token, LexerError> {
+        let start = self.position;
+        let mut end = start;
+        while end < self.input.len() && self.input[end] != '\n' {
+            end += 1;
+        }
+        let line: String = self.input[start..end].iter().collect();
+        self.position = end;
+        // Skip newline after content.
+        if self.position < self.input.len() && self.current_char() == '\n' {
+            self.advance();
+        }
+        // Skip the underline line.
+        self.consume_current_line();
+
+        let mut sub = Lexer::new(line.trim().to_string());
+        let content = sub.parse_with_context(ParseContext::Inline)?;
+        Ok(Token::Heading(content, level))
+    }
+
     /// Checks if current position starts an ordered list marker (e.g., "1.")
     fn check_ordered_list_marker(&mut self) -> Option<usize> {
         let start_pos = self.position;
@@ -803,6 +1311,32 @@ impl Lexer {
         }
 
         self.skip_whitespace();
+
+        // GFM task list: detect `[ ]`, `[x]`, `[X]` immediately after the
+        // list marker. Must be followed by a space (or EOL) to count.
+        let mut checked: Option<bool> = None;
+        if self.position + 2 < self.input.len()
+            && self.input[self.position] == '['
+            && self.input[self.position + 2] == ']'
+            && (self.position + 3 >= self.input.len()
+                || self.input[self.position + 3] == ' '
+                || self.input[self.position + 3] == '\t'
+                || self.input[self.position + 3] == '\n')
+        {
+            match self.input[self.position + 1] {
+                ' ' => {
+                    checked = Some(false);
+                    self.position += 3;
+                    self.skip_whitespace();
+                }
+                'x' | 'X' => {
+                    checked = Some(true);
+                    self.position += 3;
+                    self.skip_whitespace();
+                }
+                _ => {}
+            }
+        }
 
         let mut content = Vec::new();
         while self.position < self.input.len() && self.current_char() != '\n' {
@@ -850,6 +1384,7 @@ impl Lexer {
             content,
             ordered,
             number,
+            checked,
         })
     }
 
@@ -1073,10 +1608,13 @@ mod tests {
     #[test]
     fn test_blockquotes() {
         let tokens = parse("> This is a quote");
-        assert_eq!(
-            tokens,
-            vec![Token::BlockQuote("This is a quote".to_string())]
-        );
+        assert_eq!(tokens.len(), 1);
+        if let Token::BlockQuote(body) = &tokens[0] {
+            let text = Token::collect_all_text(body);
+            assert_eq!(text, "This is a quote");
+        } else {
+            panic!("expected BlockQuote, got {:?}", tokens);
+        }
     }
 
     #[test]
@@ -1089,11 +1627,13 @@ mod tests {
                         content: vec![Token::Text("Item 1".to_string())],
                         ordered: false,
                         number: None,
+                        checked: None,
                     },
                     Token::ListItem {
                         content: vec![Token::Text("Item 2".to_string())],
                         ordered: false,
                         number: None,
+                        checked: None,
                     },
                 ],
             ),
@@ -1104,11 +1644,13 @@ mod tests {
                         content: vec![Token::Text("First".to_string())],
                         ordered: true,
                         number: Some(1),
+                        checked: None,
                     },
                     Token::ListItem {
                         content: vec![Token::Text("Second".to_string())],
                         ordered: true,
                         number: Some(2),
+                        checked: None,
                     },
                 ],
             ),
@@ -1130,20 +1672,24 @@ mod tests {
                         content: vec![Token::Text("Nested 1".to_string())],
                         ordered: false,
                         number: None,
+                        checked: None,
                     },
                     Token::ListItem {
                         content: vec![Token::Text("Nested 2".to_string())],
                         ordered: false,
                         number: None,
+                        checked: None,
                     },
                 ],
                 ordered: false,
                 number: None,
+                checked: None,
             },
             Token::ListItem {
                 content: vec![Token::Text("Item 2".to_string())],
                 ordered: false,
                 number: None,
+                checked: None,
             },
         ];
         assert_eq!(parse(input), expected);
@@ -1267,23 +1813,38 @@ This is a paragraph with *italic* and **bold** text.
 
     #[test]
     fn test_blockquote_variations() {
-        let tests = vec![
+        // After the blockquote shape change, the body is a Vec<Token> and
+        // inline formatting inside a quote is parsed (so *emphasis* becomes
+        // an Emphasis token, [link](url) becomes a Link, etc.).
+        let cases: &[(&str, &dyn Fn(&[Token])) ] = &[
             (
                 "> Simple quote",
-                vec![Token::BlockQuote("Simple quote".to_string())],
+                &|body| {
+                    assert_eq!(Token::collect_all_text(body), "Simple quote");
+                },
             ),
             (
                 "> Quote with *emphasis*",
-                vec![Token::BlockQuote("Quote with *emphasis*".to_string())],
+                &|body| {
+                    assert!(body.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+                },
             ),
             (
                 "> Quote with [link](url)",
-                vec![Token::BlockQuote("Quote with [link](url)".to_string())],
+                &|body| {
+                    assert!(body.iter().any(|t| matches!(t, Token::Link(_, _))));
+                },
             ),
         ];
 
-        for (input, expected) in tests {
-            assert_eq!(parse(input), expected);
+        for (input, check) in cases {
+            let tokens = parse(input);
+            assert_eq!(tokens.len(), 1, "input was {:?}", input);
+            if let Token::BlockQuote(body) = &tokens[0] {
+                check(body);
+            } else {
+                panic!("expected BlockQuote for {:?}, got {:?}", input, tokens);
+            }
         }
     }
 
@@ -1706,10 +2267,17 @@ mod intra_word_underscore_tests {
     #[test]
     fn blockquote_with_intra_word_underscore() {
         let tokens = parse("> Quote with foo_bar inside");
-        assert_eq!(
-            tokens,
-            vec![Token::BlockQuote("Quote with foo_bar inside".to_string())]
-        );
+        assert_eq!(tokens.len(), 1);
+        if let Token::BlockQuote(body) = &tokens[0] {
+            assert_eq!(
+                Token::collect_all_text(body),
+                "Quote with foo_bar inside"
+            );
+            // intra-word `_` must not produce emphasis here either
+            assert!(!body.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+        } else {
+            panic!("expected BlockQuote, got {:?}", tokens);
+        }
     }
 
     #[test]
@@ -1790,8 +2358,9 @@ mod error_position_tests {
 
     #[test]
     fn error_reports_correct_line() {
-        // Force an error on line 3 with an unmatched _ on its own
-        let input = "first line\nsecond line\n_unmatched";
+        // Force an error on line 3 with a malformed image (no URL after `![alt]`).
+        // (Unmatched emphasis no longer errors — it falls back to text.)
+        let input = "first line\nsecond line\n![alt-no-url";
         let mut lexer = Lexer::new(input.to_string());
         let err = lexer.parse().unwrap_err();
         if let LexerError::UnknownToken(msg) = err {
@@ -1810,5 +2379,964 @@ mod error_position_tests {
         // Regression: existing test_error_cases pattern still works
         let mut lexer = Lexer::new("![Invalid".to_string());
         assert!(matches!(lexer.parse(), Err(LexerError::UnknownToken(_))));
+    }
+}
+
+#[cfg(test)]
+mod backslash_escape_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+
+    #[test]
+    fn escape_asterisk_blocks_emphasis() {
+        let tokens = parse(r"\*not emphasis\*");
+        assert_eq!(tokens, vec![Token::Text("*not emphasis*".to_string())]);
+    }
+
+    #[test]
+    fn escape_underscore_blocks_emphasis() {
+        let tokens = parse(r"\_not emphasis\_");
+        assert_eq!(tokens, vec![Token::Text("_not emphasis_".to_string())]);
+    }
+
+    #[test]
+    fn escape_hash_blocks_heading() {
+        // Per CommonMark §2.4: \# at line start should NOT start a heading.
+        let tokens = parse(r"\# not a heading");
+        assert_eq!(tokens, vec![Token::Text("# not a heading".to_string())]);
+    }
+
+    #[test]
+    fn escape_left_bracket_blocks_link() {
+        let tokens = parse(r"\[not a link]");
+        assert_eq!(tokens, vec![Token::Text("[not a link]".to_string())]);
+    }
+
+    #[test]
+    fn escape_backtick_blocks_code() {
+        let tokens = parse(r"\`not code\`");
+        assert_eq!(tokens, vec![Token::Text("`not code`".to_string())]);
+    }
+
+    #[test]
+    fn escape_bang_blocks_image() {
+        let tokens = parse(r"\![not an image](x)");
+        // \! becomes literal !, then the [ ... ](x) gets parsed as a regular link.
+        // Important: this must NOT crash with "Malformed image".
+        assert!(matches!(tokens[0], Token::Text(ref s) if s == "!"));
+        assert!(matches!(tokens[1], Token::Link(_, _)));
+    }
+
+    #[test]
+    fn escape_double_backslash_yields_single_backslash() {
+        let tokens = parse(r"\\");
+        assert_eq!(tokens, vec![Token::Text("\\".to_string())]);
+    }
+
+    #[test]
+    fn escape_then_unescaped_emphasis() {
+        // Spec: \\ -> literal \; then _foo_ opens emphasis normally.
+        let tokens = parse(r"\\_foo_");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Text("\\".to_string()),
+                Token::Emphasis {
+                    level: 1,
+                    content: vec![
+                        Token::Text("foo".to_string()),
+                        Token::Text(" ".to_string()),
+                    ],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn escape_all_punctuation_chars() {
+        // Sweep every CommonMark-recognized punctuation char.
+        // Each escape pair must collapse to the punctuation char alone.
+        let punct = [
+            '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', ':', ';',
+            '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~',
+        ];
+        for c in punct {
+            let input = format!("a\\{}b", c);
+            let tokens = parse(&input);
+            let collected = Token::collect_all_text(&tokens);
+            assert!(
+                collected.contains(&format!("a{}b", c)) || collected.contains(c),
+                "punctuation {:?}: expected escaped literal in {:?}, got {:?}",
+                c,
+                input,
+                tokens
+            );
+        }
+    }
+
+
+    #[test]
+    fn backslash_before_letter_is_literal() {
+        // \a is not an escape — both chars survive.
+        let tokens = parse(r"\a");
+        assert_eq!(tokens, vec![Token::Text("\\a".to_string())]);
+    }
+
+    #[test]
+    fn backslash_before_digit_is_literal() {
+        let tokens = parse(r"\7");
+        assert_eq!(tokens, vec![Token::Text("\\7".to_string())]);
+    }
+
+    #[test]
+    fn trailing_backslash_at_eof_is_literal() {
+        let tokens = parse(r"foo\");
+        assert_eq!(tokens, vec![Token::Text("foo\\".to_string())]);
+    }
+
+
+    #[test]
+    fn escape_inside_emphasis_run() {
+        // *\*foo* opens emphasis, escape produces literal *, foo* closes.
+        let tokens = parse(r"*\*foo*");
+        assert!(
+            matches!(tokens[0], Token::Emphasis { level: 1, .. }),
+            "expected emphasis, got {:?}",
+            tokens
+        );
+        if let Token::Emphasis { content, .. } = &tokens[0] {
+            let inner = Token::collect_all_text(content);
+            assert!(inner.contains("*foo"), "inner was {:?}", inner);
+        }
+    }
+
+    #[test]
+    fn escape_underscore_inside_emphasis() {
+        // _foo\_bar_ -> emphasis with literal foo_bar
+        let tokens = parse(r"_foo\_bar_");
+        assert!(matches!(tokens[0], Token::Emphasis { level: 1, .. }));
+        if let Token::Emphasis { content, .. } = &tokens[0] {
+            let inner = Token::collect_all_text(content);
+            assert!(inner.contains("foo_bar"), "inner was {:?}", inner);
+        }
+    }
+
+
+    #[test]
+    fn escape_inside_heading() {
+        let tokens = parse(r"# Header with \*literal asterisks\*");
+        assert!(matches!(tokens[0], Token::Heading(_, 1)));
+        if let Token::Heading(content, _) = &tokens[0] {
+            let inner = Token::collect_all_text(content);
+            assert!(inner.contains("*literal asterisks*"), "got {:?}", inner);
+        }
+    }
+
+
+    #[test]
+    fn escape_not_active_in_inline_code() {
+        // Inside code, \\ and \* are literal — \ stays \.
+        let tokens = parse(r"`\*literal\*`");
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), r"\*literal\*".to_string())]
+        );
+    }
+
+    #[test]
+    fn escape_not_active_in_fenced_code() {
+        let input = "```\n\\*kept literal\\*\n```";
+        let tokens = parse(input);
+        if let Token::Code(_, body) = &tokens[0] {
+            assert!(body.contains(r"\*kept literal\*"), "body was {:?}", body);
+        } else {
+            panic!("expected code block, got {:?}", tokens);
+        }
+    }
+
+
+    #[test]
+    fn escape_blocks_thematic_rule() {
+        let tokens = parse(r"\---");
+        // \- becomes literal -; remaining -- is plain text.
+        assert_eq!(tokens, vec![Token::Text("---".to_string())]);
+    }
+
+    #[test]
+    fn escape_blocks_blockquote() {
+        let tokens = parse(r"\> not a quote");
+        assert_eq!(tokens, vec![Token::Text("> not a quote".to_string())]);
+    }
+
+    #[test]
+    fn escape_blocks_list_marker() {
+        // \- at line start should not start a list.
+        let tokens = parse(r"\- not a list item");
+        assert_eq!(tokens, vec![Token::Text("- not a list item".to_string())]);
+    }
+
+
+    #[test]
+    fn mixed_paragraph_with_multiple_escapes() {
+        let tokens = parse(r"Use \*asterisks\* or \_underscores\_ for emphasis.");
+        assert_eq!(
+            tokens,
+            vec![Token::Text(
+                "Use *asterisks* or _underscores_ for emphasis.".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn escape_mixed_with_real_emphasis() {
+        // Both asterisks around "literal" are escaped (so it stays plain),
+        // followed by a genuine *real* emphasis pair.
+        let tokens = parse(r"\*literal\* and *real*");
+        // -> Text("*literal* and ") + Emphasis(real)
+        assert!(matches!(tokens[0], Token::Text(ref s) if s.contains("*literal*")));
+        let last = tokens.last().unwrap();
+        assert!(matches!(last, Token::Emphasis { .. }));
+    }
+
+    #[test]
+    fn escape_does_not_consume_newline() {
+        // \ followed by \n is not an escape — \n is not punctuation.
+        // The backslash stays literal and the newline still terminates the line.
+        let tokens = parse("foo\\\nbar");
+        // We expect: Text("foo\\") + Newline + Text("bar")
+        assert!(matches!(tokens[0], Token::Text(ref s) if s.contains("\\")));
+        assert!(tokens.iter().any(|t| matches!(t, Token::Newline)));
+    }
+}
+
+#[cfg(test)]
+mod unmatched_emphasis_fallback_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+
+    #[test]
+    fn lone_asterisk_in_paragraph_is_text() {
+        let tokens = parse("Use * for bullets.");
+        let text = Token::collect_all_text(&tokens);
+        assert_eq!(text, "Use * for bullets.");
+    }
+
+    #[test]
+    fn lone_underscore_in_paragraph_is_text() {
+        // Note: trailing _ after a space is left-flanking and tries to open;
+        // with no closer, it must fall back to literal text.
+        let tokens = parse("Lone _underscore here");
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("_underscore here"), "got {:?}", text);
+    }
+
+    #[test]
+    fn unmatched_double_asterisk() {
+        let tokens = parse("This **bold start has no end");
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("**bold start"), "got {:?}", text);
+    }
+
+    #[test]
+    fn stray_asterisk_at_eof() {
+        let tokens = parse("trailing *");
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("*"), "got {:?}", text);
+    }
+
+    #[test]
+    fn stray_underscore_at_eof() {
+        let tokens = parse("trailing _");
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("_"), "got {:?}", text);
+    }
+
+
+    #[test]
+    fn stray_then_valid_emphasis() {
+        // The first * is unmatched -> literal; the *real* pair is emphasis.
+        let tokens = parse("stray * then *real* pair");
+        // Must contain at least one Emphasis somewhere
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::Emphasis { .. })),
+            "expected emphasis somewhere in {:?}",
+            tokens
+        );
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("real"), "got {:?}", text);
+    }
+
+    #[test]
+    fn valid_then_stray_emphasis() {
+        let tokens = parse("*good* then a stray *");
+        // Token 0 should be a real emphasis, last token is plain text containing *.
+        assert!(matches!(tokens[0], Token::Emphasis { level: 1, .. }));
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("*"), "got {:?}", text);
+    }
+
+
+    #[test]
+    fn stray_in_heading() {
+        let tokens = parse("# heading with * stray");
+        assert!(matches!(tokens[0], Token::Heading(_, 1)));
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("*"), "got {:?}", text);
+    }
+
+    #[test]
+    fn stray_in_list_item() {
+        let tokens = parse("- item with * stray");
+        assert!(matches!(tokens[0], Token::ListItem { .. }));
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("*"), "got {:?}", text);
+    }
+
+
+    #[test]
+    fn triple_asterisk_no_close() {
+        let tokens = parse("***boldital with no closer");
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("***"), "got {:?}", text);
+        assert!(text.contains("boldital"), "got {:?}", text);
+    }
+
+
+    #[test]
+    fn regression_basic_italic() {
+        let tokens = parse("*italic*");
+        assert!(matches!(tokens[0], Token::Emphasis { level: 1, .. }));
+    }
+
+    #[test]
+    fn regression_basic_bold() {
+        let tokens = parse("**bold**");
+        assert!(matches!(tokens[0], Token::Emphasis { level: 2, .. }));
+    }
+
+    #[test]
+    fn regression_underscore_emphasis() {
+        let tokens = parse("_italic_ and __bold__");
+        let count = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::Emphasis { .. }))
+            .count();
+        assert_eq!(count, 2, "expected two emphasis tokens, got {:?}", tokens);
+    }
+
+    #[test]
+    fn regression_intra_word_underscore_still_text() {
+        // From earlier fix — must remain Text, not trigger fallback weirdness.
+        let tokens = parse("phpmyadmin/localized_docs");
+        assert_eq!(
+            tokens,
+            vec![Token::Text("phpmyadmin/localized_docs".to_string())]
+        );
+    }
+
+
+    #[test]
+    fn document_with_stray_does_not_lose_other_tokens() {
+        let input = "# Title\n\nBody has * stray and `code` and [link](url).";
+        let tokens = parse(input);
+        assert!(matches!(tokens[0], Token::Heading(_, 1)));
+        // Code span and link must still parse despite the stray *.
+        assert!(tokens.iter().any(|t| matches!(t, Token::Code(_, _))));
+        assert!(tokens.iter().any(|t| matches!(t, Token::Link(_, _))));
+    }
+}
+
+#[cfg(test)]
+mod blockquote_inline_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    fn block_body(t: &Token) -> &Vec<Token> {
+        if let Token::BlockQuote(body) = t {
+            body
+        } else {
+            panic!("expected BlockQuote, got {:?}", t);
+        }
+    }
+
+
+    #[test]
+    fn inline_emphasis_inside_quote() {
+        let tokens = parse("> use **bold** here");
+        assert_eq!(tokens.len(), 1);
+        let body = block_body(&tokens[0]);
+        // Body must contain a real emphasis token, not raw "**bold**" text.
+        assert!(
+            body.iter().any(|t| matches!(t, Token::Emphasis { level: 2, .. })),
+            "expected emphasis inside quote, got body {:?}",
+            body
+        );
+    }
+
+    #[test]
+    fn inline_code_inside_quote() {
+        let tokens = parse("> see `the_code` for details");
+        let body = block_body(&tokens[0]);
+        assert!(
+            body.iter().any(|t| matches!(t, Token::Code(_, _))),
+            "expected code span, got body {:?}",
+            body
+        );
+    }
+
+    #[test]
+    fn inline_link_inside_quote() {
+        let tokens = parse("> visit [example](https://example.com)");
+        let body = block_body(&tokens[0]);
+        assert!(
+            body.iter().any(|t| matches!(t, Token::Link(_, _))),
+            "expected link inside quote, got body {:?}",
+            body
+        );
+    }
+
+    #[test]
+    fn intra_word_underscore_inside_quote() {
+        let tokens = parse("> Quote with foo_bar inside");
+        let body = block_body(&tokens[0]);
+        let text = Token::collect_all_text(body);
+        assert!(text.contains("foo_bar"), "got {:?}", text);
+        // Should NOT have produced an emphasis token.
+        assert!(!body.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+    }
+
+
+    #[test]
+    fn two_line_quote_merges_into_one() {
+        let tokens = parse("> first\n> second");
+        // One BlockQuote with both lines as content (text/newline structure
+        // is fine, but we should NOT have two BlockQuote tokens).
+        let count = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::BlockQuote(_)))
+            .count();
+        assert_eq!(count, 1, "expected one merged blockquote, got {:?}", tokens);
+        let body = block_body(&tokens[0]);
+        let text = Token::collect_all_text(body);
+        assert!(text.contains("first"), "got {:?}", text);
+        assert!(text.contains("second"), "got {:?}", text);
+    }
+
+    #[test]
+    fn multi_line_with_emphasis_spanning_lines() {
+        let tokens = parse("> _start\n> end_");
+        let body = block_body(&tokens[0]);
+        // Emphasis wraps "start\nend" (across the line break)
+        assert!(
+            body.iter().any(|t| matches!(t, Token::Emphasis { .. })),
+            "expected emphasis spanning lines, got {:?}",
+            body
+        );
+    }
+
+    #[test]
+    fn blank_line_breaks_blockquote() {
+        let tokens = parse("> first\n\n> second");
+        let count = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::BlockQuote(_)))
+            .count();
+        assert_eq!(
+            count, 2,
+            "blank line should separate quotes, got {:?}",
+            tokens
+        );
+    }
+
+
+    #[test]
+    fn empty_quote_marker() {
+        // A bare `>` followed by EOL is valid CommonMark — empty quote.
+        let tokens = parse(">");
+        assert!(matches!(tokens[0], Token::BlockQuote(_)));
+    }
+
+    #[test]
+    fn quote_with_no_space_after_marker() {
+        // Per CommonMark, `>foo` is also a blockquote (the space is optional).
+        let tokens = parse(">foo");
+        assert!(matches!(tokens[0], Token::BlockQuote(_)));
+        let body = block_body(&tokens[0]);
+        let text = Token::collect_all_text(body);
+        assert!(text.contains("foo"), "got {:?}", text);
+    }
+
+
+    #[test]
+    fn regression_simple_quote_text_still_present() {
+        let tokens = parse("> This is a quote");
+        let body = block_body(&tokens[0]);
+        let text = Token::collect_all_text(body);
+        assert!(text.contains("This is a quote"), "got {:?}", text);
+    }
+
+
+    #[test]
+    fn paragraph_then_quote_then_paragraph() {
+        let input = "first\n> middle\nlast";
+        let tokens = parse(input);
+        let bq_count = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::BlockQuote(_)))
+            .count();
+        assert_eq!(bq_count, 1, "expected exactly one quote, got {:?}", tokens);
+    }
+}
+
+#[cfg(test)]
+mod setext_and_thematic_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+
+    #[test]
+    fn setext_h1_basic() {
+        let tokens = parse("Title\n===");
+        assert!(
+            matches!(tokens[0], Token::Heading(_, 1)),
+            "expected H1, got {:?}",
+            tokens
+        );
+        if let Token::Heading(content, 1) = &tokens[0] {
+            assert_eq!(Token::collect_all_text(content), "Title");
+        }
+    }
+
+    #[test]
+    fn setext_h1_long_underline() {
+        let tokens = parse("Title\n=======");
+        assert!(matches!(tokens[0], Token::Heading(_, 1)));
+    }
+
+    #[test]
+    fn setext_h1_with_inline_emphasis() {
+        let tokens = parse("Title with *emphasis*\n===");
+        assert!(matches!(tokens[0], Token::Heading(_, 1)));
+        if let Token::Heading(content, 1) = &tokens[0] {
+            assert!(content.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+        }
+    }
+
+
+    #[test]
+    fn setext_h2_basic() {
+        let tokens = parse("Title\n---");
+        assert!(
+            matches!(tokens[0], Token::Heading(_, 2)),
+            "expected H2 (NOT a HorizontalRule), got {:?}",
+            tokens
+        );
+        if let Token::Heading(content, 2) = &tokens[0] {
+            assert_eq!(Token::collect_all_text(content), "Title");
+        }
+    }
+
+    #[test]
+    fn setext_h2_long_underline() {
+        let tokens = parse("Title\n----------");
+        assert!(matches!(tokens[0], Token::Heading(_, 2)));
+    }
+
+
+    #[test]
+    fn thematic_break_dashes() {
+        let tokens = parse("---");
+        assert_eq!(tokens, vec![Token::HorizontalRule]);
+    }
+
+    #[test]
+    fn thematic_break_asterisks() {
+        let tokens = parse("***");
+        assert_eq!(tokens, vec![Token::HorizontalRule]);
+    }
+
+    #[test]
+    fn thematic_break_underscores() {
+        let tokens = parse("___");
+        assert_eq!(tokens, vec![Token::HorizontalRule]);
+    }
+
+    #[test]
+    fn thematic_break_long_runs() {
+        for input in ["-------", "*******", "_______"] {
+            assert_eq!(parse(input), vec![Token::HorizontalRule], "input {:?}", input);
+        }
+    }
+
+
+    #[test]
+    fn paragraph_followed_by_dashes_is_setext_h2_not_hr() {
+        let tokens = parse("Some content\n---");
+        // Must be Heading, not Text + HorizontalRule
+        let has_hr = tokens.iter().any(|t| matches!(t, Token::HorizontalRule));
+        assert!(!has_hr, "should not have produced an HR, got {:?}", tokens);
+        assert!(matches!(tokens[0], Token::Heading(_, 2)));
+    }
+
+    #[test]
+    fn lone_dashes_after_blank_line_is_hr() {
+        let tokens = parse("Some content\n\n---");
+        // Blank line means dashes are a true HR, not a setext underline.
+        assert!(tokens.iter().any(|t| matches!(t, Token::HorizontalRule)));
+    }
+
+
+    #[test]
+    fn regression_atx_h1_still_works() {
+        let tokens = parse("# H1");
+        assert!(matches!(tokens[0], Token::Heading(_, 1)));
+    }
+
+    #[test]
+    fn regression_atx_h2_still_works() {
+        let tokens = parse("## H2");
+        assert!(matches!(tokens[0], Token::Heading(_, 2)));
+    }
+
+    #[test]
+    fn regression_list_item_after_paragraph() {
+        // Make sure setext detection doesn't eat list markers.
+        let tokens = parse("paragraph\n- item");
+        let has_li = tokens.iter().any(|t| matches!(t, Token::ListItem { .. }));
+        assert!(has_li, "expected list item, got {:?}", tokens);
+    }
+}
+
+#[cfg(test)]
+mod gfm_trio_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+
+    #[test]
+    fn unchecked_task_list_item() {
+        let tokens = parse("- [ ] Pending task");
+        if let Token::ListItem {
+            content, checked, ..
+        } = &tokens[0]
+        {
+            assert_eq!(*checked, Some(false), "expected unchecked");
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("Pending task"), "got {:?}", text);
+        } else {
+            panic!("expected list item, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn checked_task_list_item() {
+        let tokens = parse("- [x] Done task");
+        if let Token::ListItem {
+            content, checked, ..
+        } = &tokens[0]
+        {
+            assert_eq!(*checked, Some(true), "expected checked");
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("Done task"), "got {:?}", text);
+        } else {
+            panic!("expected list item, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn task_list_capital_x() {
+        let tokens = parse("- [X] also done");
+        if let Token::ListItem { checked, .. } = &tokens[0] {
+            assert_eq!(*checked, Some(true));
+        } else {
+            panic!("expected list item, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn regular_list_item_has_no_checkbox() {
+        let tokens = parse("- regular item");
+        if let Token::ListItem { checked, .. } = &tokens[0] {
+            assert_eq!(*checked, None);
+        } else {
+            panic!("expected list item, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn ordered_task_list_item() {
+        // GFM allows task markers on ordered lists too.
+        let tokens = parse("1. [ ] First task");
+        if let Token::ListItem {
+            content,
+            checked,
+            ordered,
+            number,
+        } = &tokens[0]
+        {
+            assert!(ordered);
+            assert_eq!(*number, Some(1));
+            assert_eq!(*checked, Some(false));
+            assert!(Token::collect_all_text(content).contains("First task"));
+        } else {
+            panic!("expected list item, got {:?}", tokens);
+        }
+    }
+
+
+    #[test]
+    fn tilde_fenced_code_block_basic() {
+        let input = "~~~\nfn main() {}\n~~~";
+        let tokens = parse(input);
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), "fn main() {}".to_string())]
+        );
+    }
+
+    #[test]
+    fn tilde_fenced_code_block_with_language() {
+        let input = "~~~rust\nlet x = 5;\n~~~";
+        let tokens = parse(input);
+        assert_eq!(
+            tokens,
+            vec![Token::Code("rust".to_string(), "let x = 5;".to_string())]
+        );
+    }
+
+    #[test]
+    fn tilde_fence_can_contain_backticks() {
+        // The whole point of `~~~` is letting code contain literal backticks.
+        let input = "~~~\nlet s = `template`;\n~~~";
+        let tokens = parse(input);
+        if let Token::Code(_, body) = &tokens[0] {
+            assert!(body.contains("`template`"), "got {:?}", body);
+        } else {
+            panic!("expected code, got {:?}", tokens);
+        }
+    }
+
+
+    #[test]
+    fn strikethrough_basic() {
+        let tokens = parse("~~deleted~~");
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::Strikethrough(_))),
+            "expected Strikethrough, got {:?}",
+            tokens
+        );
+        if let Token::Strikethrough(content) = &tokens[0] {
+            assert_eq!(Token::collect_all_text(content), "deleted");
+        }
+    }
+
+    #[test]
+    fn strikethrough_inside_paragraph() {
+        let tokens = parse("This is ~~old~~ news.");
+        assert!(tokens.iter().any(|t| matches!(t, Token::Strikethrough(_))));
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("old"), "got {:?}", text);
+        assert!(text.contains("news"), "got {:?}", text);
+    }
+
+    #[test]
+    fn strikethrough_unmatched_falls_back() {
+        // After Fix #2, an unmatched ~~ should not abort.
+        let tokens = parse("starts ~~ but never closes");
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("~~"), "got {:?}", text);
+    }
+
+    #[test]
+    fn single_tilde_is_not_strikethrough() {
+        // Only ~~ (two or more) opens strikethrough; lone ~ is plain text.
+        let tokens = parse("a ~ b");
+        assert!(!tokens.iter().any(|t| matches!(t, Token::Strikethrough(_))));
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("~"), "got {:?}", text);
+    }
+
+    #[test]
+    fn strikethrough_with_emphasis_inside() {
+        let tokens = parse("~~deleted *and italic*~~");
+        if let Token::Strikethrough(content) = &tokens[0] {
+            assert!(content.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+        } else {
+            panic!("expected Strikethrough, got {:?}", tokens);
+        }
+    }
+
+
+    #[test]
+    fn tilde_in_inline_code_stays_literal() {
+        let tokens = parse("`~~not strikethrough~~`");
+        assert_eq!(
+            tokens,
+            vec![Token::Code(
+                "".to_string(),
+                "~~not strikethrough~~".to_string()
+            )]
+        );
+    }
+}
+
+#[cfg(test)]
+mod link_url_paren_and_autolink_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+
+    #[test]
+    fn url_with_single_balanced_paren_pair() {
+        let tokens = parse("[Wiki](https://en.wikipedia.org/wiki/Foo_(bar))");
+        assert_eq!(
+            tokens,
+            vec![Token::Link(
+                "Wiki".to_string(),
+                "https://en.wikipedia.org/wiki/Foo_(bar)".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn url_with_nested_balanced_parens() {
+        let tokens = parse("[X](http://a.b/((c)d))");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("X".to_string(), "http://a.b/((c)d)".to_string())]
+        );
+    }
+
+    #[test]
+    fn image_url_with_paren_pair() {
+        let tokens = parse("![alt](pic_(small).png)");
+        assert_eq!(
+            tokens,
+            vec![Token::Image(
+                "alt".to_string(),
+                "pic_(small).png".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn url_with_unbalanced_close_paren_truncates() {
+        let tokens = parse("[X](https://example.com/path)trailing");
+        if let Token::Link(text, url) = &tokens[0] {
+            assert_eq!(text, "X");
+            assert_eq!(url, "https://example.com/path");
+        } else {
+            panic!("expected link, got {:?}", tokens);
+        }
+    }
+
+
+    #[test]
+    fn autolink_https() {
+        let tokens = parse("<https://example.com>");
+        assert_eq!(
+            tokens,
+            vec![Token::Link(
+                "https://example.com".to_string(),
+                "https://example.com".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn autolink_http() {
+        let tokens = parse("<http://example.org/path>");
+        assert_eq!(
+            tokens,
+            vec![Token::Link(
+                "http://example.org/path".to_string(),
+                "http://example.org/path".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn autolink_email() {
+        let tokens = parse("<user@example.com>");
+        assert_eq!(
+            tokens,
+            vec![Token::Link(
+                "user@example.com".to_string(),
+                "mailto:user@example.com".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn autolink_in_paragraph() {
+        let tokens = parse("see <https://example.com> for more");
+        assert!(
+            tokens
+                .iter()
+                .any(|t| matches!(t, Token::Link(_, url) if url == "https://example.com")),
+            "got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn invalid_autolink_falls_through_as_text() {
+        let tokens = parse("<not an autolink>");
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("<not an autolink>"), "got {:?}", text);
+    }
+
+
+    #[test]
+    fn html_comment_still_parsed() {
+        let tokens = parse("<!-- comment -->");
+        assert!(matches!(tokens[0], Token::HtmlComment(_)));
+    }
+
+    #[test]
+    fn regression_simple_link() {
+        let tokens = parse("[example](https://example.com)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link(
+                "example".to_string(),
+                "https://example.com".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn regression_simple_image() {
+        let tokens = parse("![alt](image.png)");
+        assert_eq!(
+            tokens,
+            vec![Token::Image("alt".to_string(), "image.png".to_string())]
+        );
     }
 }
