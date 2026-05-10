@@ -1,3 +1,27 @@
+## [0.3.0] - 2026-05-10
+
+### Features
+
+- *(pdf)* Inline images as links, real strikethrough, html-tag styling, soft-break newlines
+- *(pdf)* Render blockquotes, task checkboxes, and strikethrough
+
+### Bug Fixes
+
+- *(lexer)* Tighten heading rules, add lazy continuation, escapes, blockquote blocks
+- *(lexer)* Broaden CommonMark coverage — CRLF, hard breaks, entities, titles, ref links
+- *(lexer)* Broaden CommonMark/GFM coverage with six targeted fixes
+- *(lexer)* Handle mid-paragraph # and intra-word _ correctly
+- *(docs)* Update the version number in readme
+
+### Documentation
+
+- *(readme)* Remove GitHub Stars badge
+- *(readme)* Add markdown coverage section and tidy code blocks
+
+### Miscellaneous Tasks
+
+- *(debug)* Update JSON formatter for new token shapes
+
 ## [0.2.2] - 2026-02-27
 
 ### Features

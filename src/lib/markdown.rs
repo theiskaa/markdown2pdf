@@ -1816,15 +1816,6 @@ impl Lexer {
         out
     }
 
-    /// Reads characters until a specific delimiter is encountered
-    fn read_until_char(&mut self, delimiter: char) -> String {
-        let start = self.position;
-        while self.position < self.input.len() && self.current_char() != delimiter {
-            self.advance();
-        }
-        self.input[start..self.position].iter().collect()
-    }
-
     /// Checks if current position starts an HTML comment
     fn is_html_comment_start(&self) -> bool {
         self.input[self.position..]
