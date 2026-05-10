@@ -95,21 +95,27 @@ impl Token {
                     content.replace("\"", "\\\"").replace("\n", "\\n"), indent)
             }
 
-            Token::BlockQuote(content) => {
-                format!(
-                    "{}{{\n{}\"type\": \"BlockQuote\",\n{}\"content\": \"{}\"\n{}}}",
-                    indent,
-                    inner_indent,
-                    inner_indent,
-                    content.replace("\"", "\\\""),
-                    indent
-                )
+            Token::BlockQuote(body) => {
+                let mut result = format!("{}{{\n", indent);
+                result.push_str(&format!("{}\"type\": \"BlockQuote\",\n", inner_indent));
+                result.push_str(&format!("{}\"content\": [\n", inner_indent));
+                for (i, token) in body.iter().enumerate() {
+                    result.push_str(&token.to_readable_json(indent_level + 2));
+                    if i < body.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}]\n", inner_indent));
+                result.push_str(&format!("{}}}", indent));
+                result
             }
 
             Token::ListItem {
                 content,
                 ordered,
                 number,
+                checked: _,
             } => {
                 let mut result = format!("{}{{\n", indent);
                 result.push_str(&format!("{}\"type\": \"ListItem\",\n", inner_indent));
@@ -279,6 +285,21 @@ impl Token {
                     "{}{{\n{}\"type\": \"HorizontalRule\"\n{}}}",
                     indent, inner_indent, indent
                 )
+            }
+            Token::Strikethrough(body) => {
+                let mut result = format!("{}{{\n", indent);
+                result.push_str(&format!("{}\"type\": \"Strikethrough\",\n", inner_indent));
+                result.push_str(&format!("{}\"content\": [\n", inner_indent));
+                for (i, token) in body.iter().enumerate() {
+                    result.push_str(&token.to_readable_json(indent_level + 2));
+                    if i < body.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}]\n", inner_indent));
+                result.push_str(&format!("{}}}", indent));
+                result
             }
             Token::Unknown(content) => {
                 format!(
