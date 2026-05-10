@@ -14,7 +14,7 @@ markdown2pdf converts Markdown to PDF using a lexical analyzer and PDF rendering
 
 Both binary and library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
 
-Built in Rust for performance and memory safety. Handles standard Markdown syntax including headings, lists, code blocks, links, tables, and images. Supports multiple input sources and outputs to files or bytes for in-memory processing.
+Built in Rust for performance and memory safety. The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions and currently covers around 85% of the spec, including escapes, emphasis flanking, reference links, indented and fenced code blocks, blockquotes with nested blocks, lazy list continuation, autolinks, entities, hard breaks, GFM tables, task lists and strikethrough. See [Markdown coverage](#markdown-coverage) below for the full breakdown. Supports multiple input sources and outputs to files or bytes for in-memory processing.
 
 ## Install binary
 
@@ -76,21 +76,26 @@ The library provides optional feature flags to control dependencies:
 ```toml
 # Minimal installation (no network dependencies)
 markdown2pdf = "0.2.2"
+```
 
+```toml
 # With URL fetching support (native TLS)
 markdown2pdf = { version = "0.2.2", features = ["native-tls"] }
-
+```
+```toml
 # With URL fetching support (rustls)
 markdown2pdf = { version = "0.2.2", features = ["rustls-tls"] }
 ```
 
 **Note**: Binary installations via cargo or prebuilt downloads do not include URL fetching by default. To build the binary with URL support:
 
+*Install with URL fetching support:*
 ```bash
-# Install with URL fetching support
 cargo install markdown2pdf --features native-tls
+```
 
-# Or build from source
+*Or build from source:*
+```bash
 cargo build --release --features native-tls
 ```
 
@@ -127,10 +132,14 @@ The font system supports four modes:
 ```bash
 # Use built-in font (fastest)
 markdown2pdf -p document.md -o output.pdf
+```
 
+```bash
 # Use system font
 markdown2pdf -p document.md --default-font Georgia -o output.pdf
+```
 
+```bash
 # Use specific font file
 markdown2pdf -p document.md --default-font "/path/to/font.ttf" -o output.pdf
 ```
@@ -147,15 +156,18 @@ Two main functions: `parse_into_file()` saves PDF to disk, `parse_into_bytes()` 
 
 Configuration uses `ConfigSource`: `Default` for built-in styling, `File("path")` for runtime loading, or `Embedded(content)` for compile-time embedding.
 
-```rust
-use markdown2pdf::{parse_into_file, config::ConfigSource};
 
+```rust
 // Default styling
 parse_into_file(markdown, "output.pdf", ConfigSource::Default, None)?;
+```
 
+```rust
 // File-based configuration
 parse_into_file(markdown, "output.pdf", ConfigSource::File("config.toml"), None)?;
+```
 
+```rust 
 // Embedded configuration
 const CONFIG: &str = include_str!("../config.toml");
 parse_into_file(markdown, "output.pdf", ConfigSource::Embedded(CONFIG), None)?;
@@ -207,6 +219,26 @@ The library uses the [`log`](https://crates.io/crates/log) crate. No output by d
 TOML configuration customizes fonts, colors, spacing, and visual properties. Three loading methods: default styles, runtime files, or compile-time embedding.
 
 For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the example configuration from `markdown2pdfrc.example.toml`. For library usage with embedded config, create your configuration file and embed it using `include_str!()`.
+
+## Markdown Coverage
+
+Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). Around 85% of the spec is covered with 323 unit tests; the gaps are HTML block types 1–7, image embedding, and loose vs tight list distinction.
+
+| Block-level                          | Status  | Inline                               | Status  |
+|--------------------------------------|---------|--------------------------------------|---------|
+| ATX headings (`#` to `######`)       | Full    | Backslash escapes                    | Full    |
+| Setext headings (`===` / `---`)      | Full    | Entity / numeric references          | Partial |
+| Paragraphs                           | Full    | Code spans (single & multi-backtick) | Full    |
+| Thematic breaks (`---` `***` `___`)  | Full    | Emphasis & strong (`*` and `_`)      | Full    |
+| Indented code blocks (4-space)       | Full    | Inline links                         | Full    |
+| Fenced code blocks (`` ``` ``, `~~~`)| Full    | Reference links / images             | Full    |
+| Blockquotes                          | Full    | Autolinks (`<https://…>`, `<email>`) | Full    |
+| Bullet lists (`-` `+` `*`)           | Full    | Images (rendered as styled link)     | Partial |
+| Ordered lists (`1.` and `1)`)        | Full    | Strikethrough (`~~text~~`)           | Full    |
+| Tables (GFM)                         | Full    | Raw inline HTML                      | Partial |
+| Task list items (GFM)                | Full    | Hard / soft line breaks              | Full    |
+| Reference link definitions           | Full    |                                      |         |
+| HTML blocks (types 1–7)              | None    |                                      |         |
 
 ## Contributing
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.

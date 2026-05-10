@@ -40,6 +40,77 @@ pub struct Pdf {
     code_font_family: FontFamily<FontData>,
 }
 
+/// Style flags toggled by raw inline HTML tags during paragraph rendering.
+/// `<b>`/`<strong>` → bold, `<i>`/`<em>` → italic, `<u>` → underline,
+/// `<s>`/`<del>` → strikethrough. Closing tags clear the flag. Unknown
+/// tags don't touch the flags and are rendered as literal text instead.
+#[derive(Clone, Default)]
+struct HtmlInlineFlags {
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    strikethrough: bool,
+}
+
+impl HtmlInlineFlags {
+    fn apply(&self, mut style: genpdfi::style::Style) -> genpdfi::style::Style {
+        if self.bold {
+            style = style.bold();
+        }
+        if self.italic {
+            style = style.italic();
+        }
+        if self.underline {
+            style = style.underline();
+        }
+        if self.strikethrough {
+            style = style.strikethrough();
+        }
+        style
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HtmlFlag {
+    Bold,
+    Italic,
+    Underline,
+    Strikethrough,
+}
+
+#[derive(Clone, Copy)]
+enum HtmlTagAction {
+    Toggle(HtmlFlag, bool),
+    SoftBreak,
+}
+
+/// Maps a raw `<tag>` (or `</tag>`, `<br/>`) to the renderer action it
+/// triggers. Returns `None` for tags that should pass through as literal
+/// text (preserving the current behavior for unrecognized HTML).
+fn classify_html_tag(tag: &str) -> Option<HtmlTagAction> {
+    let stripped = tag.trim_start_matches('<').trim_end_matches('>');
+    let (is_close, name) = if let Some(rest) = stripped.strip_prefix('/') {
+        (true, rest)
+    } else {
+        (false, stripped)
+    };
+    // Strip `/` from `<tag/>` self-close form, plus any attributes after the tag name.
+    let name = name.trim_end_matches('/').trim();
+    let tag_name: String = name
+        .split(|c: char| c.is_whitespace() || c == '/')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match tag_name.as_str() {
+        "b" | "strong" => Some(HtmlTagAction::Toggle(HtmlFlag::Bold, !is_close)),
+        "i" | "em" => Some(HtmlTagAction::Toggle(HtmlFlag::Italic, !is_close)),
+        "u" => Some(HtmlTagAction::Toggle(HtmlFlag::Underline, !is_close)),
+        "s" | "del" | "strike" => Some(HtmlTagAction::Toggle(HtmlFlag::Strikethrough, !is_close)),
+        "br" => Some(HtmlTagAction::SoftBreak),
+        _ => None,
+    }
+}
+
 impl Pdf {
     /// Creates a new PDF generator instance to process markdown tokens.
     ///
@@ -241,8 +312,28 @@ impl Pdf {
     /// to the configured style settings.
     fn process_tokens(&self, doc: &mut Document) {
         let mut current_tokens = Vec::new();
-
-        for token in &self.input {
+        let mut i = 0usize;
+        while i < self.input.len() {
+            let token = &self.input[i];
+            // CommonMark §4.8 / §6.8: a *blank* line (two or more
+            // consecutive Newlines) terminates a paragraph; a single Newline
+            // is a soft break and stays inside the current paragraph.
+            if let Token::Newline = token {
+                let mut run = 0usize;
+                while i + run < self.input.len()
+                    && matches!(self.input[i + run], Token::Newline)
+                {
+                    run += 1;
+                }
+                if run >= 2 {
+                    self.flush_paragraph(doc, &current_tokens);
+                    current_tokens.clear();
+                } else {
+                    current_tokens.push(Token::Newline);
+                }
+                i += run;
+                continue;
+            }
             match token {
                 Token::Heading(content, level) => {
                     self.flush_paragraph(doc, &current_tokens);
@@ -253,10 +344,11 @@ impl Pdf {
                     content,
                     ordered,
                     number,
+                    checked,
                 } => {
                     self.flush_paragraph(doc, &current_tokens);
                     current_tokens.clear();
-                    self.render_list_item(doc, content, *ordered, *number, 0);
+                    self.render_list_item(doc, content, *ordered, *number, *checked, 0);
                 }
                 Token::Code(lang, content) if content.contains('\n') => {
                     self.flush_paragraph(doc, &current_tokens);
@@ -270,7 +362,15 @@ impl Pdf {
                         self.style.horizontal_rule.after_spacing,
                     ));
                 }
-                Token::Newline => {
+                Token::BlockQuote(body) => {
+                    self.flush_paragraph(doc, &current_tokens);
+                    current_tokens.clear();
+                    self.render_blockquote(doc, body);
+                }
+                Token::HardBreak => {
+                    // Flush current paragraph and force a line break — the
+                    // visual effect for a hard break in our renderer is the
+                    // same as a paragraph boundary at the moment.
                     self.flush_paragraph(doc, &current_tokens);
                     current_tokens.clear();
                 }
@@ -287,6 +387,7 @@ impl Pdf {
                     current_tokens.push(token.clone());
                 }
             }
+            i += 1;
         }
 
         // Flush any remaining tokens
@@ -323,12 +424,20 @@ impl Pdf {
         let heading_style = match level {
             1 => &self.style.heading_1,
             2 => &self.style.heading_2,
-            3 | _ => &self.style.heading_3,
+            _ => &self.style.heading_3,
         };
         doc.push(genpdfi::elements::Break::new(heading_style.before_spacing));
 
         let mut para = genpdfi::elements::Paragraph::default();
-        let mut style = genpdfi::style::Style::new().with_font_size(heading_style.size);
+        // For h4–h6, derive a smaller size from heading_3 to give visual
+        // hierarchy without adding new style fields. h3 is unchanged.
+        let size = if level >= 4 {
+            let drop = (level as u8).saturating_sub(3);
+            heading_style.size.saturating_sub(drop).max(8)
+        } else {
+            heading_style.size
+        };
+        let mut style = genpdfi::style::Style::new().with_font_size(size);
 
         if heading_style.bold {
             style = style.bold();
@@ -357,10 +466,27 @@ impl Pdf {
         tokens: &[Token],
         style: genpdfi::style::Style,
     ) {
+        let mut html_state = HtmlInlineFlags::default();
+        self.render_inline_content_with_state(para, tokens, style, &mut html_state);
+    }
+
+    /// Inline renderer with mutable HTML-tag style flags. Recognized tags
+    /// (`<b>`, `<strong>`, `<i>`, `<em>`, `<u>`, `<s>`, `<del>`) toggle the
+    /// corresponding flag on opener / off on closer; `<br>` / `<br/>` emits
+    /// a soft space. Subsequent `Token::Text` is rendered with the active
+    /// flags applied to the base `style`.
+    fn render_inline_content_with_state(
+        &self,
+        para: &mut genpdfi::elements::Paragraph,
+        tokens: &[Token],
+        style: genpdfi::style::Style,
+        html: &mut HtmlInlineFlags,
+    ) {
         for token in tokens {
             match token {
                 Token::Text(content) => {
-                    para.push_styled(content.clone(), style.clone());
+                    let s = html.apply(style.clone());
+                    para.push_styled(content.clone(), s);
                 }
                 Token::Emphasis { level, content } => {
                     let mut nested_style = style.clone();
@@ -369,11 +495,11 @@ impl Pdf {
                         2 => nested_style = nested_style.bold(),
                         _ => nested_style = nested_style.bold().italic(),
                     }
-                    self.render_inline_content_with_style(para, content, nested_style);
+                    self.render_inline_content_with_state(para, content, nested_style, html);
                 }
                 Token::StrongEmphasis(content) => {
                     let nested_style = style.clone().bold();
-                    self.render_inline_content_with_style(para, content, nested_style);
+                    self.render_inline_content_with_state(para, content, nested_style, html);
                 }
                 Token::Link(text, url) => {
                     let mut link_style = style.clone();
@@ -403,6 +529,66 @@ impl Pdf {
                     }
                     para.push_styled(content.clone(), code_style);
                 }
+                Token::Strikethrough(content) => {
+                    let strike_style = style.clone().strikethrough();
+                    self.render_inline_content_with_state(para, content, strike_style, html);
+                }
+                Token::Image(alt, url) => {
+                    // genpdfi doesn't embed images yet. Render the image as
+                    // a styled link so the alt-text is a clean clickable
+                    // label and the underline sits cleanly underneath it.
+                    let label = if alt.is_empty() {
+                        url.clone()
+                    } else {
+                        alt.clone()
+                    };
+                    if !url.is_empty() {
+                        let mut link_style = style.clone();
+                        if let Some(color) = self.style.link.text_color {
+                            link_style = link_style.with_color(
+                                genpdfi::style::Color::Rgb(color.0, color.1, color.2),
+                            );
+                        }
+                        if self.style.link.underline {
+                            link_style = link_style.underline();
+                        }
+                        para.push_link(label, url.clone(), link_style);
+                    } else {
+                        para.push_styled(label, style.clone());
+                    }
+                }
+                Token::HtmlInline(tag) => match classify_html_tag(tag) {
+                    Some(HtmlTagAction::Toggle(flag, on)) => match flag {
+                        HtmlFlag::Bold => html.bold = on,
+                        HtmlFlag::Italic => html.italic = on,
+                        HtmlFlag::Underline => html.underline = on,
+                        HtmlFlag::Strikethrough => html.strikethrough = on,
+                    },
+                    Some(HtmlTagAction::SoftBreak) => {
+                        // `<br/>` is a no-op inside an inline run — the
+                        // surrounding text already provides whitespace.
+                        // Inline-level forced linebreaks aren't expressible
+                        // via genpdfi's Paragraph; users wanting a real
+                        // break should use blank lines or two trailing
+                        // spaces (hard break).
+                    }
+                    None => {
+                        // Unknown tag — fall back to literal text.
+                        para.push_styled(tag.clone(), style.clone());
+                    }
+                },
+                Token::HardBreak => {
+                    // A hard break inside inline content (e.g. inside a list
+                    // item or blockquote body). genpdfi paragraphs don't
+                    // expose a forced linefeed, so render as a space — the
+                    // block-level path handles paragraph-boundary breaks.
+                    para.push_styled(" ".to_string(), style.clone());
+                }
+                Token::Newline => {
+                    // Soft break inside a paragraph: render as a space so
+                    // multi-line paragraphs flow naturally.
+                    para.push_styled(" ".to_string(), style.clone());
+                }
                 _ => {}
             }
         }
@@ -416,6 +602,81 @@ impl Pdf {
     fn render_inline_content(&self, para: &mut genpdfi::elements::Paragraph, tokens: &[Token]) {
         let style = genpdfi::style::Style::new().with_font_size(self.style.text.size);
         self.render_inline_content_with_style(para, tokens, style);
+    }
+
+    /// Renders a blockquote, splitting body tokens into "lines" on Newline
+    /// boundaries so a multi-line `> a\n> b\n> c` quote renders as three
+    /// visible lines. Block-level tokens that ended up inside the body
+    /// (Heading after Fix H, Code after Fix I) are recursed into the
+    /// matching renderer with the `> ` prefix on a separate line above.
+    fn render_blockquote(&self, doc: &mut Document, body: &[Token]) {
+        let bq = &self.style.block_quote;
+        doc.push(genpdfi::elements::Break::new(bq.before_spacing));
+
+        let mut style = genpdfi::style::Style::new().with_font_size(bq.size);
+        if bq.italic {
+            style = style.italic();
+        }
+        if bq.bold {
+            style = style.bold();
+        }
+        if let Some(color) = bq.text_color {
+            style = style.with_color(genpdfi::style::Color::Rgb(color.0, color.1, color.2));
+        }
+
+        // Group body tokens by Newline boundaries; emit one paragraph per
+        // group with a "> " prefix. Block-level tokens (Heading, Code,
+        // ListItem, HorizontalRule) inside the body break the current group
+        // and route to their dedicated renderer.
+        let mut buffer: Vec<Token> = Vec::new();
+        let flush_inline = |this: &Pdf,
+                            doc: &mut Document,
+                            buffer: &mut Vec<Token>,
+                            style: &genpdfi::style::Style| {
+            if buffer.is_empty() {
+                return;
+            }
+            let mut para = genpdfi::elements::Paragraph::default();
+            para.push_styled("> ".to_string(), style.clone());
+            this.render_inline_content_with_style(&mut para, buffer, style.clone());
+            doc.push(para);
+            buffer.clear();
+        };
+
+        for token in body {
+            match token {
+                Token::Newline => {
+                    flush_inline(self, doc, &mut buffer, &style);
+                }
+                Token::Heading(content, level) => {
+                    flush_inline(self, doc, &mut buffer, &style);
+                    self.render_heading(doc, content, *level);
+                }
+                Token::Code(lang, content) if content.contains('\n') => {
+                    flush_inline(self, doc, &mut buffer, &style);
+                    self.render_code_block(doc, lang, content);
+                }
+                Token::HorizontalRule => {
+                    flush_inline(self, doc, &mut buffer, &style);
+                    doc.push(genpdfi::elements::Break::new(
+                        self.style.horizontal_rule.after_spacing,
+                    ));
+                }
+                Token::ListItem {
+                    content,
+                    ordered,
+                    number,
+                    checked,
+                } => {
+                    flush_inline(self, doc, &mut buffer, &style);
+                    self.render_list_item(doc, content, *ordered, *number, *checked, 0);
+                }
+                _ => buffer.push(token.clone()),
+            }
+        }
+        flush_inline(self, doc, &mut buffer, &style);
+
+        doc.push(genpdfi::elements::Break::new(bq.after_spacing));
     }
 
     /// Renders a code block with appropriate styling.
@@ -463,6 +724,7 @@ impl Pdf {
         content: &[Token],
         ordered: bool,
         number: Option<usize>,
+        checked: Option<bool>,
         nesting_level: usize,
     ) {
         doc.push(genpdfi::elements::Break::new(
@@ -472,11 +734,19 @@ impl Pdf {
         let style = genpdfi::style::Style::new().with_font_size(self.style.list_item.size);
 
         let indent = "    ".repeat(nesting_level);
-        if !ordered {
-            para.push_styled(format!("{}- ", indent), style.clone());
+        let marker_prefix = if !ordered {
+            format!("{}- ", indent)
         } else if let Some(n) = number {
-            para.push_styled(format!("{}{}. ", indent, n), style.clone());
-        }
+            format!("{}{}. ", indent, n)
+        } else {
+            indent.clone()
+        };
+        let bullet = match checked {
+            Some(true) => format!("{}[x] ", marker_prefix),
+            Some(false) => format!("{}[ ] ", marker_prefix),
+            None => marker_prefix,
+        };
+        para.push_styled(bullet, style.clone());
 
         let inline_content: Vec<Token> = content
             .iter()
@@ -494,6 +764,7 @@ impl Pdf {
                 content: nested_content,
                 ordered: nested_ordered,
                 number: nested_number,
+                checked: nested_checked,
             } = token
             {
                 self.render_list_item(
@@ -501,6 +772,7 @@ impl Pdf {
                     nested_content,
                     *nested_ordered,
                     *nested_number,
+                    *nested_checked,
                     nesting_level + 1,
                 );
             }
@@ -636,11 +908,13 @@ mod tests {
                 content: vec![Token::Text("First item".to_string())],
                 ordered: false,
                 number: None,
+                checked: None,
             },
             Token::ListItem {
                 content: vec![Token::Text("Second item".to_string())],
                 ordered: true,
                 number: Some(1),
+                checked: None,
             },
         ];
         let pdf = create_test_pdf(tokens);
@@ -657,10 +931,12 @@ mod tests {
                     content: vec![Token::Text("Child item".to_string())],
                     ordered: false,
                     number: None,
+                    checked: None,
                 },
             ],
             ordered: false,
             number: None,
+            checked: None,
         }];
         let pdf = create_test_pdf(tokens);
         let doc = pdf.render_into_document();
@@ -730,6 +1006,7 @@ mod tests {
                 content: vec![Token::Text("List item".to_string())],
                 ordered: false,
                 number: None,
+                checked: None,
             },
             Token::Code("rust".to_string(), "let x = 42;".to_string()),
         ];
@@ -792,11 +1069,13 @@ mod tests {
                 content: vec![Token::Text("First item".to_string())],
                 ordered: false,
                 number: None,
+                checked: None,
             },
             Token::ListItem {
                 content: vec![Token::Text("Second item".to_string())],
                 ordered: false,
                 number: None,
+                checked: None,
             },
             Token::Code(
                 "rust".to_string(),

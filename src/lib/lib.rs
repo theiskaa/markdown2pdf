@@ -427,7 +427,9 @@ mod tests {
 
     #[test]
     fn test_invalid_markdown() {
-        let markdown = "![Invalid".to_string();
+        // `![Invalid` now gracefully falls back to literal text (Fix #11);
+        // use an unclosed HTML comment, which still surfaces a ParseError.
+        let markdown = "<!--never closes".to_string();
         let result = parse_into_file(
             markdown,
             "error_output.pdf",
@@ -621,7 +623,9 @@ Final paragraph.
 
     #[test]
     fn test_invalid_markdown_to_bytes() {
-        let markdown = "![Invalid".to_string();
+        // `![Invalid` now gracefully falls back to literal text (Fix #11);
+        // use an unclosed HTML comment, which still surfaces a ParseError.
+        let markdown = "<!--never closes".to_string();
         let result = parse_into_bytes(markdown, config::ConfigSource::Default, None);
         assert!(matches!(result, Err(MdpError::ParseError { .. })));
     }
