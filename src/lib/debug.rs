@@ -273,6 +273,17 @@ impl Token {
                 )
             }
 
+            Token::HtmlInline(html) => {
+                format!(
+                    "{}{{\n{}\"type\": \"HtmlInline\",\n{}\"content\": \"{}\"\n{}}}",
+                    indent,
+                    inner_indent,
+                    inner_indent,
+                    html.replace("\"", "\\\""),
+                    indent
+                )
+            }
+
             Token::HardBreak => format!(
                 "{}{{\n{}\"type\": \"HardBreak\"\n{}}}",
                 indent, inner_indent, indent

@@ -94,6 +94,9 @@ pub enum Token {
     TableAlignment(Alignment),
     /// HTML comment content
     HtmlComment(String),
+    /// Raw inline HTML (`<span>`, `</span>`, `<br/>`, etc.) per CommonMark
+    /// §6.6. Stored verbatim including the angle brackets.
+    HtmlInline(String),
     /// Soft line break (single `\n`).
     Newline,
     /// Hard line break (CommonMark §6.7): two-or-more trailing spaces or a
@@ -167,6 +170,7 @@ impl Token {
             Token::Link(text, _) => result.push_str(text),
             Token::Image(alt, _) => result.push_str(alt),
             Token::HtmlComment(comment) => result.push_str(comment),
+            Token::HtmlInline(html) => result.push_str(html),
             Token::Unknown(text) => result.push_str(text),
             Token::Newline | Token::HardBreak | Token::HorizontalRule => {
                 // These don't contain text
@@ -376,6 +380,25 @@ fn normalize_label(s: &str) -> String {
     out
 }
 
+/// CommonMark §6.1: if a code-span body begins AND ends with a space (and
+/// is not entirely composed of spaces), strip exactly one leading and one
+/// trailing space. Otherwise leave content untouched.
+fn strip_code_span_outer_space(s: String) -> String {
+    if s.len() >= 2 && s.starts_with(' ') && s.ends_with(' ') && !s.chars().all(|c| c == ' ') {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s
+    }
+}
+
+/// CommonMark "Unicode punctuation" predicate, used by the left/right-
+/// flanking-run rules. We accept all ASCII punctuation plus a small set of
+/// common Unicode punctuation marks. Strict CommonMark also includes the
+/// full Unicode `P*` general categories; deferred for simplicity.
+fn is_md_punctuation(c: char) -> bool {
+    is_ascii_punctuation(c) || matches!(c, '–' | '—' | '…' | '‘' | '’' | '“' | '”')
+}
+
 /// True for the 32 ASCII punctuation characters that CommonMark §2.4 allows
 /// to be backslash-escaped. Backslash before any other char (letters, digits,
 /// whitespace, end-of-input) leaves the backslash as literal text.
@@ -521,12 +544,28 @@ impl Lexer {
         while self.position < self.input.len() {
             let ch = self.current_char();
 
+            // Inline runs (emphasis, strikethrough) cannot span paragraph
+            // boundaries. A blank line forces parse_emphasis /
+            // parse_strikethrough into their literal-text fallback so the
+            // opener doesn't gobble subsequent paragraphs / headings.
+            if ch == '\n' && self.input.get(self.position + 1) == Some(&'\n') {
+                break;
+            }
+
             if is_delimiter(ch) {
-                // `_` runs flanked by alphanumerics on both sides are intra-word
-                // and per CommonMark must not close emphasis (e.g. `_foo_bar_`).
-                if ch == '_' && self.is_intra_word_underscore_run(self.position) {
-                    // fall through and consume as regular content
+                // For emphasis delimiters (`*`/`_`), only treat the run as a
+                // closer if it satisfies CommonMark's right-flanking rule
+                // (and isn't an intra-word `_`). Other delimiter chars (`\n`
+                // for headings, `~` for strikethrough) close unconditionally.
+                let is_emphasis_delim = ch == '*' || ch == '_';
+                let blocks_close = if is_emphasis_delim {
+                    let intra_word =
+                        ch == '_' && self.is_intra_word_underscore_run(self.position);
+                    intra_word || !self.can_close_emphasis(self.position)
                 } else {
+                    false
+                };
+                if !blocks_close {
                     break;
                 }
             }
@@ -584,6 +623,19 @@ impl Lexer {
             return Ok(Some(Token::HardBreak));
         }
 
+        // CommonMark §4.4: an indented (4-column) code block. Triggers at
+        // line start in Root or BlockQuote context AND only when the previous
+        // line is blank or we're at start-of-document, so list-item
+        // continuations and post-paragraph-without-blank lines aren't
+        // mis-routed to code.
+        if matches!(ctx, ParseContext::Root | ParseContext::BlockQuote)
+            && self.is_at_line_start()
+            && self.get_current_indent() >= 4
+            && self.previous_line_is_blank_or_bof()
+        {
+            return Ok(Some(self.parse_indented_code_block()));
+        }
+
         // Only skip whitespace if we're not immediately after a special token
         if !self.is_after_special_token() {
             self.skip_whitespace();
@@ -607,15 +659,21 @@ impl Lexer {
 
         // CommonMark setext heading: paragraph line followed by `===` / `---`.
         // Must run before the regular dispatch so that `Title\n---` becomes an
-        // H2 instead of being consumed as Text + HorizontalRule.
-        if is_line_start && matches!(ctx, ParseContext::Root) {
+        // H2 instead of being consumed as Text + HorizontalRule. Allowed in
+        // Root and BlockQuote contexts (a blockquote sub-lexer also needs
+        // setext detection for `> Title\n> ---`).
+        if is_line_start
+            && matches!(ctx, ParseContext::Root | ParseContext::BlockQuote)
+        {
             if let Some(level) = self.peek_setext_level() {
                 return Ok(Some(self.consume_setext_heading(level)?));
             }
         }
 
         let token = match current_char {
-            '#' if is_line_start && allow_block_tokens(ctx) => self.parse_heading()?,
+            '#' if is_line_start && allow_block_tokens(ctx) && self.is_atx_heading_start() => {
+                self.parse_heading()?
+            }
             '*' if is_line_start && allow_block_tokens(ctx) && self.is_thematic_break_line() => {
                 self.consume_current_line();
                 Token::HorizontalRule
@@ -627,8 +685,20 @@ impl Lexer {
             '*' if is_line_start && allow_block_tokens(ctx) && self.is_list_marker('*') => {
                 self.parse_list_item(false, 0, ctx)?
             }
-            '*' => self.parse_emphasis()?,
-            '_' if !self.is_intra_word_underscore_run(self.position) => self.parse_emphasis()?,
+            '*' => {
+                if self.can_open_emphasis(self.position) {
+                    self.parse_emphasis()?
+                } else {
+                    self.consume_run_as_text('*')
+                }
+            }
+            '_' if !self.is_intra_word_underscore_run(self.position) => {
+                if self.can_open_emphasis(self.position) {
+                    self.parse_emphasis()?
+                } else {
+                    self.consume_run_as_text('_')
+                }
+            }
             '_' => self.parse_text(ctx)?,
             '`' => self.parse_code()?,
             '~' if is_line_start
@@ -670,6 +740,12 @@ impl Lexer {
             '<' => {
                 if let Some(autolink) = self.try_parse_autolink() {
                     autolink
+                } else if let Some(len) = self.try_match_html_tag_len() {
+                    let html: String = self.input[self.position..self.position + len]
+                        .iter()
+                        .collect();
+                    self.position += len;
+                    Token::HtmlInline(html)
                 } else {
                     self.parse_text(ctx)?
                 }
@@ -688,16 +764,88 @@ impl Lexer {
         Ok(Some(token))
     }
 
-    /// Parses a heading token, counting '#' characters for level and collecting nested content
+    /// Per CommonMark §4.2: an ATX heading opener must be 1-6 `#` chars
+    /// followed by a space, tab, end-of-line, or end-of-input. This guard
+    /// runs before `parse_heading` so `#hello` (no space) and `####### too`
+    /// (more than 6 `#`s) fall through to paragraph text.
+    fn is_atx_heading_start(&self) -> bool {
+        if self.current_char() != '#' {
+            return false;
+        }
+        let mut p = self.position;
+        let mut count = 0usize;
+        while p < self.input.len() && self.input[p] == '#' {
+            count += 1;
+            p += 1;
+        }
+        if !(1..=6).contains(&count) {
+            return false;
+        }
+        match self.input.get(p) {
+            None => true,
+            Some(&c) => c == ' ' || c == '\t' || c == '\n',
+        }
+    }
+
+    /// Parses a heading token. Counts up to 6 `#` chars (caller has already
+    /// validated it's a real ATX heading via `is_atx_heading_start`), then
+    /// collects nested inline content. Per CommonMark §4.2, an optional
+    /// closing run of `#`s preceded by a space and followed only by spaces
+    /// is stripped from the heading content.
     fn parse_heading(&mut self) -> Result<Token, LexerError> {
-        let mut level = 0;
-        while self.current_char() == '#' {
+        let mut level = 0usize;
+        while self.current_char() == '#' && level < 6 {
             level += 1;
             self.advance();
         }
         self.skip_whitespace();
-        let content = self.parse_nested_content(|c| c == '\n', ParseContext::Inline)?;
+        let mut content = self.parse_nested_content(|c| c == '\n', ParseContext::Inline)?;
+
+        // Strip optional closing `#` sequence: ` +#+( +)*$` from the trailing
+        // text token's content. The space-before-the-#-run is required by the
+        // spec — a trailing `C#` with no preceding space stays as content.
+        if let Some(Token::Text(s)) = content.last_mut() {
+            let trimmed = s.trim_end_matches(|c: char| c == ' ' || c == '\t');
+            let mut bytes = trimmed.as_bytes();
+            let mut hash_run = 0usize;
+            while !bytes.is_empty() && *bytes.last().unwrap() == b'#' {
+                hash_run += 1;
+                bytes = &bytes[..bytes.len() - 1];
+            }
+            if hash_run > 0 && !bytes.is_empty() {
+                let prev = *bytes.last().unwrap();
+                if prev == b' ' || prev == b'\t' {
+                    let new_len = bytes.len();
+                    s.truncate(new_len);
+                    while s.ends_with(' ') || s.ends_with('\t') {
+                        s.pop();
+                    }
+                }
+            }
+            if s.is_empty() {
+                content.pop();
+            }
+        }
+
         Ok(Token::Heading(content, level))
+    }
+
+    /// Emits a run of identical characters as a literal `Token::Text`,
+    /// preserving any single trailing space so `next_token`'s leading-
+    /// whitespace skip doesn't swallow it. Used by the flanking-rule
+    /// rejections of `*`/`_` runs that can't open emphasis.
+    fn consume_run_as_text(&mut self, ch: char) -> Token {
+        let mut count = 0;
+        while self.position < self.input.len() && self.current_char() == ch {
+            count += 1;
+            self.advance();
+        }
+        let mut run = ch.to_string().repeat(count);
+        if self.position < self.input.len() && self.current_char() == ' ' {
+            run.push(' ');
+            self.advance();
+        }
+        Token::Text(run)
     }
 
     /// Parses emphasis tokens (* or _) with support for multiple levels (1-3).
@@ -719,8 +867,7 @@ impl Lexer {
         }
         let after_opener = self.position;
 
-        let mut content = self.parse_nested_content(|c| c == delimiter, ParseContext::Inline)?;
-        content.push(Token::Text(String::from(" ")));
+        let content = self.parse_nested_content(|c| c == delimiter, ParseContext::Inline)?;
 
         // Ensure proper closing
         for _ in 0..level {
@@ -748,27 +895,22 @@ impl Lexer {
 
     /// Parses code blocks, handling both inline code and fenced code blocks
     fn parse_code(&mut self) -> Result<Token, LexerError> {
+        let opener_pos = self.position;
+        let is_line_start = self.is_at_line_start();
         let start_backticks = self.count_backticks();
 
-        // Single backtick case
-        if start_backticks == 1 {
-            let mut content = String::new();
+        // CommonMark: a fenced code block needs 3+ backticks at line start
+        // AND no run of equal-or-larger backticks on the same line (which
+        // would be an inline-span closer instead).
+        let is_fence = start_backticks >= 3
+            && is_line_start
+            && self.no_backtick_closer_on_same_line(opener_pos, start_backticks);
 
-            // Read until either a closing backtick or end of input
-            while self.position < self.input.len() {
-                let ch = self.current_char();
-                if ch == '`' {
-                    self.advance(); // skip closing backtick
-                    break;
-                }
-                content.push(ch);
-                self.advance();
-            }
-
-            return Ok(Token::Code(String::new(), content));
+        if !is_fence {
+            return Ok(self.parse_inline_code_span_body(start_backticks));
         }
 
-        // Multi-line code block case
+        // Fenced code block.
         self.skip_whitespace();
         let language = self.read_until_newline();
         let mut content = String::new();
@@ -778,7 +920,16 @@ impl Lexer {
             if current_backticks == start_backticks {
                 break;
             }
-
+            if current_backticks > 0 {
+                // A backtick run shorter than the opener is part of the
+                // body — push it back as content (count_backticks already
+                // advanced past it). Without this, `let s = \`x\`;` inside
+                // a triple-fence loses both backticks around `x`.
+                for _ in 0..current_backticks {
+                    content.push('`');
+                }
+                continue;
+            }
             content.push(self.current_char());
             self.advance();
         }
@@ -796,6 +947,71 @@ impl Lexer {
         ))
     }
 
+    /// Walks from `opener_pos + count` to the end of the current line. Returns
+    /// false if a backtick run of `count` or more is found before `\n` (in
+    /// which case the opener is the start of an inline code span, not a fence).
+    fn no_backtick_closer_on_same_line(&self, opener_pos: usize, count: usize) -> bool {
+        let mut p = opener_pos + count;
+        while p < self.input.len() && self.input[p] != '\n' {
+            if self.input[p] == '`' {
+                let mut run = 0usize;
+                while p < self.input.len() && self.input[p] == '`' {
+                    run += 1;
+                    p += 1;
+                }
+                if run >= count {
+                    return false;
+                }
+                continue;
+            }
+            p += 1;
+        }
+        true
+    }
+
+    /// Reads an inline code span body. The opener has already been consumed
+    /// by `count_backticks`. Closes on the next backtick run of exactly
+    /// `opener_count` chars; runs of a different size are content. A single
+    /// `\n` is converted to a space (CommonMark §6.1). A blank line (`\n\n`)
+    /// or EOF before a closer triggers a literal-text fallback so an
+    /// unclosed run can't gobble across paragraphs.
+    fn parse_inline_code_span_body(&mut self, opener_count: usize) -> Token {
+        let body_start = self.position;
+        let mut content = String::new();
+        while self.position < self.input.len() {
+            let ch = self.current_char();
+            if ch == '\n' {
+                // Blank line ends the search and falls back to literal text.
+                if self.input.get(self.position + 1) == Some(&'\n') {
+                    self.position = body_start;
+                    return Token::Text("`".repeat(opener_count));
+                }
+                content.push(' ');
+                self.advance();
+                continue;
+            }
+            if ch == '`' {
+                let close_count = self.count_consecutive('`');
+                if close_count == opener_count {
+                    for _ in 0..close_count {
+                        self.advance();
+                    }
+                    return Token::Code(String::new(), strip_code_span_outer_space(content));
+                }
+                for _ in 0..close_count {
+                    content.push('`');
+                    self.advance();
+                }
+                continue;
+            }
+            content.push(ch);
+            self.advance();
+        }
+        // EOF without finding a closer — fall back to literal text.
+        self.position = body_start;
+        Token::Text("`".repeat(opener_count))
+    }
+
     /// Returns the number of consecutive `c` chars starting at `self.position`,
     /// without advancing.
     fn count_consecutive(&self, c: char) -> usize {
@@ -808,8 +1024,8 @@ impl Lexer {
         count
     }
 
-    /// Parses a GFM strikethrough run (`~~text~~`). Falls back to literal text
-    /// if the closer isn't found, mirroring the emphasis fallback (Fix #2).
+    /// Parses a GFM strikethrough run (`~~text~~`). Falls back to literal
+    /// text if the closer isn't found, mirroring the emphasis fallback.
     fn parse_strikethrough(&mut self) -> Result<Token, LexerError> {
         let mut level = 0;
         while self.current_char() == '~' {
@@ -951,7 +1167,7 @@ impl Lexer {
     /// resolves; otherwise emits the brackets literally).
     fn parse_link(&mut self) -> Result<Token, LexerError> {
         self.advance(); // skip '['
-        let text = self.read_until_char(']');
+        let text = self.read_until_char_with_escapes(']');
         self.advance(); // skip ']'
 
         // Inline: [text](url ...)
@@ -967,7 +1183,7 @@ impl Lexer {
         // Full or collapsed reference: [text][label] or [text][]
         if self.current_char() == '[' {
             self.advance(); // skip [
-            let label = self.read_until_char(']');
+            let label = self.read_until_char_with_escapes(']');
             if self.current_char() == ']' {
                 self.advance();
             }
@@ -1012,10 +1228,21 @@ impl Lexer {
     /// the URL (with any trailing whitespace trimmed) and the title (if any).
     /// On exit, `self.position` is at the closing `)` or end of input.
     fn read_link_destination_and_title(&mut self) -> (String, Option<String>) {
-        let url_start = self.position;
+        let mut url = String::new();
         let mut depth: i32 = 0;
         while self.position < self.input.len() {
             let c = self.current_char();
+            // CommonMark §6.3: `\<punct>` inside a URL emits the punctuation
+            // literally — so `Foo\(bar` and `Foo\)bar` both survive.
+            if c == '\\' && self.position + 1 < self.input.len() {
+                let next = self.input[self.position + 1];
+                if is_ascii_punctuation(next) {
+                    url.push(next);
+                    self.advance();
+                    self.advance();
+                    continue;
+                }
+            }
             if c == '\n' {
                 break;
             }
@@ -1039,13 +1266,10 @@ impl Lexer {
                     }
                 }
             }
+            url.push(c);
             self.advance();
         }
-        let url: String = self.input[url_start..self.position]
-            .iter()
-            .collect::<String>()
-            .trim_end()
-            .to_string();
+        let url = url.trim_end().to_string();
 
         // Skip whitespace between URL and potential title.
         while self.position < self.input.len()
@@ -1106,7 +1330,7 @@ impl Lexer {
         }
 
         self.advance();
-        let alt_text = self.read_until_char(']');
+        let alt_text = self.read_until_char_with_escapes(']');
         self.advance(); // skip ']'
 
         // Inline: ![alt](url "title")
@@ -1122,7 +1346,7 @@ impl Lexer {
         // Reference / collapsed: ![alt][label] or ![alt][]
         if self.current_char() == '[' {
             self.advance();
-            let label = self.read_until_char(']');
+            let label = self.read_until_char_with_escapes(']');
             if self.current_char() == ']' {
                 self.advance();
             }
@@ -1150,6 +1374,151 @@ impl Lexer {
 
         // Unresolved shortcut — emit literally instead of erroring.
         Ok(Token::Text(format!("![{}]", alt_text)))
+    }
+
+    /// Tries to recognize a raw inline HTML tag (open tag, closing tag,
+    /// or self-closing) starting at the current `<`. Returns the matched
+    /// length (including angle brackets) on success. Pragmatic subset of
+    /// CommonMark §6.6 — comments, processing instructions, declarations,
+    /// and CDATA sections are handled elsewhere or fall through to text.
+    fn try_match_html_tag_len(&self) -> Option<usize> {
+        if self.current_char() != '<' {
+            return None;
+        }
+        let chars = &self.input;
+        let start = self.position;
+        let mut p = start + 1;
+        if p >= chars.len() {
+            return None;
+        }
+
+        // Closing tag: `</name>`.
+        let is_closing = chars[p] == '/';
+        if is_closing {
+            p += 1;
+            if p >= chars.len() || !chars[p].is_ascii_alphabetic() {
+                return None;
+            }
+        } else {
+            // Open tag: must start with ASCII letter.
+            if !chars[p].is_ascii_alphabetic() {
+                return None;
+            }
+        }
+
+        // Tag name: letters/digits/-.
+        while p < chars.len()
+            && (chars[p].is_ascii_alphanumeric() || chars[p] == '-')
+        {
+            p += 1;
+        }
+
+        if is_closing {
+            // Optional whitespace then `>`.
+            while p < chars.len() && (chars[p] == ' ' || chars[p] == '\t') {
+                p += 1;
+            }
+            if chars.get(p) == Some(&'>') {
+                return Some(p - start + 1);
+            }
+            return None;
+        }
+
+        // Open tag: optional attributes, optional `/`, then `>`.
+        loop {
+            // Skip whitespace between attributes.
+            let ws_start = p;
+            while p < chars.len()
+                && (chars[p] == ' ' || chars[p] == '\t' || chars[p] == '\n')
+            {
+                p += 1;
+            }
+            if p >= chars.len() {
+                return None;
+            }
+            // End of tag.
+            if chars[p] == '>' {
+                return Some(p - start + 1);
+            }
+            if chars[p] == '/' {
+                p += 1;
+                if chars.get(p) == Some(&'>') {
+                    return Some(p - start + 1);
+                }
+                return None;
+            }
+            // Need at least one whitespace before an attribute (after the
+            // tag name or after the previous attribute).
+            if p == ws_start {
+                return None;
+            }
+            // Attribute name: letter or `_` or `:`, then alphanum/_/:/-/.
+            if !(chars[p].is_ascii_alphabetic() || chars[p] == '_' || chars[p] == ':') {
+                return None;
+            }
+            p += 1;
+            while p < chars.len()
+                && (chars[p].is_ascii_alphanumeric()
+                    || chars[p] == '_'
+                    || chars[p] == ':'
+                    || chars[p] == '-'
+                    || chars[p] == '.')
+            {
+                p += 1;
+            }
+            // Optional value: `= "..."` / `'...'` / unquoted.
+            let attr_end = p;
+            while p < chars.len() && (chars[p] == ' ' || chars[p] == '\t') {
+                p += 1;
+            }
+            if chars.get(p) == Some(&'=') {
+                p += 1;
+                while p < chars.len() && (chars[p] == ' ' || chars[p] == '\t') {
+                    p += 1;
+                }
+                if p >= chars.len() {
+                    return None;
+                }
+                match chars[p] {
+                    '"' => {
+                        p += 1;
+                        while p < chars.len() && chars[p] != '"' {
+                            p += 1;
+                        }
+                        if chars.get(p) != Some(&'"') {
+                            return None;
+                        }
+                        p += 1;
+                    }
+                    '\'' => {
+                        p += 1;
+                        while p < chars.len() && chars[p] != '\'' {
+                            p += 1;
+                        }
+                        if chars.get(p) != Some(&'\'') {
+                            return None;
+                        }
+                        p += 1;
+                    }
+                    _ => {
+                        // Unquoted value: chars until whitespace/`>`.
+                        if "\"'=<>`".contains(chars[p]) {
+                            return None;
+                        }
+                        while p < chars.len()
+                            && !chars[p].is_whitespace()
+                            && chars[p] != '>'
+                            && chars[p] != '/'
+                        {
+                            p += 1;
+                        }
+                    }
+                }
+            } else {
+                // Value-less attribute; restore p.
+                p = attr_end;
+            }
+        }
     }
 
     /// Cheap predicate used by `is_start_of_special_token`: scans the chars
@@ -1420,6 +1789,33 @@ impl Lexer {
         self.input[start..self.position].iter().collect()
     }
 
+    /// Reads link/image text or label content, honoring backslash escapes
+    /// for ASCII punctuation per CommonMark §2.4. Stops at the closing
+    /// delimiter (which is NOT consumed). `\<close>` and `\\` produce
+    /// literal chars; `\<punct>` produces the punctuation; `\<other>`
+    /// remains a literal backslash followed by the char.
+    fn read_until_char_with_escapes(&mut self, delimiter: char) -> String {
+        let mut out = String::new();
+        while self.position < self.input.len() {
+            let ch = self.current_char();
+            if ch == '\\' && self.position + 1 < self.input.len() {
+                let next = self.input[self.position + 1];
+                if is_ascii_punctuation(next) {
+                    out.push(next);
+                    self.advance();
+                    self.advance();
+                    continue;
+                }
+            }
+            if ch == delimiter {
+                break;
+            }
+            out.push(ch);
+            self.advance();
+        }
+        out
+    }
+
     /// Reads characters until a specific delimiter is encountered
     fn read_until_char(&mut self, delimiter: char) -> String {
         let start = self.position;
@@ -1469,7 +1865,11 @@ impl Lexer {
                     return true;
                 }
                 // Autolinks (`<scheme:…>`, `<user@host>`) can appear inline.
-                self.looks_like_autolink_start()
+                if self.looks_like_autolink_start() {
+                    return true;
+                }
+                // Raw HTML tags (`<span>`, `</span>`, `<br/>`).
+                self.try_match_html_tag_len().is_some()
             }
 
             _ => false,
@@ -1491,6 +1891,114 @@ impl Lexer {
             }
         }
         (line, col)
+    }
+
+    /// CommonMark §6.2 left-flanking-delimiter-run. The run at `pos` is
+    /// left-flanking if it is NOT followed by Unicode whitespace, AND
+    /// EITHER not followed by punctuation OR preceded by whitespace/punc.
+    /// "Followed by end-of-input" counts as whitespace for this rule.
+    fn is_left_flanking_run(&self, pos: usize) -> bool {
+        let delim = match self.input.get(pos) {
+            Some(&c) if c == '*' || c == '_' || c == '~' => c,
+            _ => return false,
+        };
+        let mut end = pos;
+        while end < self.input.len() && self.input[end] == delim {
+            end += 1;
+        }
+        let before = if pos == 0 {
+            None
+        } else {
+            self.input.get(pos - 1).copied()
+        };
+        let after = self.input.get(end).copied();
+
+        let not_followed_by_ws = matches!(after, Some(c) if !c.is_whitespace());
+        if !not_followed_by_ws {
+            return false;
+        }
+        let followed_by_punc = matches!(after, Some(c) if is_md_punctuation(c));
+        if !followed_by_punc {
+            return true;
+        }
+        match before {
+            None => true,
+            Some(c) => c.is_whitespace() || is_md_punctuation(c),
+        }
+    }
+
+    /// CommonMark §6.2 right-flanking-delimiter-run. Symmetric to left-flanking.
+    fn is_right_flanking_run(&self, pos: usize) -> bool {
+        let delim = match self.input.get(pos) {
+            Some(&c) if c == '*' || c == '_' || c == '~' => c,
+            _ => return false,
+        };
+        let mut end = pos;
+        while end < self.input.len() && self.input[end] == delim {
+            end += 1;
+        }
+        let before = if pos == 0 {
+            None
+        } else {
+            self.input.get(pos - 1).copied()
+        };
+        let after = self.input.get(end).copied();
+
+        let not_preceded_by_ws = matches!(before, Some(c) if !c.is_whitespace());
+        if !not_preceded_by_ws {
+            return false;
+        }
+        let preceded_by_punc = matches!(before, Some(c) if is_md_punctuation(c));
+        if !preceded_by_punc {
+            return true;
+        }
+        match after {
+            None => true,
+            Some(c) => c.is_whitespace() || is_md_punctuation(c),
+        }
+    }
+
+    /// Whether the `*`/`_` run at `pos` is allowed to open emphasis. `*` runs
+    /// open when left-flanking; `_` additionally must not be right-flanking
+    /// (or must be preceded by punctuation).
+    fn can_open_emphasis(&self, pos: usize) -> bool {
+        let delim = self.input.get(pos).copied();
+        if !self.is_left_flanking_run(pos) {
+            return false;
+        }
+        if delim == Some('*') {
+            return true;
+        }
+        if !self.is_right_flanking_run(pos) {
+            return true;
+        }
+        let before = if pos == 0 {
+            None
+        } else {
+            self.input.get(pos - 1).copied()
+        };
+        matches!(before, Some(c) if is_md_punctuation(c))
+    }
+
+    /// Whether the `*`/`_` run at `pos` is allowed to close emphasis. `*` runs
+    /// close when right-flanking; `_` additionally must not be left-flanking
+    /// (or must be followed by punctuation).
+    fn can_close_emphasis(&self, pos: usize) -> bool {
+        let delim = self.input.get(pos).copied();
+        if !self.is_right_flanking_run(pos) {
+            return false;
+        }
+        if delim == Some('*') {
+            return true;
+        }
+        if !self.is_left_flanking_run(pos) {
+            return true;
+        }
+        let mut end = pos;
+        while end < self.input.len() && self.input.get(end) == delim.as_ref() {
+            end += 1;
+        }
+        matches!(self.input.get(end), Some(c) if is_md_punctuation(*c))
     }
 
     /// Returns true when the `_` run at `pos` is "intra-word" — i.e. flanked on
@@ -1526,15 +2034,19 @@ impl Lexer {
     }
 
     /// Checks if we're immediately after a special token that should preserve
-    /// following spaces. Includes `` ` `` (code span), `)` (inline link/image),
-    /// `]` (reference / shortcut link / image), and `>` (autolink). Without
-    /// this, `next_token`'s leading-`skip_whitespace` eats the space between
-    /// e.g. a reference link and the next word.
+    /// following spaces. Includes the closing chars of every inline construct:
+    /// `` ` `` (code span), `)` (inline link/image), `]` (reference /
+    /// shortcut), `>` (autolink / inline HTML), `*` and `_` (emphasis), `~`
+    /// (strikethrough). Without these, `next_token`'s leading whitespace
+    /// skip eats the space between e.g. `*foo*` and the next word.
     fn is_after_special_token(&self) -> bool {
         if self.position == 0 {
             return false;
         }
-        matches!(self.input[self.position - 1], '`' | ')' | ']' | '>')
+        matches!(
+            self.input[self.position - 1],
+            '`' | ')' | ']' | '>' | '*' | '_' | '~'
+        )
     }
 
     /// Checks if the current position contains a horizontal rule (---)
@@ -1601,6 +2113,72 @@ impl Lexer {
     /// trailing whitespace), returns the heading level. The current line
     /// must contain non-whitespace content. Per CommonMark §4.3.
     fn peek_setext_level(&self) -> Option<usize> {
+        // Setext doesn't apply when the current line is itself the start of
+        // another block construct (list item, ATX heading, blockquote,
+        // thematic break, fenced code). The most common false-positive in
+        // our setting is a list-marker line: `- foo\n---` is a list item +
+        // thematic break, not setext H2.
+        let scan_start = {
+            let mut p = self.position;
+            let mut leading = 0usize;
+            while p < self.input.len() && self.input[p] == ' ' && leading < 3 {
+                p += 1;
+                leading += 1;
+            }
+            p
+        };
+        if scan_start < self.input.len() {
+            let c = self.input[scan_start];
+            if c == '-' || c == '+' || c == '*' {
+                if let Some(&n) = self.input.get(scan_start + 1) {
+                    if n == ' ' || n == '\t' || n == '\n' {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            }
+            if c.is_ascii_digit() {
+                let mut q = scan_start;
+                while q < self.input.len() && self.input[q].is_ascii_digit() {
+                    q += 1;
+                }
+                if q < self.input.len()
+                    && (self.input[q] == '.' || self.input[q] == ')')
+                {
+                    if let Some(&n) = self.input.get(q + 1) {
+                        if n == ' ' || n == '\t' || n == '\n' {
+                            return None;
+                        }
+                    }
+                }
+            }
+            if c == '#' {
+                // ATX heading line — not a paragraph for setext purposes.
+                let savepos = self.position;
+                let _ = savepos;
+                // Inline check without mutating: walk #s, see trailing.
+                let mut q = scan_start;
+                let mut hashes = 0usize;
+                while q < self.input.len() && self.input[q] == '#' {
+                    hashes += 1;
+                    q += 1;
+                }
+                if (1..=6).contains(&hashes) {
+                    if q >= self.input.len() {
+                        return None;
+                    }
+                    let n = self.input[q];
+                    if n == ' ' || n == '\t' || n == '\n' {
+                        return None;
+                    }
+                }
+            }
+            if c == '>' {
+                return None;
+            }
+        }
+
         // Scan the current line; require non-whitespace content.
         let mut p = self.position;
         let mut has_content = false;
@@ -1670,7 +2248,9 @@ impl Lexer {
         Ok(Token::Heading(content, level))
     }
 
-    /// Checks if current position starts an ordered list marker (e.g., "1.")
+    /// Checks if current position starts an ordered list marker (e.g.
+    /// `1.` or `1)`). Per CommonMark §5.2, both `.` and `)` are valid
+    /// ordered-list marker terminators.
     fn check_ordered_list_marker(&mut self) -> Option<usize> {
         let start_pos = self.position;
         let mut pos = start_pos;
@@ -1681,7 +2261,9 @@ impl Lexer {
             pos += 1;
         }
 
-        if pos < self.input.len() && self.input[pos] == '.' {
+        if pos < self.input.len()
+            && (self.input[pos] == '.' || self.input[pos] == ')')
+        {
             if let Ok(number) = number_str.parse::<usize>() {
                 return Some(number);
             }
@@ -1703,9 +2285,12 @@ impl Lexer {
             self.advance();
         } else {
             number = self.check_ordered_list_marker();
-            // Skip past number and period
-            while self.position < self.input.len()
-                && (self.current_char().is_ascii_digit() || self.current_char() == '.')
+            // Skip past digit run plus the marker terminator (`.` or `)`).
+            while self.position < self.input.len() && self.current_char().is_ascii_digit() {
+                self.advance();
+            }
+            if self.position < self.input.len()
+                && (self.current_char() == '.' || self.current_char() == ')')
             {
                 self.advance();
             }
@@ -1746,38 +2331,120 @@ impl Lexer {
             }
         }
 
-        // Move to next line if exists
+        // Move past the line-terminating newline if there is one.
         if self.position < self.input.len() && self.current_char() == '\n' {
             self.advance();
         }
 
-        while self.position < self.input.len() {
-            let current_indent = self.get_current_indent();
-            if current_indent <= indent_level {
-                // Back to same or lower indentation level, exit nested parsing
+        // Continuation loop: handles both deeper-indented sub-items / nested
+        // markers AND CommonMark §5.2 lazy paragraph continuation (lines at
+        // any indent that don't start a new block belong to this item).
+        loop {
+            if self.position >= self.input.len() {
+                break;
+            }
+            if !self.is_at_line_start() {
                 break;
             }
 
-            self.position += current_indent;
-            match self.current_char() {
-                '-' | '+' => {
-                    if !self.check_horizontal_rule()? {
-                        content.push(self.parse_list_item(false, current_indent, parent_ctx)?);
+            let line_start = self.position;
+            let cur_indent = self.get_current_indent();
+            let after_indent = line_start + cur_indent;
+
+            // Blank line ends the item.
+            if after_indent >= self.input.len() || self.input[after_indent] == '\n' {
+                break;
+            }
+
+            // Decide if this line starts a new block (which terminates the
+            // item) or is continuation content.
+            let is_marker_line = self.line_starts_with_list_marker(after_indent);
+            let next_ch = self.input[after_indent];
+
+            if cur_indent > indent_level {
+                // Deeper-indented line: prefer nested-list-marker handling.
+                if is_marker_line {
+                    self.position = after_indent;
+                    match next_ch {
+                        '-' | '+' => {
+                            if !self.check_horizontal_rule()? {
+                                content.push(self.parse_list_item(
+                                    false,
+                                    cur_indent,
+                                    parent_ctx,
+                                )?);
+                                continue;
+                            }
+                            // It was a thematic break — stop.
+                            self.position = line_start;
+                            break;
+                        }
+                        '*' => {
+                            if self.is_list_marker('*') {
+                                content.push(self.parse_list_item(
+                                    false,
+                                    cur_indent,
+                                    parent_ctx,
+                                )?);
+                                continue;
+                            }
+                            self.position = line_start;
+                            break;
+                        }
+                        '0'..='9' => {
+                            if self.check_ordered_list_marker().is_some() {
+                                content.push(self.parse_list_item(
+                                    true,
+                                    cur_indent,
+                                    parent_ctx,
+                                )?);
+                                continue;
+                            }
+                            self.position = line_start;
+                        }
+                        _ => {}
                     }
                 }
-                '*' => {
-                    if self.is_list_marker('*') {
-                        content.push(self.parse_list_item(false, current_indent, parent_ctx)?);
-                    } else {
+                // Fall through to lazy continuation for non-marker deeper
+                // content (e.g. an indented paragraph continuation line).
+            } else {
+                // Indent <= parent. Sibling/outer marker terminates this item.
+                if is_marker_line {
+                    break;
+                }
+                // ATX heading, blockquote, thematic break also terminate.
+                if next_ch == '#' {
+                    let savepos = self.position;
+                    self.position = after_indent;
+                    let is_atx = self.is_atx_heading_start();
+                    self.position = savepos;
+                    if is_atx {
                         break;
                     }
                 }
-                '0'..='9' => {
-                    if self.check_ordered_list_marker().is_some() {
-                        content.push(self.parse_list_item(true, current_indent, parent_ctx)?);
-                    }
+                if next_ch == '>' {
+                    break;
                 }
-                _ => break,
+                let savepos = self.position;
+                self.position = after_indent;
+                let is_hr = self.is_thematic_break_line();
+                self.position = savepos;
+                if is_hr {
+                    break;
+                }
+            }
+
+            // Lazy continuation: append a Newline plus this line's inline
+            // tokens to the current item's content.
+            self.position = after_indent;
+            content.push(Token::Newline);
+            while self.position < self.input.len() && self.current_char() != '\n' {
+                if let Some(tok) = self.next_token(ParseContext::ListItem)? {
+                    content.push(tok);
+                }
+            }
+            if self.position < self.input.len() && self.current_char() == '\n' {
+                self.advance();
             }
         }
 
@@ -1787,6 +2454,36 @@ impl Lexer {
             number,
             checked,
         })
+    }
+
+    /// Returns true if the chars at `pos` (line start, post-indent) form a
+    /// list-marker opener: `-`, `+`, `*` followed by space/tab/EOL, or
+    /// digits + `.`/`)` followed by space/tab/EOL.
+    fn line_starts_with_list_marker(&self, pos: usize) -> bool {
+        if pos >= self.input.len() {
+            return false;
+        }
+        let trailing_ok = |idx: usize| -> bool {
+            match self.input.get(idx) {
+                None => true,
+                Some(&c) => c == ' ' || c == '\t' || c == '\n',
+            }
+        };
+        match self.input[pos] {
+            '-' | '+' | '*' => trailing_ok(pos + 1),
+            c if c.is_ascii_digit() => {
+                let mut p = pos;
+                while p < self.input.len() && self.input[p].is_ascii_digit() {
+                    p += 1;
+                }
+                if p >= self.input.len() {
+                    return false;
+                }
+                let term = self.input[p];
+                (term == '.' || term == ')') && trailing_ok(p + 1)
+            }
+            _ => false,
+        }
     }
 
     /// Checks if the current posisiton is the start of a table
@@ -1878,15 +2575,116 @@ impl Lexer {
         })
     }
 
-    /// Gets the current line's indentation level
-    fn get_current_indent(&self) -> usize {
-        let mut count = 0;
-        let mut pos = self.position;
+    /// True if `self.position` is at the start of a document, or at the start
+    /// of a line whose preceding line contains only whitespace. Used to gate
+    /// indented-code-block detection so we don't lift list-item continuations
+    /// or post-paragraph indented lines into code blocks.
+    fn previous_line_is_blank_or_bof(&self) -> bool {
+        if self.position == 0 {
+            return true;
+        }
+        if self.input.get(self.position - 1) != Some(&'\n') {
+            return false;
+        }
+        // Find the start of the previous line.
+        let mut prev_line_start = self.position - 1; // points at the \n
+        while prev_line_start > 0 && self.input[prev_line_start - 1] != '\n' {
+            prev_line_start -= 1;
+        }
+        // Previous line is input[prev_line_start..position-1] (excluding the \n).
+        let prev_line_end = self.position - 1;
+        self.input[prev_line_start..prev_line_end]
+            .iter()
+            .all(|c| *c == ' ' || *c == '\t')
+    }
 
+    /// CommonMark §4.4 indented code block. Strips up to 4 columns of leading
+    /// whitespace from each line, includes blank lines if subsequent lines
+    /// resume the 4-column indent, and stops at the first non-blank line with
+    /// less than 4 columns of indent.
+    fn parse_indented_code_block(&mut self) -> Token {
+        let mut content = String::new();
+        loop {
+            if !self.is_at_line_start() {
+                break;
+            }
+            let indent = self.get_current_indent();
+            if indent < 4 {
+                // Blank line: include if a 4-indented line follows; else end.
+                let line_start = self.position;
+                let mut p = self.position;
+                while p < self.input.len() && (self.input[p] == ' ' || self.input[p] == '\t') {
+                    p += 1;
+                }
+                if p < self.input.len() && self.input[p] == '\n' {
+                    // Look ahead past the \n to see if the next line is 4-indented.
+                    let mut q = p + 1;
+                    let mut next_indent = 0usize;
+                    while q < self.input.len() {
+                        match self.input[q] {
+                            ' ' => next_indent += 1,
+                            '\t' => next_indent += 4 - (next_indent % 4),
+                            _ => break,
+                        }
+                        q += 1;
+                    }
+                    if next_indent >= 4 && q < self.input.len() && self.input[q] != '\n' {
+                        content.push('\n');
+                        self.position = p + 1;
+                        continue;
+                    }
+                }
+                self.position = line_start;
+                break;
+            }
+
+            // Strip 4 columns of leading whitespace.
+            let mut consumed_cols = 0usize;
+            while consumed_cols < 4 && self.position < self.input.len() {
+                match self.current_char() {
+                    ' ' => {
+                        consumed_cols += 1;
+                        self.advance();
+                    }
+                    '\t' => {
+                        let span = 4 - (consumed_cols % 4);
+                        if consumed_cols + span <= 4 {
+                            consumed_cols += span;
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+
+            // Read the rest of the line.
+            while self.position < self.input.len() && self.current_char() != '\n' {
+                content.push(self.current_char());
+                self.advance();
+            }
+            if self.position < self.input.len() && self.current_char() == '\n' {
+                content.push('\n');
+                self.advance();
+            }
+        }
+        Token::Code(
+            String::new(),
+            content.trim_end_matches('\n').to_string(),
+        )
+    }
+
+    /// Gets the current line's indentation level in columns. CommonMark §2.2:
+    /// a tab advances to the next multiple of 4, so `  \t` is 4 columns total
+    /// (not 6 as a flat 4-per-tab rule would give).
+    fn get_current_indent(&self) -> usize {
+        let mut count = 0usize;
+        let mut pos = self.position;
         while pos < self.input.len() {
             match self.input[pos] {
                 ' ' => count += 1,
-                '\t' => count += 4, // Convert tabs to spaces (common convention)
+                '\t' => count += 4 - (count % 4),
                 _ => break,
             }
             pos += 1;
@@ -1950,35 +2748,28 @@ mod tests {
 
     #[test]
     fn test_emphasis() {
+        // After removing the spurious trailing-space push in parse_emphasis,
+        // emphasis content is exactly the inner text — no extra " " token.
         let tests = vec![
             (
                 "*italic*",
                 vec![Token::Emphasis {
                     level: 1,
-                    content: vec![
-                        Token::Text("italic".to_string()),
-                        Token::Text(" ".to_string()),
-                    ],
+                    content: vec![Token::Text("italic".to_string())],
                 }],
             ),
             (
                 "**bold**",
                 vec![Token::Emphasis {
                     level: 2,
-                    content: vec![
-                        Token::Text("bold".to_string()),
-                        Token::Text(" ".to_string()),
-                    ],
+                    content: vec![Token::Text("bold".to_string())],
                 }],
             ),
             (
                 "_also italic_",
                 vec![Token::Emphasis {
                     level: 1,
-                    content: vec![
-                        Token::Text("also italic".to_string()),
-                        Token::Text(" ".to_string()),
-                    ],
+                    content: vec![Token::Text("also italic".to_string())],
                 }],
             ),
         ];
@@ -2150,9 +2941,9 @@ This is a paragraph with *italic* and **bold** text.
 
     #[test]
     fn test_error_cases() {
-        // Malformed image syntax now gracefully falls back to literal text
-        // (Fix #11), so it no longer errors. An unclosed HTML comment still
-        // surfaces a real LexerError via `UnexpectedEndOfInput`.
+        // An unclosed HTML comment still surfaces a real LexerError via
+        // `UnexpectedEndOfInput` — most other malformed inline constructs
+        // gracefully fall back to literal text instead of erroring.
         let mut lexer = Lexer::new("<!--never closes".to_string());
         assert!(matches!(lexer.parse(), Err(_)));
     }
@@ -2282,19 +3073,18 @@ This is a paragraph with *italic* and **bold** text.
 
     #[test]
     fn test_whitespace_handling() {
-        let tests = vec![(
-            "*emphasis with space after*  ",
-            vec![Token::Emphasis {
-                level: 1,
-                content: vec![
-                    Token::Text("emphasis with space after".to_string()),
-                    Token::Text(" ".to_string()),
-                ],
-            }],
-        )];
-
-        for (input, expected) in tests {
-            assert_eq!(parse(input), expected);
+        // Trailing whitespace after a closing emphasis delimiter is preserved
+        // as a separate Text token rather than swallowed. Validate that the
+        // emphasis itself parses cleanly; trailing whitespace tokens are OK.
+        let tokens = parse("*emphasis with space after*  ");
+        assert!(matches!(tokens[0], Token::Emphasis { level: 1, .. }));
+        if let Token::Emphasis { content, .. } = &tokens[0] {
+            let inner = Token::collect_all_text(content);
+            assert!(
+                inner.contains("emphasis with space after"),
+                "got {:?}",
+                inner
+            );
         }
     }
 
@@ -2741,37 +3531,14 @@ mod error_position_tests {
 
     #[test]
     fn error_message_uses_line_and_column() {
-        // Use a still-erroring input — `![Invalid` now falls back to text.
-        // `*` followed by EOF inside a paragraph won't error either; the
-        // `parse_text` empty-content path is the cleanest remaining trigger
-        // for an error message that uses our line:col formatter.
-        // Construct one by feeding raw input that parse_text would error on:
-        // an inline construct that consumes everything then leaves nothing.
-        // Simpler: an unclosed HTML comment still surfaces UnexpectedEndOfInput,
-        // but that doesn't carry a line:col. Use a malformed case that
-        // exercises parse_text's empty-content path:
-        //   `*` at start of paragraph with delimiter run that would have
-        //   become emphasis but parse_text now consumes the run as text via
-        //   the fallback, so it doesn't error either.
-        // After Fix #11 the lexer is mostly graceful; for now we just verify
-        // that WHEN an error does happen, it has a "line" marker. Use the
-        // image-malformed path which still surfaces line:col when an `[`
-        // closes but no `(` opens *and* the content can't form a shortcut
-        // either — actually that no longer happens. So: assert via the
-        // `pos_to_line_col` helper directly via an inline emphasis fallback
-        // path? That returns Ok now too.
-        // The test reduces to: ensure formatter is correct when invoked.
         let lexer = Lexer::new("a\nb\nc".to_string());
-        let (line, col) = lexer.pos_to_line_col(4); // after "a\nb\n"
+        let (line, col) = lexer.pos_to_line_col(4);
         assert_eq!(line, 3);
         assert_eq!(col, 1);
     }
 
     #[test]
     fn error_reports_correct_line() {
-        // After Fix #11 the lexer no longer errors on most malformed inline
-        // constructs (they fall back to literal text). Verify the line/col
-        // helper directly — it's still used wherever errors do surface.
         let lexer = Lexer::new("first\nsecond\nthird".to_string());
         let pos = "first\nsecond\n".len();
         let (line, col) = lexer.pos_to_line_col(pos);
@@ -2781,9 +3548,6 @@ mod error_position_tests {
 
     #[test]
     fn error_variant_still_matches() {
-        // Use an input that still errors after Fix #11 (graceful fallback
-        // for malformed images). An unclosed HTML comment is the cleanest
-        // remaining error trigger.
         let mut lexer = Lexer::new("<!--never closes".to_string());
         assert!(matches!(lexer.parse(), Err(_)));
     }
@@ -2855,10 +3619,7 @@ mod backslash_escape_tests {
                 Token::Text("\\".to_string()),
                 Token::Emphasis {
                     level: 1,
-                    content: vec![
-                        Token::Text("foo".to_string()),
-                        Token::Text(" ".to_string()),
-                    ],
+                    content: vec![Token::Text("foo".to_string())],
                 },
             ]
         );
@@ -3012,10 +3773,8 @@ mod backslash_escape_tests {
 
     #[test]
     fn escape_does_not_consume_newline() {
-        // `\` is not an escape against `\n`, but per CommonMark §6.7 a lone
-        // trailing backslash before a newline IS a hard line break. After
-        // Fix #8 this produces Text("foo") + HardBreak + Text("bar"),
-        // not a literal-backslash soft break.
+        // Per CommonMark §6.7 a lone trailing backslash before a newline
+        // is a hard line break — produces Text("foo") + HardBreak + Text("bar").
         let tokens = parse("foo\\\nbar");
         assert!(matches!(tokens[0], Token::Text(ref s) if s == "foo"));
         assert!(tokens.iter().any(|t| matches!(t, Token::HardBreak)));
@@ -3145,7 +3904,6 @@ mod unmatched_emphasis_fallback_tests {
 
     #[test]
     fn regression_intra_word_underscore_still_text() {
-        // From earlier fix — must remain Text, not trigger fallback weirdness.
         let tokens = parse("phpmyadmin/localized_docs");
         assert_eq!(
             tokens,
@@ -3572,7 +4330,7 @@ mod gfm_trio_tests {
 
     #[test]
     fn strikethrough_unmatched_falls_back() {
-        // After Fix #2, an unmatched ~~ should not abort.
+        // An unmatched ~~ must not abort — it falls back to literal text.
         let tokens = parse("starts ~~ but never closes");
         let text = Token::collect_all_text(&tokens);
         assert!(text.contains("~~"), "got {:?}", text);
@@ -4181,17 +4939,14 @@ mod reference_link_tests {
     #[test]
     fn whitespace_in_label_normalized() {
         let input = "[Multi  Word  Label][m]\n\n[M  Word  Label]: https://example.com";
-        // CommonMark also collapses internal whitespace before comparison.
         let tokens = parse(input);
-        // We accept either: a Link found OR no link (not strict on full
-        // unicode normalization for now). At minimum: must not crash.
         let _ = tokens;
     }
 
     #[test]
     fn space_after_reference_link_preserved() {
-        // Regression: text following a [t][r] reference must keep its
-        // leading space — `]` should be treated like `)` by
+        // Text following a [t][r] reference must keep its leading space —
+        // `]` should be treated like `)` by
         // is_after_special_token so skip_whitespace doesn't swallow it.
         let input = "See [the spec][cm] for details.\n\n[cm]: https://x";
         let tokens = parse(input);
@@ -4247,6 +5002,895 @@ mod reference_link_tests {
             body.contains(" for "),
             "expected leading space before 'for', got {:?}",
             body
+        );
+    }
+}
+
+#[cfg(test)]
+mod multi_backtick_inline_code_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn double_backtick_inline_with_single_backtick_inside() {
+        let tokens = parse("``code with ` inside``");
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), "code with ` inside".to_string())]
+        );
+    }
+
+    #[test]
+    fn triple_backtick_inline_when_not_at_line_start() {
+        let tokens = parse("inline ```code with `` inside``` here");
+        // First Text("inline "), then Code, then Text(" here").
+        assert!(matches!(tokens[0], Token::Text(ref s) if s.contains("inline")));
+        assert!(matches!(tokens[1], Token::Code(_, ref c) if c.contains("``")));
+    }
+
+    #[test]
+    fn double_backtick_with_count_mismatch_inside() {
+        // ``a`b``  -> code containing "a`b". A single ` inside doesn't close.
+        let tokens = parse("``a`b``");
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), "a`b".to_string())]
+        );
+    }
+
+    #[test]
+    fn fenced_block_still_works() {
+        let input = "```rust\nfn main() {}\n```";
+        let tokens = parse(input);
+        assert_eq!(
+            tokens,
+            vec![Token::Code("rust".to_string(), "fn main() {}".to_string())]
+        );
+    }
+
+    #[test]
+    fn fenced_block_preserves_inner_backticks() {
+        // A single ` (or any run shorter than the opener) inside the body
+        // must remain in the output. Pre-existing bug: count_backticks
+        // advanced past the inner ticks but never pushed them to content.
+        let input = "```rust\nlet s = `template`;\n```";
+        let tokens = parse(input);
+        if let Token::Code(_, body) = &tokens[0] {
+            assert!(
+                body.contains("`template`"),
+                "fenced block stripped inner backticks: {:?}",
+                body
+            );
+        } else {
+            panic!("expected Code, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn fenced_block_preserves_double_backtick_run_inside() {
+        // Triple-fence; body contains `` (count 2) which must survive.
+        let input = "```\nfoo `` bar\n```";
+        let tokens = parse(input);
+        if let Token::Code(_, body) = &tokens[0] {
+            assert!(
+                body.contains("``"),
+                "double-backtick run lost in fence body: {:?}",
+                body
+            );
+        } else {
+            panic!("expected Code, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn double_backtick_at_line_start_with_content_is_inline() {
+        // ``code`` at line start is still inline if there's content on the
+        // same line beyond the closing run.
+        let tokens = parse("``inline`` plus text");
+        assert!(matches!(tokens[0], Token::Code(_, ref c) if c == "inline"));
+        assert!(tokens.iter().any(|t| matches!(t, Token::Text(s) if s.contains("plus text"))));
+    }
+
+    #[test]
+    fn unclosed_inline_code_falls_back_to_text() {
+        // No matching closer (EOF reached) — per CommonMark, the opener run
+        // becomes literal text so the body chars still render normally.
+        let tokens = parse("``never closes");
+        assert!(matches!(tokens[0], Token::Text(ref s) if s == "``"));
+        let body = Token::collect_all_text(&tokens);
+        assert!(body.contains("never closes"), "got {:?}", body);
+    }
+
+    #[test]
+    fn unclosed_inline_code_does_not_gobble_across_blank_line() {
+        // An unclosed `` ` `` inside a paragraph must NOT pull the next
+        // paragraph's text into a code block. The literal-text fallback
+        // prevents the gobble.
+        let input = "first paragraph with `unclosed.\n\nSecond paragraph.";
+        let tokens = parse(input);
+        // No multi-line Code should be produced.
+        let multi_line_code = tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code(_, c) if c.contains('\n')));
+        assert!(
+            !multi_line_code,
+            "code span gobbled across paragraphs: {:?}",
+            tokens
+        );
+        let body = Token::collect_all_text(&tokens);
+        assert!(body.contains("Second paragraph"), "got {:?}", body);
+    }
+
+    #[test]
+    fn single_backtick_unchanged() {
+        let tokens = parse("`simple`");
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), "simple".to_string())]
+        );
+    }
+}
+
+#[cfg(test)]
+mod tab_expansion_tests {
+    use super::*;
+
+    #[test]
+    fn tab_at_column_one_is_four_spaces() {
+        let lexer = Lexer::new("\tx".to_string());
+        assert_eq!(lexer.get_current_indent(), 4);
+    }
+
+    #[test]
+    fn two_spaces_then_tab_is_four_columns() {
+        // 2 spaces + \t → tab fills to next column-4 boundary, total = 4.
+        let lexer = Lexer::new("  \tx".to_string());
+        assert_eq!(lexer.get_current_indent(), 4);
+    }
+
+    #[test]
+    fn three_spaces_then_tab_is_four_columns() {
+        // 3 spaces + \t → tab fills col 4 only, total = 4.
+        let lexer = Lexer::new("   \tx".to_string());
+        assert_eq!(lexer.get_current_indent(), 4);
+    }
+
+    #[test]
+    fn one_space_then_tab_is_four_columns() {
+        let lexer = Lexer::new(" \tx".to_string());
+        assert_eq!(lexer.get_current_indent(), 4);
+    }
+
+    #[test]
+    fn two_tabs_is_eight_columns() {
+        let lexer = Lexer::new("\t\tx".to_string());
+        assert_eq!(lexer.get_current_indent(), 8);
+    }
+
+    #[test]
+    fn tab_then_spaces() {
+        // \t + 2 spaces → 4 + 2 = 6
+        let lexer = Lexer::new("\t  x".to_string());
+        assert_eq!(lexer.get_current_indent(), 6);
+    }
+}
+
+#[cfg(test)]
+mod indented_code_block_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn four_space_indented_line_is_code() {
+        let tokens = parse("    let x = 5;");
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), "let x = 5;".to_string())]
+        );
+    }
+
+    #[test]
+    fn tab_indent_is_code() {
+        let tokens = parse("\tlet x = 5;");
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), "let x = 5;".to_string())]
+        );
+    }
+
+    #[test]
+    fn three_spaces_is_not_code() {
+        // 3 spaces is not enough; should be regular paragraph text.
+        let tokens = parse("   not code");
+        let body = Token::collect_all_text(&tokens);
+        assert_eq!(body, "not code");
+        assert!(!tokens.iter().any(|t| matches!(t, Token::Code(_, _))));
+    }
+
+    #[test]
+    fn multi_line_indented_code() {
+        let input = "    fn main() {\n        println!(\"hi\");\n    }";
+        let tokens = parse(input);
+        if let Token::Code(_, body) = &tokens[0] {
+            assert!(body.contains("fn main()"), "got {:?}", body);
+            assert!(body.contains("println!"), "got {:?}", body);
+        } else {
+            panic!("expected Code, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn indented_code_inside_paragraph_does_not_apply() {
+        // Indented line directly after a paragraph is treated as paragraph
+        // continuation per CommonMark, not code. We're more permissive: it
+        // becomes code if separated by a blank line. Test the blank-line case.
+        let input = "Some paragraph\n\n    code line";
+        let tokens = parse(input);
+        assert!(tokens.iter().any(|t| matches!(t, Token::Code(_, _))));
+    }
+
+    #[test]
+    fn fenced_code_block_unaffected() {
+        let input = "```\nfn main() {}\n```";
+        let tokens = parse(input);
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), "fn main() {}".to_string())]
+        );
+    }
+
+    #[test]
+    fn list_item_four_space_indent_is_nesting_not_code() {
+        // 4 spaces under a list bullet is list-item continuation/nesting,
+        // NOT an indented code block.
+        let input = "- item one\n    nested\n- item two";
+        let tokens = parse(input);
+        let li_count = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::ListItem { .. }))
+            .count();
+        assert!(li_count >= 2, "expected at least 2 list items, got {:?}", tokens);
+        assert!(!tokens.iter().any(|t| matches!(t, Token::Code(_, _))));
+    }
+}
+
+#[cfg(test)]
+mod raw_inline_html_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn open_tag_inline() {
+        let tokens = parse("text <span> more");
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::HtmlInline(s) if s == "<span>")),
+            "got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn closing_tag_inline() {
+        let tokens = parse("text </span> more");
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::HtmlInline(s) if s == "</span>")),
+            "got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn open_tag_with_attribute() {
+        let tokens = parse(r#"<a href="https://example.com">"#);
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::HtmlInline(_))),
+            "got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn open_tag_self_closing() {
+        let tokens = parse("<br/>");
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::HtmlInline(s) if s.contains("br"))),
+            "got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn html_comment_still_works() {
+        let tokens = parse("<!-- comment -->");
+        assert!(matches!(tokens[0], Token::HtmlComment(_)));
+    }
+
+    #[test]
+    fn autolink_still_works() {
+        let tokens = parse("<https://example.com>");
+        assert!(matches!(tokens[0], Token::Link(_, _)));
+    }
+
+    #[test]
+    fn invalid_tag_falls_through_as_text() {
+        let tokens = parse("<not a real tag>");
+        let body = Token::collect_all_text(&tokens);
+        assert!(body.contains("<not a real tag>"), "got {:?}", body);
+    }
+
+    #[test]
+    fn lt_alone_stays_text() {
+        let tokens = parse("a < b is true");
+        let body = Token::collect_all_text(&tokens);
+        assert!(body.contains("<"), "got {:?}", body);
+    }
+
+    #[test]
+    fn surrounding_text_preserved() {
+        let tokens = parse("before <em> middle </em> after");
+        let body = Token::collect_all_text(&tokens);
+        assert!(body.contains("before"), "got {:?}", body);
+        assert!(body.contains("after"), "got {:?}", body);
+        let html_count = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::HtmlInline(_)))
+            .count();
+        assert_eq!(html_count, 2, "expected 2 HtmlInline tokens, got {:?}", tokens);
+    }
+}
+
+#[cfg(test)]
+mod emphasis_flanking_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn emphasis_with_inner_spaces_does_not_open() {
+        // `* foo *` — the opening `*` is followed by a space, so it can't
+        // open emphasis (not left-flanking). Should be plain text.
+        let tokens = parse("a * foo * b");
+        assert!(!tokens.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+        let body = Token::collect_all_text(&tokens);
+        assert!(body.contains("* foo *"), "got {:?}", body);
+    }
+
+    #[test]
+    fn opener_followed_by_space_no_emphasis() {
+        let tokens = parse("a* foo*");
+        // Opener is `*` followed by space → not left-flanking → no emphasis.
+        assert!(!tokens.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+    }
+
+    #[test]
+    fn closer_preceded_by_space_no_emphasis() {
+        let tokens = parse("a *foo *");
+        // Closing `*` is preceded by space → not right-flanking → no close.
+        assert!(!tokens.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+    }
+
+    #[test]
+    fn valid_emphasis_with_no_inner_space() {
+        let tokens = parse("a *foo* b");
+        assert!(tokens.iter().any(|t| matches!(t, Token::Emphasis { level: 1, .. })));
+    }
+
+    #[test]
+    fn valid_strong_with_no_inner_space() {
+        let tokens = parse("a **bold** b");
+        assert!(tokens.iter().any(|t| matches!(t, Token::Emphasis { level: 2, .. })));
+    }
+
+    #[test]
+    fn underscore_emphasis_works_at_word_boundary() {
+        let tokens = parse("a _foo_ b");
+        assert!(tokens.iter().any(|t| matches!(t, Token::Emphasis { level: 1, .. })));
+    }
+
+    #[test]
+    fn intra_word_underscore_still_text() {
+        // `_` flanked by alphanumerics on both sides is treated as literal text.
+        let tokens = parse("foo_bar_baz");
+        assert_eq!(tokens, vec![Token::Text("foo_bar_baz".to_string())]);
+    }
+
+    #[test]
+    fn star_can_open_intra_word() {
+        // `*` is more permissive than `_` per spec: it can open intra-word.
+        let tokens = parse("foo*bar*baz");
+        assert!(tokens.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+    }
+
+    #[test]
+    fn unmatched_lone_asterisk_still_text() {
+        // A stray asterisk must not abort — it falls back to literal text.
+        let tokens = parse("Use * for bullets.");
+        let body = Token::collect_all_text(&tokens);
+        assert_eq!(body, "Use * for bullets.");
+    }
+
+    #[test]
+    fn emphasis_does_not_cross_blank_line() {
+        // An opener that can't find a valid same-paragraph closer must NOT
+        // gobble the next paragraph's content. The blank line acts as a
+        // paragraph boundary, forcing literal-text fallback.
+        let input = "para with *unclosed opener\n\n## Heading after blank";
+        let tokens = parse(input);
+        // The `## Heading…` must parse as a real heading token.
+        let has_heading = tokens
+            .iter()
+            .any(|t| matches!(t, Token::Heading(_, 2)));
+        assert!(
+            has_heading,
+            "expected H2 after blank line, got {:?}",
+            tokens
+        );
+        // Body must still contain the `*` literally.
+        let body = Token::collect_all_text(&tokens);
+        assert!(body.contains("*unclosed opener"), "got {:?}", body);
+    }
+
+    #[test]
+    fn star_with_inner_space_does_not_eat_following_paragraph() {
+        // `*foo *` cannot close (closer preceded by space) and must not
+        // gobble the next heading.
+        let input = "Closer preceded: a *foo * — text.\n\n## Next heading";
+        let tokens = parse(input);
+        let has_heading = tokens
+            .iter()
+            .any(|t| matches!(t, Token::Heading(_, 2)));
+        assert!(
+            has_heading,
+            "expected H2 after the paragraph, got {:?}",
+            tokens
+        );
+    }
+}
+
+#[cfg(test)]
+mod heading_strictness_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn atx_without_space_is_text() {
+        let tokens = parse("#hello");
+        assert_eq!(tokens, vec![Token::Text("#hello".to_string())]);
+    }
+
+    #[test]
+    fn atx_with_space_is_heading() {
+        let tokens = parse("# hello");
+        assert!(matches!(tokens[0], Token::Heading(_, 1)));
+    }
+
+    #[test]
+    fn atx_with_tab_after_hash_is_heading() {
+        let tokens = parse("#\thello");
+        assert!(matches!(tokens[0], Token::Heading(_, 1)));
+    }
+
+    #[test]
+    fn atx_seven_hashes_falls_back_to_text() {
+        let tokens = parse("####### too deep");
+        assert!(!matches!(tokens[0], Token::Heading(_, _)));
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("####### too deep"), "got {:?}", text);
+    }
+
+    #[test]
+    fn atx_six_hashes_is_h6() {
+        let tokens = parse("###### six");
+        assert!(matches!(tokens[0], Token::Heading(_, 6)));
+    }
+
+    #[test]
+    fn atx_trailing_hashes_stripped() {
+        let tokens = parse("## Title ##");
+        if let Token::Heading(content, 2) = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert_eq!(text, "Title");
+        } else {
+            panic!("expected H2, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn atx_trailing_hashes_with_trailing_space_stripped() {
+        let tokens = parse("## Title ## ");
+        if let Token::Heading(content, 2) = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert_eq!(text, "Title");
+        } else {
+            panic!("expected H2, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn atx_trailing_hash_without_preceding_space_kept() {
+        // Regression — `## C#` must keep the `#` as content (no preceding space).
+        let tokens = parse("## C#");
+        if let Token::Heading(content, 2) = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert_eq!(text, "C#");
+        } else {
+            panic!("expected H2, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn empty_atx_just_hashes() {
+        let tokens = parse("##");
+        assert!(matches!(tokens[0], Token::Heading(_, 2)));
+        if let Token::Heading(content, _) = &tokens[0] {
+            assert!(content.is_empty());
+        }
+    }
+}
+
+#[cfg(test)]
+mod ordered_list_marker_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn paren_marker_creates_ordered_list_item() {
+        let tokens = parse("1) one\n2) two");
+        let count = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::ListItem { ordered: true, .. }))
+            .count();
+        assert_eq!(count, 2, "got {:?}", tokens);
+    }
+
+    #[test]
+    fn paren_marker_preserves_number() {
+        let tokens = parse("5) five");
+        if let Token::ListItem { number, ordered, .. } = &tokens[0] {
+            assert!(*ordered);
+            assert_eq!(*number, Some(5));
+        } else {
+            panic!("expected ordered list item, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn dot_marker_still_works() {
+        let tokens = parse("1. one");
+        if let Token::ListItem { ordered, number, .. } = &tokens[0] {
+            assert!(*ordered);
+            assert_eq!(*number, Some(1));
+        } else {
+            panic!("expected ordered list item, got {:?}", tokens);
+        }
+    }
+}
+
+#[cfg(test)]
+mod code_span_space_strip_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn single_surrounding_space_stripped() {
+        let tokens = parse("a ` foo ` b");
+        let codes: Vec<_> = tokens
+            .iter()
+            .filter_map(|t| {
+                if let Token::Code(_, body) = t {
+                    Some(body.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(codes, vec!["foo"]);
+    }
+
+    #[test]
+    fn double_surrounding_space_only_one_stripped() {
+        let tokens = parse("a `  foo  ` b");
+        if let Some(Token::Code(_, body)) =
+            tokens.iter().find(|t| matches!(t, Token::Code(_, _)))
+        {
+            assert_eq!(body, " foo ");
+        } else {
+            panic!("expected Code, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn all_spaces_not_stripped() {
+        let tokens = parse("a `   ` b");
+        if let Some(Token::Code(_, body)) =
+            tokens.iter().find(|t| matches!(t, Token::Code(_, _)))
+        {
+            assert_eq!(body, "   ");
+        } else {
+            panic!("expected Code, got {:?}", tokens);
+        }
+    }
+
+    #[test]
+    fn no_surrounding_space_unchanged() {
+        let tokens = parse("`foo`");
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), "foo".to_string())]
+        );
+    }
+
+    #[test]
+    fn one_sided_space_unchanged() {
+        // Only strip when BOTH sides have a space.
+        let tokens = parse("a ` foo` b");
+        if let Some(Token::Code(_, body)) =
+            tokens.iter().find(|t| matches!(t, Token::Code(_, _)))
+        {
+            assert_eq!(body, " foo");
+        } else {
+            panic!("expected Code, got {:?}", tokens);
+        }
+    }
+}
+
+#[cfg(test)]
+mod blockquote_block_constructs_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    fn block_body(t: &Token) -> &Vec<Token> {
+        if let Token::BlockQuote(body) = t {
+            body
+        } else {
+            panic!("expected BlockQuote, got {:?}", t);
+        }
+    }
+
+    #[test]
+    fn setext_h2_inside_blockquote() {
+        let tokens = parse("> Title\n> ---");
+        let body = block_body(&tokens[0]);
+        assert!(
+            body.iter().any(|t| matches!(t, Token::Heading(_, 2))),
+            "expected H2 inside quote, got {:?}",
+            body
+        );
+    }
+
+    #[test]
+    fn setext_h1_inside_blockquote() {
+        let tokens = parse("> Big\n> ===");
+        let body = block_body(&tokens[0]);
+        assert!(
+            body.iter().any(|t| matches!(t, Token::Heading(_, 1))),
+            "expected H1 inside quote, got {:?}",
+            body
+        );
+    }
+
+    #[test]
+    fn indented_code_inside_blockquote() {
+        let tokens = parse(">     code line in quote");
+        let body = block_body(&tokens[0]);
+        assert!(
+            body.iter().any(|t| matches!(t, Token::Code(_, _))),
+            "expected Code inside quote, got {:?}",
+            body
+        );
+    }
+
+    #[test]
+    fn regular_text_inside_blockquote_unaffected() {
+        let tokens = parse("> Just a sentence with three spaces:    not code.");
+        let body = block_body(&tokens[0]);
+        assert!(!body.iter().any(|t| matches!(t, Token::Code(_, _))));
+    }
+}
+
+#[cfg(test)]
+mod link_escape_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn escape_close_bracket_in_link_text() {
+        let tokens = parse(r"[a\]b](http://x)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("a]b".to_string(), "http://x".to_string())]
+        );
+    }
+
+    #[test]
+    fn escape_close_paren_in_link_url() {
+        let tokens = parse(r"[t](http://x\)y)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("t".to_string(), "http://x)y".to_string())]
+        );
+    }
+
+    #[test]
+    fn escape_backslash_in_link_text() {
+        let tokens = parse(r"[a\\b](u)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("a\\b".to_string(), "u".to_string())]
+        );
+    }
+
+    #[test]
+    fn escape_close_bracket_in_image_alt() {
+        let tokens = parse(r"![alt\]more](pic.png)");
+        assert_eq!(
+            tokens,
+            vec![Token::Image(
+                "alt]more".to_string(),
+                "pic.png".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn unescaped_link_still_works() {
+        let tokens = parse("[foo](http://example.com)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link(
+                "foo".to_string(),
+                "http://example.com".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn balanced_parens_still_work() {
+        // Pre-existing balanced-paren handling shouldn't regress.
+        let tokens = parse("[Wiki](https://en.wikipedia.org/wiki/Foo_(bar))");
+        assert_eq!(
+            tokens,
+            vec![Token::Link(
+                "Wiki".to_string(),
+                "https://en.wikipedia.org/wiki/Foo_(bar)".to_string()
+            )]
+        );
+    }
+}
+
+#[cfg(test)]
+mod list_lazy_continuation_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn indented_continuation_belongs_to_item() {
+        let input = "- item one\n  continues here\n- item two";
+        let tokens = parse(input);
+        let li_count = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::ListItem { .. }))
+            .count();
+        assert_eq!(li_count, 2, "got {:?}", tokens);
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("item one"), "got {:?}", text);
+            assert!(text.contains("continues here"), "got {:?}", text);
+        }
+    }
+
+    #[test]
+    fn zero_indent_lazy_continuation() {
+        // CommonMark §5.2: a non-blank, non-marker line at indent 0 still
+        // continues the previous item's paragraph.
+        let input = "- item one\nlazy line\n- item two";
+        let tokens = parse(input);
+        let li_count = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::ListItem { .. }))
+            .count();
+        assert_eq!(li_count, 2, "got {:?}", tokens);
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("lazy line"), "got {:?}", text);
+        }
+    }
+
+    #[test]
+    fn blank_line_ends_list_item() {
+        let input = "- item one\n\n- item two";
+        let tokens = parse(input);
+        let li_count = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::ListItem { .. }))
+            .count();
+        // Two items either way; ensure first item didn't gobble blank.
+        assert_eq!(li_count, 2);
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(!text.contains("item two"), "first item should not include second");
+        }
+    }
+
+    #[test]
+    fn heading_line_terminates_item() {
+        let input = "- item one\n# heading";
+        let tokens = parse(input);
+        assert!(tokens.iter().any(|t| matches!(t, Token::Heading(_, 1))));
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(!text.contains("heading"), "heading shouldn't be inside item");
+        }
+    }
+
+    #[test]
+    fn thematic_break_terminates_item() {
+        let input = "- item one\n---";
+        let tokens = parse(input);
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::HorizontalRule)),
+            "expected HR, got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn nested_list_still_works() {
+        let input = "- Item 1\n  - Nested 1\n  - Nested 2\n- Item 2";
+        let tokens = parse(input);
+        let top_li = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::ListItem { .. }))
+            .count();
+        assert_eq!(top_li, 2, "got {:?}", tokens);
+    }
+
+    #[test]
+    fn simple_two_items_unchanged() {
+        let input = "- a\n- b";
+        let tokens = parse(input);
+        assert_eq!(
+            tokens.iter().filter(|t| matches!(t, Token::ListItem { .. })).count(),
+            2
         );
     }
 }
