@@ -60,7 +60,7 @@ cargo add markdown2pdf
 Or add to your Cargo.toml:
 
 ```toml
-markdown2pdf = "0.2.2"
+markdown2pdf = "0.3.0"
 ```
 
 ### Feature Flags
