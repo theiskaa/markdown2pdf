@@ -23,11 +23,9 @@
 //! assert!(matches!(emphasis, Token::Emphasis { level: 1, .. }));
 //!
 //! // Link token with text and URL
-//! let link = Token::Link(
-//!     "Click here".to_string(),
-//!     "https://example.com".to_string()
-//! );
-//! assert!(matches!(link, Token::Link(_, _)));
+//! let link = Token::Link { content: vec![Token::Text(//!     "Click here".to_string())], url: //!     "https://example.com".to_string()
+//!, title: None };
+//! assert!(matches!(link, Token::Link { .. }));
 //! ```
 //!
 //! Token (nested) structure looks like:
@@ -86,10 +84,25 @@ pub enum Token {
         /// items and keep tight-list items inline.
         loose: bool,
     },
-    /// Link with display text and URL
-    Link(String, String),
-    /// Image with alt text and URL
-    Image(String, String),
+    /// Inline link. `content` is the parsed inline children of the link text
+    /// (so emphasis, code spans, entities, etc. inside `[...]` are honored);
+    /// `url` is the destination with escapes/entities already decoded;
+    /// `title` is the optional title from `(url "title")` / `(url 'title')`
+    /// / `(url (title))` syntax (also decoded). Autolinks produce a Link with
+    /// a single Text child mirroring the URL.
+    Link {
+        content: Vec<Token>,
+        url: String,
+        title: Option<String>,
+    },
+    /// Inline image. `alt` is the parsed inline children of the alt text
+    /// (renderers typically flatten this to plain text). `url` and `title`
+    /// follow the same rules as `Link`.
+    Image {
+        alt: Vec<Token>,
+        url: String,
+        title: Option<String>,
+    },
     /// Plain text content
     Text(String),
     /// Table with header, alignment info, and rows
@@ -175,8 +188,16 @@ impl Token {
                     token.collect_text_recursive(result);
                 }
             }
-            Token::Link(text, _) => result.push_str(text),
-            Token::Image(alt, _) => result.push_str(alt),
+            Token::Link { content, .. } => {
+                for token in content {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::Image { alt, .. } => {
+                for token in alt {
+                    token.collect_text_recursive(result);
+                }
+            }
             Token::HtmlComment(comment) => result.push_str(comment),
             Token::HtmlInline(html) => result.push_str(html),
             Token::Unknown(text) => result.push_str(text),
@@ -393,6 +414,12 @@ fn propagate_loose_tight(tokens: &mut [Token]) {
         let run_start = i;
         let mut has_blank_between = false;
         let mut last_item_end = i;
+        // An item internally containing a blank-line paragraph break also
+        // makes the whole list loose (per spec "any item directly contains
+        // two block-level elements with a blank line between them").
+        if item_has_internal_blank(&tokens[i]) {
+            has_blank_between = true;
+        }
         loop {
             i += 1;
             // Skip across any Newlines — but if there are ≥2 in a row between
@@ -409,6 +436,9 @@ fn propagate_loose_tight(tokens: &mut [Token]) {
             // Another sibling. If we crossed at least one Newline to reach it,
             // that's a blank-line separation per the lexer's emission shape.
             if newlines >= 1 {
+                has_blank_between = true;
+            }
+            if item_has_internal_blank(&tokens[i]) {
                 has_blank_between = true;
             }
             last_item_end = i;
@@ -431,6 +461,27 @@ fn propagate_loose_tight(tokens: &mut [Token]) {
             _ => {}
         }
     }
+}
+
+/// Returns true if a ListItem's content contains a blank-line break — i.e.,
+/// two or more consecutive `Token::Newline` tokens, which `parse_list_item`
+/// emits when a continuation paragraph rejoins the item after a blank gap.
+fn item_has_internal_blank(tok: &Token) -> bool {
+    let Token::ListItem { content, .. } = tok else {
+        return false;
+    };
+    let mut run = 0;
+    for t in content {
+        if matches!(t, Token::Newline) {
+            run += 1;
+            if run >= 2 {
+                return true;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    false
 }
 
 /// Normalizes a reference-link label ASCII case-fold
@@ -1379,59 +1430,60 @@ impl Lexer {
     /// resolves; otherwise emits the brackets literally).
     fn parse_link(&mut self) -> Result<Token, LexerError> {
         self.advance(); // skip '['
-        let text = self.read_until_char_with_escapes(']');
+        let content = self.parse_nested_content(|c| c == ']', ParseContext::Inline)?;
+        if self.position >= self.input.len() || self.current_char() != ']' {
+            // No closing bracket found — emit literal `[` plus whatever we
+            // parsed so the brackets aren't lost.
+            let mut s = String::from("[");
+            s.push_str(&Token::collect_all_text(&content));
+            return Ok(Token::Text(s));
+        }
         self.advance(); // skip ']'
 
-        // Inline: [text](url ...)
-        if self.current_char() == '(' {
+        // Inline: [text](url "title")
+        if self.position < self.input.len() && self.current_char() == '(' {
             self.advance(); // skip '('
-            let url = self.read_url_with_balanced_parens();
+            let (url, title) = self.read_link_destination_and_title();
             if self.position < self.input.len() && self.current_char() == ')' {
                 self.advance(); // skip ')'
             }
-            return Ok(Token::Link(text, url));
+            return Ok(Token::Link { content, url, title });
         }
 
         // Full or collapsed reference: [text][label] or [text][]
-        if self.current_char() == '[' {
+        if self.position < self.input.len() && self.current_char() == '[' {
             self.advance(); // skip [
-            let label = self.read_until_char_with_escapes(']');
-            if self.current_char() == ']' {
+            let label_str = self.read_until_char_with_escapes(']');
+            if self.position < self.input.len() && self.current_char() == ']' {
                 self.advance();
             }
-            let key = if label.trim().is_empty() {
-                normalize_label(&text)
+            let text_str = Token::collect_all_text(&content);
+            let key = if label_str.trim().is_empty() {
+                normalize_label(&text_str)
             } else {
-                normalize_label(&label)
+                normalize_label(&label_str)
             };
-            if let Some((url, _title)) = self.definitions.get(&key).cloned() {
-                return Ok(Token::Link(text, url));
+            if let Some((url, title)) = self.definitions.get(&key).cloned() {
+                return Ok(Token::Link { content, url, title });
             }
             // Lookup failed — emit the literal brackets/text.
-            let bracket_label = if label.is_empty() {
+            let bracket_label = if label_str.is_empty() {
                 "[]".to_string()
             } else {
-                format!("[{}]", label)
+                format!("[{}]", label_str)
             };
-            return Ok(Token::Text(format!("[{}]{}", text, bracket_label)));
+            return Ok(Token::Text(format!("[{}]{}", text_str, bracket_label)));
         }
 
         // Shortcut: [text] alone — only a link if the label resolves.
-        let key = normalize_label(&text);
-        if let Some((url, _title)) = self.definitions.get(&key).cloned() {
-            return Ok(Token::Link(text, url));
+        let text_str = Token::collect_all_text(&content);
+        let key = normalize_label(&text_str);
+        if let Some((url, title)) = self.definitions.get(&key).cloned() {
+            return Ok(Token::Link { content, url, title });
         }
 
         // Unresolved — emit `[text]` literally so the brackets aren't lost.
-        Ok(Token::Text(format!("[{}]", text)))
-    }
-
-    /// Reads a URL inside `(...)` allowing nested balanced parens. Stops at
-    /// the first unmatched `)` or at `\n`. Used by both link and image
-    /// parsing so that URLs like `Foo_(bar)` survive intact.
-    fn read_url_with_balanced_parens(&mut self) -> String {
-        let (url, _title) = self.read_link_destination_and_title();
-        url
+        Ok(Token::Text(format!("[{}]", text_str)))
     }
 
     /// Reads a link destination plus an optional CommonMark-style title.
@@ -1527,20 +1579,43 @@ impl Lexer {
 
     /// Reads a quoted/parenthesised title body. Assumes `self.current_char()`
     /// is the opening delimiter; advances past the closing delimiter.
+    /// Backslash escapes apply (so `\"` produces a literal `"` in a
+    /// double-quoted title) and entity references decode.
     fn read_title_delimited(&mut self, _open: char, close: char) -> String {
         self.advance(); // past opener
-        let start = self.position;
+        let mut out = String::new();
         while self.position < self.input.len() && self.current_char() != close {
-            if self.current_char() == '\n' {
+            let ch = self.current_char();
+            if ch == '\n' {
                 break;
             }
+            if ch == '\\' && self.position + 1 < self.input.len() {
+                let next = self.input[self.position + 1];
+                if is_ascii_punctuation(next) {
+                    out.push(next);
+                    self.advance();
+                    self.advance();
+                    continue;
+                }
+            }
+            if ch == '&' {
+                if let Some((decoded, consumed)) =
+                    try_decode_entity(&self.input, self.position)
+                {
+                    out.push_str(&decoded);
+                    for _ in 0..consumed {
+                        self.advance();
+                    }
+                    continue;
+                }
+            }
+            out.push(ch);
             self.advance();
         }
-        let title: String = self.input[start..self.position].iter().collect();
         if self.position < self.input.len() && self.current_char() == close {
             self.advance(); // past closer
         }
-        title
+        out
     }
 
     /// Parses an image token, supporting inline, reference, collapsed, and
@@ -1556,46 +1631,53 @@ impl Lexer {
         }
 
         self.advance();
-        let alt_text = self.read_until_char_with_escapes(']');
+        let alt = self.parse_nested_content(|c| c == ']', ParseContext::Inline)?;
+        if self.position >= self.input.len() || self.current_char() != ']' {
+            let mut s = String::from("![");
+            s.push_str(&Token::collect_all_text(&alt));
+            return Ok(Token::Text(s));
+        }
         self.advance(); // skip ']'
 
         // Inline: ![alt](url "title")
-        if self.current_char() == '(' {
+        if self.position < self.input.len() && self.current_char() == '(' {
             self.advance(); // skip '('
-            let url = self.read_url_with_balanced_parens();
+            let (url, title) = self.read_link_destination_and_title();
             if self.position < self.input.len() && self.current_char() == ')' {
                 self.advance(); // skip ')'
             }
-            return Ok(Token::Image(alt_text, url));
+            return Ok(Token::Image { alt, url, title });
         }
 
         // Reference / collapsed: ![alt][label] or ![alt][]
-        if self.current_char() == '[' {
+        if self.position < self.input.len() && self.current_char() == '[' {
             self.advance();
-            let label = self.read_until_char_with_escapes(']');
-            if self.current_char() == ']' {
+            let label_str = self.read_until_char_with_escapes(']');
+            if self.position < self.input.len() && self.current_char() == ']' {
                 self.advance();
             }
-            let key = if label.trim().is_empty() {
+            let alt_text = Token::collect_all_text(&alt);
+            let key = if label_str.trim().is_empty() {
                 normalize_label(&alt_text)
             } else {
-                normalize_label(&label)
+                normalize_label(&label_str)
             };
-            if let Some((url, _title)) = self.definitions.get(&key).cloned() {
-                return Ok(Token::Image(alt_text, url));
+            if let Some((url, title)) = self.definitions.get(&key).cloned() {
+                return Ok(Token::Image { alt, url, title });
             }
-            let bracket_label = if label.is_empty() {
+            let bracket_label = if label_str.is_empty() {
                 "[]".to_string()
             } else {
-                format!("[{}]", label)
+                format!("[{}]", label_str)
             };
             return Ok(Token::Text(format!("![{}]{}", alt_text, bracket_label)));
         }
 
         // Shortcut: ![alt]
+        let alt_text = Token::collect_all_text(&alt);
         let key = normalize_label(&alt_text);
-        if let Some((url, _title)) = self.definitions.get(&key).cloned() {
-            return Ok(Token::Image(alt_text, url));
+        if let Some((url, title)) = self.definitions.get(&key).cloned() {
+            return Ok(Token::Image { alt, url, title });
         }
 
         // Unresolved shortcut — emit literally instead of erroring.
@@ -1857,9 +1939,17 @@ impl Lexer {
         self.position = p + 1; // skip past '>'
 
         Some(if is_email {
-            Token::Link(body.clone(), format!("mailto:{}", body))
+            Token::Link {
+                content: vec![Token::Text(body.clone())],
+                url: format!("mailto:{}", body),
+                title: None,
+            }
         } else {
-            Token::Link(body.clone(), body)
+            Token::Link {
+                content: vec![Token::Text(body.clone())],
+                url: body,
+                title: None,
+            }
         })
     }
 
@@ -2099,6 +2189,12 @@ impl Lexer {
 
             // inline-compatible tokens
             '*' | '`' | '[' => true,
+
+            // `]` only acts as a special-token boundary inside the Inline
+            // context, where parse_nested_content uses it as the closing
+            // delimiter for link text / image alt. In Root and other block
+            // contexts a bare `]` is just literal text.
+            ']' if matches!(ctx, ParseContext::Inline) => true,
 
             // `_` only opens emphasis when the run is not intra-word.
             // `phpmyadmin/localized_docs` keeps the underscore as literal text.
@@ -2552,6 +2648,23 @@ impl Lexer {
             }
         }
 
+        // Compute the minimum indent that a continuation paragraph must have
+        // to belong to this item: the marker's column plus the marker width
+        // plus one space of separator. Bullets are 1 char (`-`/`+`/`*`),
+        // ordered markers are digit-count + 1 (`.` or `)`).
+        let content_offset = if ordered {
+            let n = number.unwrap_or(1);
+            let mut digits = 1usize;
+            let mut tmp = n;
+            while tmp >= 10 {
+                tmp /= 10;
+                digits += 1;
+            }
+            indent_level + digits + 2
+        } else {
+            indent_level + 2
+        };
+
         self.skip_whitespace();
 
         // GFM task list: detect `[ ]`, `[x]`, `[X]` immediately after the
@@ -2607,9 +2720,57 @@ impl Lexer {
             let cur_indent = self.get_current_indent();
             let after_indent = line_start + cur_indent;
 
-            // Blank line ends the item.
+            // Blank line: peek ahead to decide whether this is the end of the
+            // item or a paragraph break within it. If the next non-blank line
+            // is indented to at least the item's content offset, the item
+            // continues with a new paragraph; otherwise it ends here.
             if after_indent >= self.input.len() || self.input[after_indent] == '\n' {
-                break;
+                let mut p = line_start;
+                while p < self.input.len() {
+                    let line_end = (p..self.input.len())
+                        .find(|&i| self.input[i] == '\n')
+                        .unwrap_or(self.input.len());
+                    let only_ws = self.input[p..line_end]
+                        .iter()
+                        .all(|c| *c == ' ' || *c == '\t');
+                    if !only_ws {
+                        break;
+                    }
+                    if line_end >= self.input.len() {
+                        p = line_end;
+                        break;
+                    }
+                    p = line_end + 1;
+                }
+                if p >= self.input.len() {
+                    break;
+                }
+                // Measure the next non-blank line's indent in columns.
+                let mut next_indent = 0usize;
+                let mut q = p;
+                while q < self.input.len() {
+                    match self.input[q] {
+                        ' ' => {
+                            next_indent += 1;
+                            q += 1;
+                        }
+                        '\t' => {
+                            next_indent += 4 - (next_indent % 4);
+                            q += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                if next_indent < content_offset {
+                    break;
+                }
+                // Continuation paragraph belongs to this item. Skip the blank
+                // gap, emit Newlines so the loose-detection pass sees the
+                // blank-line break, and loop again to process the next line.
+                self.position = p;
+                content.push(Token::Newline);
+                content.push(Token::Newline);
+                continue;
             }
 
             // Decide if this line starts a new block (which terminates the
@@ -3157,14 +3318,11 @@ mod tests {
         let tests = vec![
             (
                 "[Link](https://example.com)",
-                vec![Token::Link(
-                    "Link".to_string(),
-                    "https://example.com".to_string(),
-                )],
+                vec![Token::Link { content: vec![Token::Text("Link".to_string())], url: "https://example.com".to_string(), title: None }],
             ),
             (
                 "![Image](image.jpg)",
-                vec![Token::Image("Image".to_string(), "image.jpg".to_string())],
+                vec![Token::Image { alt: vec![Token::Text("Image".to_string())], url: "image.jpg".to_string(), title: None }],
             ),
         ];
 
@@ -3292,7 +3450,7 @@ This is a paragraph with *italic* and **bold** text.
             (
                 "> Quote with [link](url)",
                 &|body| {
-                    assert!(body.iter().any(|t| matches!(t, Token::Link(_, _))));
+                    assert!(body.iter().any(|t| matches!(t, Token::Link { .. })));
                 },
             ),
         ];
@@ -3313,21 +3471,26 @@ This is a paragraph with *italic* and **bold** text.
         let tests = vec![
             (
                 "[Link with spaces](https://example.com/path with spaces)",
-                vec![Token::Link(
-                    "Link with spaces".to_string(),
-                    "https://example.com/path with spaces".to_string(),
-                )],
+                vec![Token::Link { content: vec![Token::Text("Link with spaces".to_string())], url: "https://example.com/path with spaces".to_string(), title: None }],
             ),
             (
                 "![Image with *emphasis* in alt](image.jpg)",
-                vec![Token::Image(
-                    "Image with *emphasis* in alt".to_string(),
-                    "image.jpg".to_string(),
-                )],
+                vec![Token::Image {
+                    alt: vec![
+                        Token::Text("Image with ".to_string()),
+                        Token::Emphasis {
+                            level: 1,
+                            content: vec![Token::Text("emphasis".to_string())],
+                        },
+                        Token::Text(" in alt".to_string()),
+                    ],
+                    url: "image.jpg".to_string(),
+                    title: None,
+                }],
             ),
             (
                 "[Empty]()",
-                vec![Token::Link("Empty".to_string(), "".to_string())],
+                vec![Token::Link { content: vec![Token::Text("Empty".to_string())], url: "".to_string(), title: None }],
             ),
         ];
 
@@ -3410,10 +3573,7 @@ A paragraph with `code` and [link](url).
         let tokens = parse("![Alt text](image.png)");
         assert_eq!(
             tokens,
-            vec![Token::Image(
-                "Alt text".to_string(),
-                "image.png".to_string()
-            )]
+            vec![Token::Image { alt: vec![Token::Text("Alt text".to_string())], url: "image.png".to_string(), title: None }]
         );
     }
 
@@ -3744,10 +3904,7 @@ mod intra_word_underscore_tests {
         let tokens = parse("[link_text](https://example.com)");
         assert_eq!(
             tokens,
-            vec![Token::Link(
-                "link_text".to_string(),
-                "https://example.com".to_string()
-            )]
+            vec![Token::Link { content: vec![Token::Text("link_text".to_string())], url: "https://example.com".to_string(), title: None }]
         );
     }
 
@@ -3765,7 +3922,7 @@ mod intra_word_underscore_tests {
         let tokens = parse("![alt_text](img.png)");
         assert_eq!(
             tokens,
-            vec![Token::Image("alt_text".to_string(), "img.png".to_string())]
+            vec![Token::Image { alt: vec![Token::Text("alt_text".to_string())], url: "img.png".to_string(), title: None }]
         );
     }
 
@@ -3865,7 +4022,7 @@ mod backslash_escape_tests {
         // \! becomes literal !, then the [ ... ](x) gets parsed as a regular link.
         // Important: this must NOT crash with "Malformed image".
         assert!(matches!(tokens[0], Token::Text(ref s) if s == "!"));
-        assert!(matches!(tokens[1], Token::Link(_, _)));
+        assert!(matches!(tokens[1], Token::Link { .. }));
     }
 
     #[test]
@@ -4101,7 +4258,7 @@ mod backslash_escape_tests {
         let tokens = parse(r"<http://example.com/\bar>");
         let link = tokens
             .iter()
-            .find_map(|t| if let Token::Link(_, url) = t { Some(url) } else { None })
+            .find_map(|t| if let Token::Link { url, .. } = t { Some(url) } else { None })
             .expect("expected autolink Link token");
         assert!(
             link.contains(r"/\bar"),
@@ -4117,7 +4274,7 @@ mod backslash_escape_tests {
         let tokens = parse(r"[t](http://x\)y)");
         assert_eq!(
             tokens,
-            vec![Token::Link("t".to_string(), "http://x)y".to_string())]
+            vec![Token::Link { content: vec![Token::Text("t".to_string())], url: "http://x)y".to_string(), title: None }]
         );
     }
 
@@ -4127,7 +4284,7 @@ mod backslash_escape_tests {
         let tokens = parse(r"[a\]b](u)");
         assert_eq!(
             tokens,
-            vec![Token::Link("a]b".to_string(), "u".to_string())]
+            vec![Token::Link { content: vec![Token::Text("a]b".to_string())], url: "u".to_string(), title: None }]
         );
     }
 
@@ -4321,7 +4478,7 @@ mod unmatched_emphasis_fallback_tests {
         assert!(matches!(tokens[0], Token::Heading(_, 1)));
         // Code span and link must still parse despite the stray *.
         assert!(tokens.iter().any(|t| matches!(t, Token::Code(_, _))));
-        assert!(tokens.iter().any(|t| matches!(t, Token::Link(_, _))));
+        assert!(tokens.iter().any(|t| matches!(t, Token::Link { .. })));
     }
 }
 
@@ -4372,7 +4529,7 @@ mod blockquote_inline_tests {
         let tokens = parse("> visit [example](https://example.com)");
         let body = block_body(&tokens[0]);
         assert!(
-            body.iter().any(|t| matches!(t, Token::Link(_, _))),
+            body.iter().any(|t| matches!(t, Token::Link { .. })),
             "expected link inside quote, got body {:?}",
             body
         );
@@ -4787,10 +4944,7 @@ mod link_url_paren_and_autolink_tests {
         let tokens = parse("[Wiki](https://en.wikipedia.org/wiki/Foo_(bar))");
         assert_eq!(
             tokens,
-            vec![Token::Link(
-                "Wiki".to_string(),
-                "https://en.wikipedia.org/wiki/Foo_(bar)".to_string()
-            )]
+            vec![Token::Link { content: vec![Token::Text("Wiki".to_string())], url: "https://en.wikipedia.org/wiki/Foo_(bar)".to_string(), title: None }]
         );
     }
 
@@ -4799,7 +4953,7 @@ mod link_url_paren_and_autolink_tests {
         let tokens = parse("[X](http://a.b/((c)d))");
         assert_eq!(
             tokens,
-            vec![Token::Link("X".to_string(), "http://a.b/((c)d)".to_string())]
+            vec![Token::Link { content: vec![Token::Text("X".to_string())], url: "http://a.b/((c)d)".to_string(), title: None }]
         );
     }
 
@@ -4808,18 +4962,15 @@ mod link_url_paren_and_autolink_tests {
         let tokens = parse("![alt](pic_(small).png)");
         assert_eq!(
             tokens,
-            vec![Token::Image(
-                "alt".to_string(),
-                "pic_(small).png".to_string()
-            )]
+            vec![Token::Image { alt: vec![Token::Text("alt".to_string())], url: "pic_(small).png".to_string(), title: None }]
         );
     }
 
     #[test]
     fn url_with_unbalanced_close_paren_truncates() {
         let tokens = parse("[X](https://example.com/path)trailing");
-        if let Token::Link(text, url) = &tokens[0] {
-            assert_eq!(text, "X");
+        if let Token::Link { content, url, .. } = &tokens[0] {
+            assert_eq!(Token::collect_all_text(content), "X");
             assert_eq!(url, "https://example.com/path");
         } else {
             panic!("expected link, got {:?}", tokens);
@@ -4832,10 +4983,7 @@ mod link_url_paren_and_autolink_tests {
         let tokens = parse("<https://example.com>");
         assert_eq!(
             tokens,
-            vec![Token::Link(
-                "https://example.com".to_string(),
-                "https://example.com".to_string()
-            )]
+            vec![Token::Link { content: vec![Token::Text("https://example.com".to_string())], url: "https://example.com".to_string(), title: None }]
         );
     }
 
@@ -4844,10 +4992,7 @@ mod link_url_paren_and_autolink_tests {
         let tokens = parse("<http://example.org/path>");
         assert_eq!(
             tokens,
-            vec![Token::Link(
-                "http://example.org/path".to_string(),
-                "http://example.org/path".to_string()
-            )]
+            vec![Token::Link { content: vec![Token::Text("http://example.org/path".to_string())], url: "http://example.org/path".to_string(), title: None }]
         );
     }
 
@@ -4856,10 +5001,7 @@ mod link_url_paren_and_autolink_tests {
         let tokens = parse("<user@example.com>");
         assert_eq!(
             tokens,
-            vec![Token::Link(
-                "user@example.com".to_string(),
-                "mailto:user@example.com".to_string()
-            )]
+            vec![Token::Link { content: vec![Token::Text("user@example.com".to_string())], url: "mailto:user@example.com".to_string(), title: None }]
         );
     }
 
@@ -4869,7 +5011,7 @@ mod link_url_paren_and_autolink_tests {
         assert!(
             tokens
                 .iter()
-                .any(|t| matches!(t, Token::Link(_, url) if url == "https://example.com")),
+                .any(|t| matches!(t, Token::Link { url, .. } if url == "https://example.com")),
             "got {:?}",
             tokens
         );
@@ -4894,10 +5036,7 @@ mod link_url_paren_and_autolink_tests {
         let tokens = parse("[example](https://example.com)");
         assert_eq!(
             tokens,
-            vec![Token::Link(
-                "example".to_string(),
-                "https://example.com".to_string()
-            )]
+            vec![Token::Link { content: vec![Token::Text("example".to_string())], url: "https://example.com".to_string(), title: None }]
         );
     }
 
@@ -4906,7 +5045,7 @@ mod link_url_paren_and_autolink_tests {
         let tokens = parse("![alt](image.png)");
         assert_eq!(
             tokens,
-            vec![Token::Image("alt".to_string(), "image.png".to_string())]
+            vec![Token::Image { alt: vec![Token::Text("alt".to_string())], url: "image.png".to_string(), title: None }]
         );
     }
 }
@@ -5259,8 +5398,11 @@ mod link_title_tests {
         let tokens = parse(r#"[text](url "title here")"#);
         assert_eq!(
             tokens,
-            vec![Token::Link("text".to_string(), "url".to_string())],
-            "URL must be clean (title parsed and dropped, not folded into URL)"
+            vec![Token::Link {
+                content: vec![Token::Text("text".to_string())],
+                url: "url".to_string(),
+                title: Some("title here".to_string()),
+            }]
         );
     }
 
@@ -5269,7 +5411,11 @@ mod link_title_tests {
         let tokens = parse("[text](url 'title here')");
         assert_eq!(
             tokens,
-            vec![Token::Link("text".to_string(), "url".to_string())]
+            vec![Token::Link {
+                content: vec![Token::Text("text".to_string())],
+                url: "url".to_string(),
+                title: Some("title here".to_string()),
+            }]
         );
     }
 
@@ -5278,7 +5424,11 @@ mod link_title_tests {
         let tokens = parse("[text](url (title here))");
         assert_eq!(
             tokens,
-            vec![Token::Link("text".to_string(), "url".to_string())]
+            vec![Token::Link {
+                content: vec![Token::Text("text".to_string())],
+                url: "url".to_string(),
+                title: Some("title here".to_string()),
+            }]
         );
     }
 
@@ -5287,7 +5437,11 @@ mod link_title_tests {
         let tokens = parse(r#"![alt](pic.png "Photo of cat")"#);
         assert_eq!(
             tokens,
-            vec![Token::Image("alt".to_string(), "pic.png".to_string())]
+            vec![Token::Image {
+                alt: vec![Token::Text("alt".to_string())],
+                url: "pic.png".to_string(),
+                title: Some("Photo of cat".to_string()),
+            }]
         );
     }
 
@@ -5296,7 +5450,11 @@ mod link_title_tests {
         let tokens = parse("[text](url)");
         assert_eq!(
             tokens,
-            vec![Token::Link("text".to_string(), "url".to_string())]
+            vec![Token::Link {
+                content: vec![Token::Text("text".to_string())],
+                url: "url".to_string(),
+                title: None,
+            }]
         );
     }
 
@@ -5306,10 +5464,11 @@ mod link_title_tests {
         let tokens = parse(r#"[Wiki](https://en.wikipedia.org/wiki/Foo_(bar) "Wikipedia entry")"#);
         assert_eq!(
             tokens,
-            vec![Token::Link(
-                "Wiki".to_string(),
-                "https://en.wikipedia.org/wiki/Foo_(bar)".to_string()
-            )]
+            vec![Token::Link {
+                content: vec![Token::Text("Wiki".to_string())],
+                url: "https://en.wikipedia.org/wiki/Foo_(bar)".to_string(),
+                title: Some("Wikipedia entry".to_string()),
+            }]
         );
     }
 
@@ -5319,7 +5478,7 @@ mod link_title_tests {
         let tokens = parse("[text](url   )");
         assert_eq!(
             tokens,
-            vec![Token::Link("text".to_string(), "url".to_string())]
+            vec![Token::Link { content: vec![Token::Text("text".to_string())], url: "url".to_string(), title: None }]
         );
     }
 
@@ -5328,7 +5487,7 @@ mod link_title_tests {
         // `(url"foo")` with no whitespace between url and quote — not a title.
         // The whole `url"foo"` is the URL.
         let tokens = parse("[text](url\"foo\")");
-        if let Token::Link(_, url) = &tokens[0] {
+        if let Token::Link { url, .. } = &tokens[0] {
             assert!(url.contains("\""), "expected url to contain quote, got {:?}", url);
         } else {
             panic!("expected link, got {:?}", tokens);
@@ -5349,9 +5508,16 @@ mod reference_link_tests {
     fn full_reference_link() {
         let input = "[CommonMark][cm]\n\n[cm]: https://commonmark.org";
         let tokens = parse(input);
-        assert!(tokens.iter().any(
-            |t| matches!(t, Token::Link(text, url) if text == "CommonMark" && url == "https://commonmark.org")
-        ), "got {:?}", tokens);
+        assert!(
+            tokens.iter().any(|t| matches!(
+                t,
+                Token::Link { content, url, .. }
+                if Token::collect_all_text(content) == "CommonMark"
+                    && url == "https://commonmark.org"
+            )),
+            "got {:?}",
+            tokens
+        );
     }
 
     #[test]
@@ -5359,7 +5525,7 @@ mod reference_link_tests {
         let input = "[CommonMark][]\n\n[CommonMark]: https://commonmark.org";
         let tokens = parse(input);
         assert!(tokens.iter().any(
-            |t| matches!(t, Token::Link(_, url) if url == "https://commonmark.org")
+            |t| matches!(t, Token::Link { url, .. } if url == "https://commonmark.org")
         ), "got {:?}", tokens);
     }
 
@@ -5368,7 +5534,7 @@ mod reference_link_tests {
         let input = "[CommonMark]\n\n[CommonMark]: https://commonmark.org";
         let tokens = parse(input);
         assert!(tokens.iter().any(
-            |t| matches!(t, Token::Link(_, url) if url == "https://commonmark.org")
+            |t| matches!(t, Token::Link { url, .. } if url == "https://commonmark.org")
         ), "got {:?}", tokens);
     }
 
@@ -5377,7 +5543,7 @@ mod reference_link_tests {
         let input = "[CommonMark][CM]\n\n[cm]: https://commonmark.org";
         let tokens = parse(input);
         assert!(tokens.iter().any(
-            |t| matches!(t, Token::Link(_, url) if url == "https://commonmark.org")
+            |t| matches!(t, Token::Link { url, .. } if url == "https://commonmark.org")
         ), "got {:?}", tokens);
     }
 
@@ -5398,7 +5564,7 @@ mod reference_link_tests {
         // `[Word]` with no matching definition should NOT become a Link
         // (today it does — empty URL — which is the bug).
         let tokens = parse("Just [Word] in text.");
-        let has_link = tokens.iter().any(|t| matches!(t, Token::Link(_, _)));
+        let has_link = tokens.iter().any(|t| matches!(t, Token::Link { .. }));
         assert!(
             !has_link,
             "unresolved shortcut must NOT become a link, got {:?}",
@@ -5411,7 +5577,7 @@ mod reference_link_tests {
         let input = "![alt][img]\n\n[img]: pic.png";
         let tokens = parse(input);
         assert!(tokens.iter().any(
-            |t| matches!(t, Token::Image(_, url) if url == "pic.png")
+            |t| matches!(t, Token::Image { url, .. } if url == "pic.png")
         ), "got {:?}", tokens);
     }
 
@@ -5420,7 +5586,7 @@ mod reference_link_tests {
         let input = "[a][r]\n\n[r]: https://example.com \"Example\"";
         let tokens = parse(input);
         assert!(tokens.iter().any(
-            |t| matches!(t, Token::Link(_, url) if url == "https://example.com")
+            |t| matches!(t, Token::Link { url, .. } if url == "https://example.com")
         ), "URL should be clean (no title baked in), got {:?}", tokens);
     }
 
@@ -5429,7 +5595,7 @@ mod reference_link_tests {
         // [text](url) is inline — must NOT be confused with a reference.
         let tokens = parse("[text](https://example.com)\n\n[text]: should-not-apply");
         assert!(tokens.iter().any(
-            |t| matches!(t, Token::Link(_, url) if url == "https://example.com")
+            |t| matches!(t, Token::Link { url, .. } if url == "https://example.com")
         ));
     }
 
@@ -5817,7 +5983,7 @@ mod raw_inline_html_tests {
     #[test]
     fn autolink_still_works() {
         let tokens = parse("<https://example.com>");
-        assert!(matches!(tokens[0], Token::Link(_, _)));
+        assert!(matches!(tokens[0], Token::Link { .. }));
     }
 
     #[test]
@@ -6409,7 +6575,7 @@ mod link_escape_tests {
         let tokens = parse(r"[a\]b](http://x)");
         assert_eq!(
             tokens,
-            vec![Token::Link("a]b".to_string(), "http://x".to_string())]
+            vec![Token::Link { content: vec![Token::Text("a]b".to_string())], url: "http://x".to_string(), title: None }]
         );
     }
 
@@ -6418,7 +6584,7 @@ mod link_escape_tests {
         let tokens = parse(r"[t](http://x\)y)");
         assert_eq!(
             tokens,
-            vec![Token::Link("t".to_string(), "http://x)y".to_string())]
+            vec![Token::Link { content: vec![Token::Text("t".to_string())], url: "http://x)y".to_string(), title: None }]
         );
     }
 
@@ -6427,7 +6593,7 @@ mod link_escape_tests {
         let tokens = parse(r"[a\\b](u)");
         assert_eq!(
             tokens,
-            vec![Token::Link("a\\b".to_string(), "u".to_string())]
+            vec![Token::Link { content: vec![Token::Text("a\\b".to_string())], url: "u".to_string(), title: None }]
         );
     }
 
@@ -6436,10 +6602,7 @@ mod link_escape_tests {
         let tokens = parse(r"![alt\]more](pic.png)");
         assert_eq!(
             tokens,
-            vec![Token::Image(
-                "alt]more".to_string(),
-                "pic.png".to_string()
-            )]
+            vec![Token::Image { alt: vec![Token::Text("alt]more".to_string())], url: "pic.png".to_string(), title: None }]
         );
     }
 
@@ -6448,10 +6611,7 @@ mod link_escape_tests {
         let tokens = parse("[foo](http://example.com)");
         assert_eq!(
             tokens,
-            vec![Token::Link(
-                "foo".to_string(),
-                "http://example.com".to_string()
-            )]
+            vec![Token::Link { content: vec![Token::Text("foo".to_string())], url: "http://example.com".to_string(), title: None }]
         );
     }
 
@@ -6461,10 +6621,7 @@ mod link_escape_tests {
         let tokens = parse("[Wiki](https://en.wikipedia.org/wiki/Foo_(bar))");
         assert_eq!(
             tokens,
-            vec![Token::Link(
-                "Wiki".to_string(),
-                "https://en.wikipedia.org/wiki/Foo_(bar)".to_string()
-            )]
+            vec![Token::Link { content: vec![Token::Text("Wiki".to_string())], url: "https://en.wikipedia.org/wiki/Foo_(bar)".to_string(), title: None }]
         );
     }
 }
@@ -6483,7 +6640,7 @@ mod link_entity_decoding_tests {
         let tokens = parse("[a &amp; b](http://x.com)");
         assert_eq!(
             tokens,
-            vec![Token::Link("a & b".to_string(), "http://x.com".to_string())]
+            vec![Token::Link { content: vec![Token::Text("a & b".to_string())], url: "http://x.com".to_string(), title: None }]
         );
     }
 
@@ -6492,7 +6649,7 @@ mod link_entity_decoding_tests {
         let tokens = parse("[em &#8212; dash](u)");
         assert_eq!(
             tokens,
-            vec![Token::Link("em — dash".to_string(), "u".to_string())]
+            vec![Token::Link { content: vec![Token::Text("em — dash".to_string())], url: "u".to_string(), title: None }]
         );
     }
 
@@ -6501,10 +6658,7 @@ mod link_entity_decoding_tests {
         let tokens = parse("[link](http://example.com/?a=1&amp;b=2)");
         assert_eq!(
             tokens,
-            vec![Token::Link(
-                "link".to_string(),
-                "http://example.com/?a=1&b=2".to_string()
-            )]
+            vec![Token::Link { content: vec![Token::Text("link".to_string())], url: "http://example.com/?a=1&b=2".to_string(), title: None }]
         );
     }
 
@@ -6513,7 +6667,7 @@ mod link_entity_decoding_tests {
         let tokens = parse("[t](http://x/&#35;frag)");
         assert_eq!(
             tokens,
-            vec![Token::Link("t".to_string(), "http://x/#frag".to_string())]
+            vec![Token::Link { content: vec![Token::Text("t".to_string())], url: "http://x/#frag".to_string(), title: None }]
         );
     }
 
@@ -6522,7 +6676,7 @@ mod link_entity_decoding_tests {
         let tokens = parse("![an &amp; alt](pic.png)");
         assert_eq!(
             tokens,
-            vec![Token::Image("an & alt".to_string(), "pic.png".to_string())]
+            vec![Token::Image { alt: vec![Token::Text("an & alt".to_string())], url: "pic.png".to_string(), title: None }]
         );
     }
 
@@ -6531,10 +6685,7 @@ mod link_entity_decoding_tests {
         let tokens = parse("![alt](http://x/?q=1&amp;y=2)");
         assert_eq!(
             tokens,
-            vec![Token::Image(
-                "alt".to_string(),
-                "http://x/?q=1&y=2".to_string()
-            )]
+            vec![Token::Image { alt: vec![Token::Text("alt".to_string())], url: "http://x/?q=1&y=2".to_string(), title: None }]
         );
     }
 
@@ -6543,7 +6694,7 @@ mod link_entity_decoding_tests {
         let tokens = parse("[&zzz;](u)");
         assert_eq!(
             tokens,
-            vec![Token::Link("&zzz;".to_string(), "u".to_string())]
+            vec![Token::Link { content: vec![Token::Text("&zzz;".to_string())], url: "u".to_string(), title: None }]
         );
     }
 
@@ -6552,7 +6703,7 @@ mod link_entity_decoding_tests {
         let tokens = parse("[a & b](u)");
         assert_eq!(
             tokens,
-            vec![Token::Link("a & b".to_string(), "u".to_string())]
+            vec![Token::Link { content: vec![Token::Text("a & b".to_string())], url: "u".to_string(), title: None }]
         );
     }
 
@@ -6562,7 +6713,7 @@ mod link_entity_decoding_tests {
         let tokens = parse(r"[\[ &amp; \]](u)");
         assert_eq!(
             tokens,
-            vec![Token::Link("[ & ]".to_string(), "u".to_string())]
+            vec![Token::Link { content: vec![Token::Text("[ & ]".to_string())], url: "u".to_string(), title: None }]
         );
     }
 
@@ -6572,10 +6723,7 @@ mod link_entity_decoding_tests {
         let tokens = parse("<http://x.com/?a=&amp;b>");
         assert_eq!(
             tokens,
-            vec![Token::Link(
-                "http://x.com/?a=&amp;b".to_string(),
-                "http://x.com/?a=&amp;b".to_string()
-            )]
+            vec![Token::Link { content: vec![Token::Text("http://x.com/?a=&amp;b".to_string())], url: "http://x.com/?a=&amp;b".to_string(), title: None }]
         );
     }
 
@@ -6584,9 +6732,13 @@ mod link_entity_decoding_tests {
         // Reference labels should decode entities before normalization /
         // matching. Define `café` literally and reference via `caf&eacute;`.
         let tokens = parse("[link][caf&eacute;]\n\n[café]: /u");
-        let resolved = tokens
-            .iter()
-            .any(|t| matches!(t, Token::Link(text, url) if text == "link" && url == "/u"));
+        let resolved = tokens.iter().any(|t| {
+            matches!(
+                t,
+                Token::Link { content, url, .. }
+                if Token::collect_all_text(content) == "link" && url == "/u"
+            )
+        });
         assert!(
             resolved,
             "expected reference label with entity to resolve, got {}",
@@ -6869,6 +7021,33 @@ mod loose_tight_list_tests {
     }
 
     #[test]
+    fn nested_list_blank_makes_both_levels_loose() {
+        // Spec: a list is loose if any item directly contains two block-level
+        // elements with a blank line between them. The two inner ListItems
+        // inside outer1 are separated by a blank, so the inner list AND the
+        // outer list are both loose.
+        let input = "- outer1\n  - inner1\n\n  - inner2\n- outer2";
+        let tokens = parse(input);
+        assert_eq!(
+            items(&tokens),
+            vec![true, true],
+            "outer: {}",
+            Token::slice_to_compact(&tokens)
+        );
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let inner = items(content);
+            assert_eq!(
+                inner,
+                vec![true, true],
+                "inner items: {}",
+                Token::slice_to_compact(content)
+            );
+        } else {
+            panic!("expected ListItem, got {}", Token::slice_to_compact(&tokens));
+        }
+    }
+
+    #[test]
     fn outer_loose_inner_tight() {
         let input = "- outer1\n  - in1\n  - in2\n\n- outer2";
         let tokens = parse(input);
@@ -7054,5 +7233,251 @@ mod tab_indentation_tests {
         let text = Token::collect_all_text(&tokens);
         assert!(text.contains("a"), "got {:?}", text);
         assert!(text.contains("b"), "got {:?}", text);
+    }
+}
+
+#[cfg(test)]
+mod multi_paragraph_list_item_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn bullet_item_with_two_paragraphs() {
+        let tokens = parse("- foo\n\n  bar");
+        assert_eq!(
+            tokens.iter().filter(|t| matches!(t, Token::ListItem { .. })).count(),
+            1,
+            "expected exactly one list item, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("foo"), "got {:?}", text);
+            assert!(
+                text.contains("bar"),
+                "second paragraph must be inside the item: {:?}",
+                text
+            );
+        } else {
+            panic!("expected ListItem, got {}", Token::slice_to_compact(&tokens));
+        }
+    }
+
+    #[test]
+    fn under_indented_continuation_starts_top_level_paragraph() {
+        // `bar` is at column 0 (no indent) — must NOT be inside the item.
+        let tokens = parse("- foo\n\nbar");
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("foo"));
+            assert!(!text.contains("bar"), "bar leaked into item: {:?}", text);
+        }
+        // bar must appear as a separate top-level token.
+        let after = Token::collect_all_text(&tokens[1..]);
+        assert!(after.contains("bar"), "bar missing from rest");
+    }
+
+    #[test]
+    fn bullet_item_with_blank_makes_list_loose() {
+        // The blank-line-between-paragraphs inside an item makes the list
+        // loose per spec ("any item directly contains two block-level
+        // elements with a blank line between them").
+        let tokens = parse("- foo\n\n  bar\n- second");
+        let loose_flags: Vec<bool> = tokens
+            .iter()
+            .filter_map(|t| {
+                if let Token::ListItem { loose, .. } = t {
+                    Some(*loose)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(loose_flags, vec![true, true], "got {}", Token::slice_to_compact(&tokens));
+    }
+
+    #[test]
+    fn ordered_item_with_two_paragraphs() {
+        // For ordered `1. ` the content offset is col 3.
+        let tokens = parse("1. first\n\n   second");
+        assert_eq!(
+            tokens.iter().filter(|t| matches!(t, Token::ListItem { .. })).count(),
+            1,
+            "got {}",
+            Token::slice_to_compact(&tokens)
+        );
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("first") && text.contains("second"), "got {:?}", text);
+        }
+    }
+
+    #[test]
+    fn item_with_only_one_paragraph_unchanged() {
+        // Regression: single-paragraph items must not change shape.
+        let tokens = parse("- only");
+        assert_eq!(
+            tokens.iter().filter(|t| matches!(t, Token::ListItem { .. })).count(),
+            1
+        );
+        if let Token::ListItem { content, loose, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert_eq!(text, "only");
+            assert!(!loose);
+        }
+    }
+
+    #[test]
+    fn three_paragraphs_in_one_item() {
+        let tokens = parse("- a\n\n  b\n\n  c");
+        assert_eq!(
+            tokens.iter().filter(|t| matches!(t, Token::ListItem { .. })).count(),
+            1,
+            "got {}",
+            Token::slice_to_compact(&tokens)
+        );
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            for needle in &["a", "b", "c"] {
+                assert!(text.contains(needle), "{:?} missing from {:?}", needle, text);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod link_inline_content_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn link_text_parses_emphasis() {
+        let tokens = parse("[*emph* text](u)");
+        let Token::Link { content, .. } = &tokens[0] else {
+            panic!("expected Link, got {}", Token::slice_to_compact(&tokens));
+        };
+        assert!(
+            content.iter().any(|t| matches!(t, Token::Emphasis { .. })),
+            "expected Emphasis inside link text, got {}",
+            Token::slice_to_compact(content)
+        );
+    }
+
+    #[test]
+    fn link_text_parses_strong_emphasis() {
+        // `**bold**` produces Emphasis with level 2 in this lexer (not a
+        // separate StrongEmphasis token).
+        let tokens = parse("[**bold** link](u)");
+        let Token::Link { content, .. } = &tokens[0] else {
+            panic!("expected Link, got {}", Token::slice_to_compact(&tokens));
+        };
+        assert!(
+            content
+                .iter()
+                .any(|t| matches!(t, Token::Emphasis { level: 2, .. })),
+            "expected Emphasis level=2, got {}",
+            Token::slice_to_compact(content)
+        );
+    }
+
+    #[test]
+    fn link_text_parses_code_span() {
+        let tokens = parse("[`code` snippet](u)");
+        let Token::Link { content, .. } = &tokens[0] else {
+            panic!("expected Link, got {}", Token::slice_to_compact(&tokens));
+        };
+        assert!(
+            content
+                .iter()
+                .any(|t| matches!(t, Token::Code(_, body) if body == "code")),
+            "expected Code span, got {}",
+            Token::slice_to_compact(content)
+        );
+    }
+
+    #[test]
+    fn link_text_decodes_entities() {
+        let tokens = parse("[a &amp; b](u)");
+        let Token::Link { content, .. } = &tokens[0] else {
+            panic!("expected Link, got {}", Token::slice_to_compact(&tokens));
+        };
+        let text = Token::collect_all_text(content);
+        assert_eq!(text, "a & b");
+    }
+
+    #[test]
+    fn link_text_honors_backslash_escape() {
+        let tokens = parse(r"[a\*not emph\*](u)");
+        let Token::Link { content, .. } = &tokens[0] else {
+            panic!("expected Link, got {}", Token::slice_to_compact(&tokens));
+        };
+        // No Emphasis should have been produced — escapes blocked it.
+        assert!(
+            !content.iter().any(|t| matches!(t, Token::Emphasis { .. })),
+            "escape should have blocked emphasis, got {}",
+            Token::slice_to_compact(content)
+        );
+        let text = Token::collect_all_text(content);
+        assert_eq!(text, "a*not emph*");
+    }
+
+    #[test]
+    fn image_alt_parses_inline_formatting() {
+        let tokens = parse("![*alt* text](pic.png)");
+        let Token::Image { alt, .. } = &tokens[0] else {
+            panic!("expected Image, got {}", Token::slice_to_compact(&tokens));
+        };
+        assert!(
+            alt.iter().any(|t| matches!(t, Token::Emphasis { .. })),
+            "expected Emphasis in alt, got {}",
+            Token::slice_to_compact(alt)
+        );
+    }
+
+    #[test]
+    fn link_title_escape_double_quote() {
+        // `\"` inside a double-quoted title produces a literal `"`.
+        let tokens = parse(r#"[t](u "a\"b")"#);
+        let Token::Link { title, .. } = &tokens[0] else {
+            panic!("expected Link, got {}", Token::slice_to_compact(&tokens));
+        };
+        assert_eq!(title.as_deref(), Some("a\"b"));
+    }
+
+    #[test]
+    fn link_title_entity_decoded() {
+        let tokens = parse(r#"[t](u "a &amp; b")"#);
+        let Token::Link { title, .. } = &tokens[0] else {
+            panic!("expected Link, got {}", Token::slice_to_compact(&tokens));
+        };
+        assert_eq!(title.as_deref(), Some("a & b"));
+    }
+
+    #[test]
+    fn link_title_with_paren_delimiter_escaped_close() {
+        let tokens = parse(r"[t](u (in\) title))");
+        let Token::Link { title, .. } = &tokens[0] else {
+            panic!("expected Link, got {}", Token::slice_to_compact(&tokens));
+        };
+        assert_eq!(title.as_deref(), Some("in) title"));
+    }
+
+    #[test]
+    fn autolink_keeps_url_as_link_text() {
+        let tokens = parse("<https://example.com>");
+        let Token::Link { content, url, title } = &tokens[0] else {
+            panic!("expected autolink, got {}", Token::slice_to_compact(&tokens));
+        };
+        assert_eq!(Token::collect_all_text(content), "https://example.com");
+        assert_eq!(url, "https://example.com");
+        assert!(title.is_none());
     }
 }

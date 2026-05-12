@@ -502,7 +502,7 @@ impl Pdf {
                     let nested_style = style.clone().bold();
                     self.render_inline_content_with_state(para, content, nested_style, html);
                 }
-                Token::Link(text, url) => {
+                Token::Link { content, url, title: _ } => {
                     let mut link_style = style.clone();
                     if let Some(color) = self.style.link.text_color {
                         link_style = link_style
@@ -520,7 +520,8 @@ impl Pdf {
                     if self.style.link.strikethrough {
                         link_style = link_style.strikethrough();
                     }
-                    para.push_link(text.clone(), url.clone(), link_style);
+                    let text = Token::collect_all_text(content);
+                    para.push_link(text, url.clone(), link_style);
                 }
                 Token::Code(_, content) => {
                     let mut code_style = style.clone();
@@ -534,14 +535,12 @@ impl Pdf {
                     let strike_style = style.clone().strikethrough();
                     self.render_inline_content_with_state(para, content, strike_style, html);
                 }
-                Token::Image(alt, url) => {
-                    // genpdfi doesn't embed images yet. Render the image as
-                    // a styled link so the alt-text is a clean clickable
-                    // label and the underline sits cleanly underneath it.
-                    let label = if alt.is_empty() {
+                Token::Image { alt, url, title: _ } => {
+                    let alt_text = Token::collect_all_text(alt);
+                    let label = if alt_text.is_empty() {
                         url.clone()
                     } else {
-                        alt.clone()
+                        alt_text
                     };
                     if !url.is_empty() {
                         let mut link_style = style.clone();
@@ -982,7 +981,11 @@ mod tests {
     fn test_render_links() {
         let tokens = vec![
             Token::Text("Here is a ".to_string()),
-            Token::Link("link".to_string(), "https://example.com".to_string()),
+            Token::Link {
+                content: vec![Token::Text("link".to_string())],
+                url: "https://example.com".to_string(),
+                title: None,
+            },
             Token::Text(" to click".to_string()),
         ];
         let pdf = create_test_pdf(tokens);
@@ -1007,7 +1010,11 @@ mod tests {
         let tokens = vec![
             Token::Heading(vec![Token::Text("Title".to_string())], 1),
             Token::Text("Some text ".to_string()),
-            Token::Link("with link".to_string(), "https://example.com".to_string()),
+            Token::Link {
+                content: vec![Token::Text("with link".to_string())],
+                url: "https://example.com".to_string(),
+                title: None,
+            },
             Token::Newline,
             Token::ListItem {
                 content: vec![Token::Text("List item".to_string())],
@@ -1091,10 +1098,11 @@ mod tests {
                 "rust".to_string(),
                 "fn main() {\n    println!(\"Hello\");\n}".to_string(),
             ),
-            Token::Link(
-                "Example Link".to_string(),
-                "https://example.com".to_string(),
-            ),
+            Token::Link {
+                content: vec![Token::Text("Example Link".to_string())],
+                url: "https://example.com".to_string(),
+                title: None,
+            },
         ];
         let pdf = create_test_pdf(tokens);
         let doc = pdf.render_into_document();

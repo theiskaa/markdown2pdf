@@ -153,24 +153,64 @@ impl Token {
                 result
             }
 
-            Token::Link(text, url) => {
-                format!(
-                    "{}{{\n{}\"type\": \"Link\",\n{}\"text\": \"{}\",\n{}\"url\": \"{}\"\n{}}}",
-                    indent,
+            Token::Link { content, url, title } => {
+                let mut result = format!("{}{{\n", indent);
+                result.push_str(&format!("{}\"type\": \"Link\",\n", inner_indent));
+                result.push_str(&format!(
+                    "{}\"url\": \"{}\",\n",
                     inner_indent,
-                    inner_indent,
-                    text.replace("\"", "\\\""),
-                    inner_indent,
-                    url.replace("\"", "\\\""),
-                    indent
-                )
+                    url.replace("\"", "\\\"")
+                ));
+                if let Some(t) = title {
+                    result.push_str(&format!(
+                        "{}\"title\": \"{}\",\n",
+                        inner_indent,
+                        t.replace("\"", "\\\"")
+                    ));
+                } else {
+                    result.push_str(&format!("{}\"title\": null,\n", inner_indent));
+                }
+                result.push_str(&format!("{}\"content\": [\n", inner_indent));
+                for (i, token) in content.iter().enumerate() {
+                    result.push_str(&token.to_readable_json(indent_level + 2));
+                    if i < content.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}]\n", inner_indent));
+                result.push_str(&format!("{}}}", indent));
+                result
             }
 
-            Token::Image(alt_text, url) => {
-                format!("{}{{\n{}\"type\": \"Image\",\n{}\"alt_text\": \"{}\",\n{}\"url\": \"{}\"\n{}}}",
-                    indent, inner_indent, inner_indent,
-                    alt_text.replace("\"", "\\\""), inner_indent,
-                    url.replace("\"", "\\\""), indent)
+            Token::Image { alt, url, title } => {
+                let mut result = format!("{}{{\n", indent);
+                result.push_str(&format!("{}\"type\": \"Image\",\n", inner_indent));
+                result.push_str(&format!(
+                    "{}\"url\": \"{}\",\n",
+                    inner_indent,
+                    url.replace("\"", "\\\"")
+                ));
+                if let Some(t) = title {
+                    result.push_str(&format!(
+                        "{}\"title\": \"{}\",\n",
+                        inner_indent,
+                        t.replace("\"", "\\\"")
+                    ));
+                } else {
+                    result.push_str(&format!("{}\"title\": null,\n", inner_indent));
+                }
+                result.push_str(&format!("{}\"alt\": [\n", inner_indent));
+                for (i, token) in alt.iter().enumerate() {
+                    result.push_str(&token.to_readable_json(indent_level + 2));
+                    if i < alt.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}]\n", inner_indent));
+                result.push_str(&format!("{}}}", indent));
+                result
             }
 
             Token::Text(content) => {
@@ -404,8 +444,20 @@ impl Token {
                     list(content)
                 )
             }
-            Token::Link(text, url) => format!("Link({}, {})", quote(text), quote(url)),
-            Token::Image(alt, url) => format!("Image({}, {})", quote(alt), quote(url)),
+            Token::Link { content, url, title } => {
+                let t = match title {
+                    Some(s) => quote(s),
+                    None => "_".to_string(),
+                };
+                format!("Link({}, {}, title={})", list(content), quote(url), t)
+            }
+            Token::Image { alt, url, title } => {
+                let t = match title {
+                    Some(s) => quote(s),
+                    None => "_".to_string(),
+                };
+                format!("Image({}, {}, title={})", list(alt), quote(url), t)
+            }
             Token::Text(s) => format!("Text({})", quote(s)),
             Token::Table {
                 headers,
