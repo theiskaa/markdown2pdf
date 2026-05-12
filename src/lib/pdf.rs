@@ -315,7 +315,7 @@ impl Pdf {
         let mut i = 0usize;
         while i < self.input.len() {
             let token = &self.input[i];
-            // CommonMark §4.8 / §6.8: a *blank* line (two or more
+            // a *blank* line (two or more
             // consecutive Newlines) terminates a paragraph; a single Newline
             // is a soft break and stays inside the current paragraph.
             if let Token::Newline = token {

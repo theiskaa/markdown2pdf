@@ -14,7 +14,7 @@ fn main() {
         serde_json::from_str(&json_text).expect("entities.json is not valid JSON");
     let map = parsed.as_object().expect("entities.json root must be object");
 
-    // CommonMark §2.5: entity references must end with `;`. Filter to the
+    // entity references must end with `;`. Filter to the
     // semicolon-terminated entries only; strip the leading `&` and trailing
     // `;` so the lookup key is the bare name.
     let mut entries: BTreeMap<String, String> = BTreeMap::new();

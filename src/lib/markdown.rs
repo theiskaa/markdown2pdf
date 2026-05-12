@@ -5,7 +5,7 @@
 //! as inline formatting like emphasis and links.
 //!
 //! The lexer maintains proper nesting of elements and handles edge cases around delimiter matching
-//! and whitespace handling according to CommonMark spec.
+//! and whitespace handling according to .
 //!
 //! # Examples
 //! ```rust
@@ -96,12 +96,12 @@ pub enum Token {
     TableAlignment(Alignment),
     /// HTML comment content
     HtmlComment(String),
-    /// Raw inline HTML (`<span>`, `</span>`, `<br/>`, etc.) per CommonMark
-    /// §6.6. Stored verbatim including the angle brackets.
+    /// Raw inline HTML (`<span>`, `</span>`, `<br/>`, etc.)
+    /// Stored verbatim including the angle brackets.
     HtmlInline(String),
     /// Soft line break (single `\n`).
     Newline,
-    /// Hard line break (CommonMark §6.7): two-or-more trailing spaces or a
+    /// Hard line break: two-or-more trailing spaces or a
     /// trailing backslash before the line terminator.
     HardBreak,
     /// Horizontal rule (---)
@@ -213,11 +213,11 @@ impl Token {
 /// Returns `None` if the sequence isn't a valid recognized entity, in which
 /// case the caller should emit `&` as a literal char.
 ///
-/// Per CommonMark §2.5, only semicolon-terminated references are valid.
-/// Numeric references for code point 0, surrogates, or values above
-/// 0x10FFFF decode to U+FFFD (REPLACEMENT CHARACTER) rather than failing —
-/// only syntactically invalid references (empty digits, non-hex digits,
-/// missing `;`) fall back to a literal `&`.
+/// Only semicolon-terminated references are valid. Numeric references for
+/// code point 0, surrogates, or values above 0x10FFFF decode to U+FFFD
+/// (REPLACEMENT CHARACTER) rather than failing — only syntactically
+/// invalid references (empty digits, non-hex digits, missing `;`) fall
+/// back to a literal `&`.
 fn try_decode_entity(chars: &[char], start: usize) -> Option<(String, usize)> {
     if chars.get(start) != Some(&'&') {
         return None;
@@ -249,10 +249,10 @@ fn try_decode_entity(chars: &[char], start: usize) -> Option<(String, usize)> {
         if digits.is_empty() {
             return None;
         }
-        // Per CommonMark §2.5: invalid Unicode code points (including the
-        // null character, surrogates, and out-of-range values) are
-        // replaced with U+FFFD. Only a *syntactic* failure (overflowing
-        // u32, non-digits in the chosen radix) falls back to literal.
+        // Invalid Unicode code points (including the null character,
+        // surrogates, and out-of-range values) are replaced with U+FFFD.
+        // Only a *syntactic* failure (overflowing u32, non-digits in the
+        // chosen radix) falls back to literal.
         let Ok(code) = u32::from_str_radix(digits, radix) else {
             return None;
         };
@@ -367,7 +367,7 @@ fn parse_definition_line(line: &str) -> Option<(String, String, Option<String>)>
     Some((label, url, title))
 }
 
-/// Normalizes a reference-link label per CommonMark §4.7: ASCII case-fold
+/// Normalizes a reference-link label ASCII case-fold
 /// plus internal-whitespace collapse plus leading/trailing trim.
 fn normalize_label(s: &str) -> String {
     let mut out = String::new();
@@ -391,9 +391,9 @@ fn normalize_label(s: &str) -> String {
     out
 }
 
-/// CommonMark §6.1: if a code-span body begins AND ends with a space (and
-/// is not entirely composed of spaces), strip exactly one leading and one
-/// trailing space. Otherwise leave content untouched.
+/// If a code-span body begins AND ends with a space (and is not entirely
+/// composed of spaces), strip exactly one leading and one trailing space.
+/// Otherwise leave content untouched.
 fn strip_code_span_outer_space(s: String) -> String {
     if s.len() >= 2 && s.starts_with(' ') && s.ends_with(' ') && !s.chars().all(|c| c == ' ') {
         s[1..s.len() - 1].to_string()
@@ -410,7 +410,7 @@ fn is_md_punctuation(c: char) -> bool {
     is_ascii_punctuation(c) || matches!(c, '–' | '—' | '…' | '‘' | '’' | '“' | '”')
 }
 
-/// True for the 32 ASCII punctuation characters that CommonMark §2.4 allows
+/// True for the 32 ASCII punctuation characters that allows
 /// to be backslash-escaped. Backslash before any other char (letters, digits,
 /// whitespace, end-of-input) leaves the backslash as literal text.
 fn is_ascii_punctuation(c: char) -> bool {
@@ -634,9 +634,9 @@ impl Lexer {
             return Ok(Some(Token::HardBreak));
         }
 
-        // CommonMark §4.4: an indented (4-column) code block. Triggers at
-        // line start in Root or BlockQuote context AND only when the previous
-        // line is blank or we're at start-of-document, so list-item
+        // An indented (4-column) code block. Triggers at line start in Root
+        // or BlockQuote context AND only when the previous line is blank or
+        // we're at start-of-document, so list-item
         // continuations and post-paragraph-without-blank lines aren't
         // mis-routed to code.
         if matches!(ctx, ParseContext::Root | ParseContext::BlockQuote)
@@ -775,7 +775,7 @@ impl Lexer {
         Ok(Some(token))
     }
 
-    /// Per CommonMark §4.2: an ATX heading opener must be 1-6 `#` chars
+    /// An ATX heading opener must be 1-6 `#` chars
     /// followed by a space, tab, end-of-line, or end-of-input. This guard
     /// runs before `parse_heading` so `#hello` (no space) and `####### too`
     /// (more than 6 `#`s) fall through to paragraph text.
@@ -800,7 +800,7 @@ impl Lexer {
 
     /// Parses a heading token. Counts up to 6 `#` chars (caller has already
     /// validated it's a real ATX heading via `is_atx_heading_start`), then
-    /// collects nested inline content. Per CommonMark §4.2, an optional
+    /// collects nested inline content. an optional
     /// closing run of `#`s preceded by a space and followed only by spaces
     /// is stripped from the heading content.
     fn parse_heading(&mut self) -> Result<Token, LexerError> {
@@ -862,9 +862,9 @@ impl Lexer {
     /// Parses emphasis tokens (* or _) with support for multiple levels (1-3).
     /// Ensures proper matching of opening and closing delimiters.
     ///
-    /// Per CommonMark §6.2, an unmatched opener falls back to literal text
-    /// rather than raising an error. We implement this with rewind-on-failure:
-    /// if the closing delimiter isn't found, position is reset to right after
+    /// An unmatched opener falls back to literal text rather than raising
+    /// an error. We implement this with rewind-on-failure: if the closing
+    /// delimiter isn't found, position is reset to right after
     /// the opener run and the run is emitted as `Token::Text`. The body chars
     /// are then re-tokenized by the main loop.
     fn parse_emphasis(&mut self) -> Result<Token, LexerError> {
@@ -910,8 +910,8 @@ impl Lexer {
         let is_line_start = self.is_at_line_start();
         let start_backticks = self.count_backticks();
 
-        // CommonMark §4.5: a backtick fence opener requires 3+ backticks at
-        // line start AND no further backticks anywhere on the rest of the
+        // A backtick fence opener requires 3+ backticks at line start AND
+        // no further backticks anywhere on the rest of the
         // line — the info string of a backtick fence may not contain any
         // backtick characters (which subsumes the closer-on-same-line case
         // that would otherwise turn this into an inline span).
@@ -923,7 +923,7 @@ impl Lexer {
             return Ok(self.parse_inline_code_span_body(start_backticks));
         }
 
-        // Fenced code block. Info string spans to end of line; per §4.5 the
+        // Fenced code block. Info string spans to end of line; the
         // *language* is the first whitespace-delimited word, with any
         // remaining metadata discarded (we have no consumer for it).
         self.skip_whitespace();
@@ -967,10 +967,10 @@ impl Lexer {
         ))
     }
 
-    /// CommonMark §4.5: walks from `opener_pos + count` to end of line, and
-    /// returns true only if *no* backtick character is present. A backtick
-    /// fence opener's info string must be backtick-free, which also rules
-    /// out an inline-span closer on the same line.
+    /// Walks from `opener_pos + count` to end of line and returns true only
+    /// if *no* backtick character is present. A backtick fence opener's
+    /// info string must be backtick-free, which also rules out an
+    /// inline-span closer on the same line.
     fn no_backticks_on_rest_of_line(&self, opener_pos: usize, count: usize) -> bool {
         let mut p = opener_pos + count;
         while p < self.input.len() && self.input[p] != '\n' {
@@ -985,7 +985,7 @@ impl Lexer {
     /// Reads an inline code span body. The opener has already been consumed
     /// by `count_backticks`. Closes on the next backtick run of exactly
     /// `opener_count` chars; runs of a different size are content. A single
-    /// `\n` is converted to a space (CommonMark §6.1). A blank line (`\n\n`)
+    /// `\n` is converted to a space. A blank line (`\n\n`)
     /// or EOF before a closer triggers a literal-text fallback so an
     /// unclosed run can't gobble across paragraphs.
     fn parse_inline_code_span_body(&mut self, opener_count: usize) -> Token {
@@ -1079,8 +1079,8 @@ impl Lexer {
             start_tildes += 1;
             self.advance();
         }
-        // Tilde fences (§4.5): info strings may contain backticks, but
-        // language is still the first whitespace-delimited word.
+        // Tilde fences: info strings may contain backticks, but
+        // the language is still the first whitespace-delimited word.
         self.skip_whitespace();
         let info_string = self.read_until_newline();
         let language = info_string
@@ -1144,9 +1144,9 @@ impl Lexer {
     }
 
     /// Parses a blockquote, consuming consecutive `>`-prefixed lines and
-    /// recursively lexing the body so inline formatting works (CommonMark
-    /// §5.1). Supports §5.2 lazy continuation: a non-`>`-prefixed line that
-    /// doesn't itself start a new block construct joins the open paragraph.
+    /// recursively lexing the body so inline formatting works. Supports
+    /// lazy continuation: a non-`>`-prefixed line that doesn't itself
+    /// start a new block construct joins the open paragraph.
     ///
     /// A line terminates the quote when it is blank at top level, or when it
     /// begins a new block construct that interrupts paragraphs (ATX heading,
@@ -1167,8 +1167,8 @@ impl Lexer {
                 break;
             }
             let line_start = self.position;
-            // Skip up to 3 leading spaces for marker detection (per §5.1
-            // marker may have 0-3 spaces of indent).
+            // Skip up to 3 leading spaces for marker detection — a block
+            // marker may have 0-3 spaces of indent.
             let mut peek = line_start;
             let mut leading = 0usize;
             while peek < self.input.len() && self.input[peek] == ' ' && leading < 3 {
@@ -1235,10 +1235,10 @@ impl Lexer {
 
     /// Returns true if the line beginning at `pos` (already past any 0-3
     /// leading spaces) starts a new block-level construct that interrupts
-    /// an open paragraph per CommonMark §5.2 / §4.10. Covers ATX heading,
-    /// thematic break, list marker, and fenced code. Does NOT detect
-    /// indented-code interruptions, since they only apply when the open
-    /// block in the surrounding context is itself a paragraph.
+    /// an open paragraph. Covers ATX heading, thematic break, list marker,
+    /// and fenced code. Does NOT detect indented-code interruptions, since
+    /// they only apply when the open block in the surrounding context is
+    /// itself a paragraph.
     fn line_starts_new_block_at(&mut self, pos: usize) -> bool {
         if pos >= self.input.len() {
             return false;
@@ -1357,7 +1357,7 @@ impl Lexer {
         let mut depth: i32 = 0;
         while self.position < self.input.len() {
             let c = self.current_char();
-            // CommonMark §6.3: `\<punct>` inside a URL emits the punctuation
+            // `\<punct>` inside a URL emits the punctuation
             // literally — so `Foo\(bar` and `Foo\)bar` both survive.
             if c == '\\' && self.position + 1 < self.input.len() {
                 let next = self.input[self.position + 1];
@@ -1365,6 +1365,20 @@ impl Lexer {
                     url.push(next);
                     self.advance();
                     self.advance();
+                    continue;
+                }
+            }
+            // Entity / numeric character references decode inside URLs too,
+            // so `&amp;` → `&`, `&#35;` → `#`, etc. Unrecognized `&…` passes
+            // through literally.
+            if c == '&' {
+                if let Some((decoded, consumed)) =
+                    try_decode_entity(&self.input, self.position)
+                {
+                    url.push_str(&decoded);
+                    for _ in 0..consumed {
+                        self.advance();
+                    }
                     continue;
                 }
             }
@@ -1504,7 +1518,7 @@ impl Lexer {
     /// Tries to recognize a raw inline HTML tag (open tag, closing tag,
     /// or self-closing) starting at the current `<`. Returns the matched
     /// length (including angle brackets) on success. Pragmatic subset of
-    /// CommonMark §6.6 — comments, processing instructions, declarations,
+    /// — comments, processing instructions, declarations,
     /// and CDATA sections are handled elsewhere or fall through to text.
     fn try_match_html_tag_len(&self) -> Option<usize> {
         if self.current_char() != '<' {
@@ -1784,7 +1798,7 @@ impl Lexer {
         while self.position < self.input.len() {
             let ch = self.current_char();
 
-            // CommonMark §2.4: `\` before any ASCII punctuation char emits the
+            // `\` before any ASCII punctuation char emits the
             // punctuation as literal text (so `\*`, `\#`, `\[` etc. don't open
             // their respective constructs). `\` before a non-punctuation char
             // stays literal.
@@ -1799,7 +1813,7 @@ impl Lexer {
                 }
             }
 
-            // CommonMark §2.5: HTML entity / numeric character references.
+            // HTML entity / numeric character references.
             if ch == '&' {
                 if let Some((decoded, consumed)) =
                     try_decode_entity(&self.input, self.position)
@@ -1822,8 +1836,8 @@ impl Lexer {
             last_was_escape = false;
         }
 
-        // CommonMark §6.7 hard line break: 2+ trailing spaces or a lone trailing
-        // backslash before `\n`, in block-paragraph contexts only.
+        // Hard line break: 2+ trailing spaces or a lone trailing backslash
+        // before `\n`, in block-paragraph contexts only.
         if self.position < self.input.len()
             && self.current_char() == '\n'
             && matches!(
@@ -1915,10 +1929,12 @@ impl Lexer {
     }
 
     /// Reads link/image text or label content, honoring backslash escapes
-    /// for ASCII punctuation per CommonMark §2.4. Stops at the closing
+    /// for ASCII punctuation and entity references. Stops at the closing
     /// delimiter (which is NOT consumed). `\<close>` and `\\` produce
     /// literal chars; `\<punct>` produces the punctuation; `\<other>`
-    /// remains a literal backslash followed by the char.
+    /// remains a literal backslash followed by the char. `&name;` /
+    /// `&#dd;` / `&#xHH;` decode to their character(s); unrecognized `&…`
+    /// sequences pass through literally.
     fn read_until_char_with_escapes(&mut self, delimiter: char) -> String {
         let mut out = String::new();
         while self.position < self.input.len() {
@@ -1929,6 +1945,17 @@ impl Lexer {
                     out.push(next);
                     self.advance();
                     self.advance();
+                    continue;
+                }
+            }
+            if ch == '&' {
+                if let Some((decoded, consumed)) =
+                    try_decode_entity(&self.input, self.position)
+                {
+                    out.push_str(&decoded);
+                    for _ in 0..consumed {
+                        self.advance();
+                    }
                     continue;
                 }
             }
@@ -2009,7 +2036,7 @@ impl Lexer {
         (line, col)
     }
 
-    /// CommonMark §6.2 left-flanking-delimiter-run. The run at `pos` is
+    /// left-flanking-delimiter-run. The run at `pos` is
     /// left-flanking if it is NOT followed by Unicode whitespace, AND
     /// EITHER not followed by punctuation OR preceded by whitespace/punc.
     /// "Followed by end-of-input" counts as whitespace for this rule.
@@ -2043,7 +2070,7 @@ impl Lexer {
         }
     }
 
-    /// CommonMark §6.2 right-flanking-delimiter-run. Symmetric to left-flanking.
+    /// right-flanking-delimiter-run. Symmetric to left-flanking.
     fn is_right_flanking_run(&self, pos: usize) -> bool {
         let delim = match self.input.get(pos) {
             Some(&c) if c == '*' || c == '_' || c == '~' => c,
@@ -2185,9 +2212,9 @@ impl Lexer {
         Ok(false)
     }
 
-    /// CommonMark §4.1: a thematic break is a line of 3+ matching markers
-    /// from `-`/`*`/`_` (with optional internal/leading whitespace, up to 3
-    /// leading spaces). Caller must already be at line start.
+    /// A thematic break is a line of 3+ matching markers from `-`/`*`/`_`
+    /// (with optional internal/leading whitespace, up to 3 leading spaces).
+    /// Caller must already be at line start.
     fn is_thematic_break_line(&self) -> bool {
         let mut p = self.position;
         let mut leading = 0usize;
@@ -2227,7 +2254,7 @@ impl Lexer {
     /// If the line following the current line is a setext underline
     /// (`===…` for H1, `---…` for H2, with optional 3-space indent and
     /// trailing whitespace), returns the heading level. The current line
-    /// must contain non-whitespace content. Per CommonMark §4.3.
+    /// must contain non-whitespace content.
     fn peek_setext_level(&self) -> Option<usize> {
         // Setext doesn't apply when the current line is itself the start of
         // another block construct (list item, ATX heading, blockquote,
@@ -2365,7 +2392,7 @@ impl Lexer {
     }
 
     /// Checks if current position starts an ordered list marker (e.g.
-    /// `1.` or `1)`). Per CommonMark §5.2, both `.` and `)` are valid
+    /// `1.` or `1)`). both `.` and `)` are valid
     /// ordered-list marker terminators.
     fn check_ordered_list_marker(&mut self) -> Option<usize> {
         let start_pos = self.position;
@@ -2453,7 +2480,7 @@ impl Lexer {
         }
 
         // Continuation loop: handles both deeper-indented sub-items / nested
-        // markers AND CommonMark §5.2 lazy paragraph continuation (lines at
+        // markers AND lazy paragraph continuation (lines at
         // any indent that don't start a new block belong to this item).
         loop {
             if self.position >= self.input.len() {
@@ -2714,7 +2741,7 @@ impl Lexer {
             .all(|c| *c == ' ' || *c == '\t')
     }
 
-    /// CommonMark §4.4 indented code block. Strips up to 4 columns of leading
+    /// indented code block. Strips up to 4 columns of leading
     /// whitespace from each line, includes blank lines if subsequent lines
     /// resume the 4-column indent, and stops at the first non-blank line with
     /// less than 4 columns of indent.
@@ -2791,9 +2818,9 @@ impl Lexer {
         )
     }
 
-    /// Gets the current line's indentation level in columns. CommonMark §2.2:
-    /// a tab advances to the next multiple of 4, so `  \t` is 4 columns total
-    /// (not 6 as a flat 4-per-tab rule would give).
+    /// Gets the current line's indentation level in columns. A tab advances
+    /// to the next multiple of 4, so `  \t` is 4 columns total (not 6 as a
+    /// flat 4-per-tab rule would give).
     fn get_current_indent(&self) -> usize {
         let mut count = 0usize;
         let mut pos = self.position;
@@ -3542,7 +3569,7 @@ mod intra_word_underscore_tests {
 
     #[test]
     fn star_emphasis_intra_word_still_emphasis() {
-        // Per CommonMark, * is allowed intra-word
+        // * is allowed intra-word
         let tokens = parse("a*b*c");
         assert!(matches!(tokens[0], Token::Text(ref s) if s == "a"));
         assert!(matches!(tokens[1], Token::Emphasis { level: 1, .. }));
@@ -3693,7 +3720,7 @@ mod backslash_escape_tests {
 
     #[test]
     fn escape_hash_blocks_heading() {
-        // Per CommonMark §2.4: \# at line start should NOT start a heading.
+        // \# at line start should NOT start a heading.
         let tokens = parse(r"\# not a heading");
         assert_eq!(tokens, vec![Token::Text("# not a heading".to_string())]);
     }
@@ -3889,7 +3916,7 @@ mod backslash_escape_tests {
 
     #[test]
     fn escape_does_not_consume_newline() {
-        // Per CommonMark §6.7 a lone trailing backslash before a newline
+        // a lone trailing backslash before a newline
         // is a hard line break — produces Text("foo") + HardBreak + Text("bar").
         let tokens = parse("foo\\\nbar");
         assert!(matches!(tokens[0], Token::Text(ref s) if s == "foo"));
@@ -3899,7 +3926,7 @@ mod backslash_escape_tests {
 
     #[test]
     fn escape_inside_inline_code_span_is_literal() {
-        // Per CommonMark §2.4: backslash escapes do NOT apply inside code spans.
+        // backslash escapes do NOT apply inside code spans.
         // Body must contain the literal backslash and the asterisk verbatim.
         let tokens = parse(r"`\*not emphasis\*`");
         assert_eq!(
@@ -3947,7 +3974,7 @@ mod backslash_escape_tests {
 
     #[test]
     fn escape_inside_autolink_url_is_literal() {
-        // Per §2.4: escapes don't apply in autolinks. `<http://x/\bar>` keeps
+        // escapes don't apply in autolinks. `<http://x/\bar>` keeps
         // the backslash verbatim as part of the URL.
         let tokens = parse(r"<http://example.com/\bar>");
         let link = tokens
@@ -3963,7 +3990,7 @@ mod backslash_escape_tests {
 
     #[test]
     fn escape_in_link_url_inside_parens() {
-        // Per §6.3: escapes DO apply inside parenthesized link destinations,
+        // escapes DO apply inside parenthesized link destinations,
         // so `\(` produces a literal `(` in the URL.
         let tokens = parse(r"[t](http://x\)y)");
         assert_eq!(
@@ -3974,7 +4001,7 @@ mod backslash_escape_tests {
 
     #[test]
     fn escape_in_link_text() {
-        // Per §6.3: escapes apply in link text — `\]` is literal `]`.
+        // escapes apply in link text — `\]` is literal `]`.
         let tokens = parse(r"[a\]b](u)");
         assert_eq!(
             tokens,
@@ -4292,7 +4319,7 @@ mod blockquote_inline_tests {
 
     #[test]
     fn quote_with_no_space_after_marker() {
-        // Per CommonMark, `>foo` is also a blockquote (the space is optional).
+        // `>foo` is also a blockquote (the space is optional).
         let tokens = parse(">foo");
         assert!(matches!(tokens[0], Token::BlockQuote(_)));
         let body = block_body(&tokens[0]);
@@ -5037,7 +5064,7 @@ mod entity_reference_tests {
 
     #[test]
     fn numeric_null_becomes_replacement_char() {
-        // CommonMark §2.5: code point 0 → U+FFFD.
+        // code point 0 → U+FFFD.
         assert_eq!(collected("&#0;"), "\u{FFFD}");
         assert_eq!(collected("&#x0;"), "\u{FFFD}");
     }
@@ -5073,7 +5100,7 @@ mod entity_reference_tests {
 
     #[test]
     fn legacy_non_semicolon_entity_passes_through() {
-        // Per CommonMark, only semicolon-terminated entries decode, even
+        // only semicolon-terminated entries decode, even
         // though browsers accept some legacy forms like `&amp` or `&AElig`.
         assert_eq!(collected("&AElig hello"), "&AElig hello");
     }
@@ -5176,7 +5203,7 @@ mod link_title_tests {
     #[test]
     fn link_url_with_no_space_then_quote_is_url_only() {
         // `(url"foo")` with no whitespace between url and quote — not a title.
-        // The whole `url"foo"` is the URL per CommonMark.
+        // The whole `url"foo"` is the URL.
         let tokens = parse("[text](url\"foo\")");
         if let Token::Link(_, url) = &tokens[0] {
             assert!(url.contains("\""), "expected url to contain quote, got {:?}", url);
@@ -5444,7 +5471,7 @@ mod multi_backtick_inline_code_tests {
 
     #[test]
     fn unclosed_inline_code_falls_back_to_text() {
-        // No matching closer (EOF reached) — per CommonMark, the opener run
+        // No matching closer (EOF reached) — the opener run
         // becomes literal text so the body chars still render normally.
         let tokens = parse("``never closes");
         assert!(matches!(tokens[0], Token::Text(ref s) if s == "``"));
@@ -5577,7 +5604,7 @@ mod indented_code_block_tests {
     #[test]
     fn indented_code_inside_paragraph_does_not_apply() {
         // Indented line directly after a paragraph is treated as paragraph
-        // continuation per CommonMark, not code. We're more permissive: it
+        // continuation not code. We're more permissive: it
         // becomes code if separated by a blank line. Test the blank-line case.
         let input = "Some paragraph\n\n    code line";
         let tokens = parse(input);
@@ -6083,7 +6110,7 @@ mod blockquote_lazy_continuation_tests {
         }
     }
 
-    // CommonMark §5.2: a non-prefixed line that doesn't start a new block
+    // a non-prefixed line that doesn't start a new block
     // joins the open paragraph inside the quote.
     #[test]
     fn single_lazy_line_joins_paragraph() {
@@ -6109,7 +6136,7 @@ mod blockquote_lazy_continuation_tests {
 
     #[test]
     fn lazy_mixed_with_marker_lines() {
-        // Spec §5.2: lazy lines can be interleaved with `>` lines.
+        // Spec lazy lines can be interleaved with `>` lines.
         let tokens = parse("> foo\nbar\n> baz");
         assert_eq!(tokens.len(), 1, "got {}", Token::slice_to_compact(&tokens));
         let text = Token::collect_all_text(body(&tokens[0]));
@@ -6320,6 +6347,132 @@ mod link_escape_tests {
 }
 
 #[cfg(test)]
+mod link_entity_decoding_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn entity_in_link_text_decodes() {
+        let tokens = parse("[a &amp; b](http://x.com)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("a & b".to_string(), "http://x.com".to_string())]
+        );
+    }
+
+    #[test]
+    fn numeric_entity_in_link_text_decodes() {
+        let tokens = parse("[em &#8212; dash](u)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("em — dash".to_string(), "u".to_string())]
+        );
+    }
+
+    #[test]
+    fn entity_in_link_url_decodes() {
+        let tokens = parse("[link](http://example.com/?a=1&amp;b=2)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link(
+                "link".to_string(),
+                "http://example.com/?a=1&b=2".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn numeric_entity_in_link_url_decodes() {
+        let tokens = parse("[t](http://x/&#35;frag)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("t".to_string(), "http://x/#frag".to_string())]
+        );
+    }
+
+    #[test]
+    fn entity_in_image_alt_decodes() {
+        let tokens = parse("![an &amp; alt](pic.png)");
+        assert_eq!(
+            tokens,
+            vec![Token::Image("an & alt".to_string(), "pic.png".to_string())]
+        );
+    }
+
+    #[test]
+    fn entity_in_image_url_decodes() {
+        let tokens = parse("![alt](http://x/?q=1&amp;y=2)");
+        assert_eq!(
+            tokens,
+            vec![Token::Image(
+                "alt".to_string(),
+                "http://x/?q=1&y=2".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn unknown_entity_in_link_text_passes_through() {
+        let tokens = parse("[&zzz;](u)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("&zzz;".to_string(), "u".to_string())]
+        );
+    }
+
+    #[test]
+    fn lone_ampersand_in_link_text_stays_literal() {
+        let tokens = parse("[a & b](u)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("a & b".to_string(), "u".to_string())]
+        );
+    }
+
+    #[test]
+    fn entity_inside_escape_in_link_text() {
+        // Escape applies first, entity decoding still works for unescaped chars.
+        let tokens = parse(r"[\[ &amp; \]](u)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("[ & ]".to_string(), "u".to_string())]
+        );
+    }
+
+    #[test]
+    fn autolink_url_does_not_decode_entities() {
+        // autolink URLs are literal — entities preserved verbatim.
+        let tokens = parse("<http://x.com/?a=&amp;b>");
+        assert_eq!(
+            tokens,
+            vec![Token::Link(
+                "http://x.com/?a=&amp;b".to_string(),
+                "http://x.com/?a=&amp;b".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn reference_label_with_entity_resolves() {
+        // Reference labels should decode entities before normalization /
+        // matching. Define `café` literally and reference via `caf&eacute;`.
+        let tokens = parse("[link][caf&eacute;]\n\n[café]: /u");
+        let resolved = tokens
+            .iter()
+            .any(|t| matches!(t, Token::Link(text, url) if text == "link" && url == "/u"));
+        assert!(
+            resolved,
+            "expected reference label with entity to resolve, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+}
+
+#[cfg(test)]
 mod list_lazy_continuation_tests {
     use super::*;
 
@@ -6346,7 +6499,7 @@ mod list_lazy_continuation_tests {
 
     #[test]
     fn zero_indent_lazy_continuation() {
-        // CommonMark §5.2: a non-blank, non-marker line at indent 0 still
+        // a non-blank, non-marker line at indent 0 still
         // continues the previous item's paragraph.
         let input = "- item one\nlazy line\n- item two";
         let tokens = parse(input);
@@ -6496,7 +6649,7 @@ mod fenced_code_info_string_tests {
 
     #[test]
     fn backtick_fence_with_backticks_in_info_string_is_inline_span() {
-        // Per §4.5 a backtick fence's info string may not contain any
+        // a backtick fence's info string may not contain any
         // backticks — so this opens an inline span instead. Discriminator:
         // a real fence would put `body` in content with the info string
         // dropped; the inline-span fallback includes the info-string text
