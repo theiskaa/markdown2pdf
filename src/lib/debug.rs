@@ -224,6 +224,14 @@ impl Token {
                 )
             }
 
+            Token::DelimRun { ch, count } => {
+                let s = ch.to_string().repeat(*count);
+                format!(
+                    "{}{{\n{}\"type\": \"DelimRun\",\n{}\"content\": \"{}\"\n{}}}",
+                    indent, inner_indent, inner_indent, s, indent
+                )
+            }
+
             Token::Table {
                 headers,
                 aligns,
@@ -460,6 +468,9 @@ impl Token {
                 format!("Image({}, {}, title={})", list(alt), quote(url), t)
             }
             Token::Text(s) => format!("Text({})", quote(s)),
+            Token::DelimRun { ch, count } => {
+                format!("DelimRun({}{})", ch, count)
+            }
             Token::Table {
                 headers,
                 aligns,

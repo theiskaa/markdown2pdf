@@ -286,6 +286,11 @@ fn render_inlines(tokens: &[Token], out: &mut String) {
 fn render_inline_token(t: &Token, out: &mut String) {
     match t {
         Token::Text(s) => out.push_str(&escape_text(s)),
+        Token::DelimRun { ch, count } => {
+            for _ in 0..*count {
+                out.push(*ch);
+            }
+        }
         Token::Emphasis { level, content } => match level {
             1 => {
                 out.push_str("<em>");

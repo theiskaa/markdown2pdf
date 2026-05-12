@@ -116,6 +116,14 @@ pub enum Token {
     },
     /// Plain text content
     Text(String),
+    /// Internal: a run of `*` or `_` delimiter characters before emphasis
+    /// matching. After `resolve_emphasis` runs, unmatched runs are flattened
+    /// into `Text` and matched runs become `Emphasis`. Should never escape
+    /// the lexer to consumers.
+    DelimRun {
+        ch: char,
+        count: usize,
+    },
     /// Table with header, alignment info, and rows
     Table {
         headers: Vec<Vec<Token>>,
@@ -173,6 +181,11 @@ impl Token {
     fn collect_text_recursive(&self, result: &mut String) {
         match self {
             Token::Text(s) => result.push_str(s),
+            Token::DelimRun { ch, count } => {
+                for _ in 0..*count {
+                    result.push(*ch);
+                }
+            }
             Token::Heading(nested, _) => {
                 for token in nested {
                     token.collect_text_recursive(result);
@@ -854,11 +867,319 @@ fn strip_code_span_outer_space(s: String) -> String {
 }
 
 /// CommonMark "Unicode punctuation" predicate, used by the left/right-
-/// flanking-run rules. We accept all ASCII punctuation plus a small set of
-/// common Unicode punctuation marks. Strict CommonMark also includes the
-/// full Unicode `P*` general categories; deferred for simplicity.
+/// flanking-run rules. Per CommonMark 0.31.2, this covers all ASCII
+/// punctuation plus the Unicode general categories `P*` (punctuation) and
+/// `S*` (symbols — currency, math, modifier, other). Without `S*` coverage,
+/// emphasis flanking misclassifies inputs like `*£*alpha.` (currency `£`
+/// is `Sc`).
 fn is_md_punctuation(c: char) -> bool {
-    is_ascii_punctuation(c) || matches!(c, '–' | '—' | '…' | '‘' | '’' | '“' | '”')
+    if is_ascii_punctuation(c) {
+        return true;
+    }
+    if (c as u32) < 0x80 {
+        return false;
+    }
+    matches!(c,
+        '\u{00A1}'..='\u{00BF}'
+            | '\u{00D7}'
+            | '\u{00F7}'
+            | '\u{2000}'..='\u{206F}'
+            | '\u{2070}'..='\u{209F}'
+            | '\u{20A0}'..='\u{20CF}'
+            | '\u{2100}'..='\u{214F}'
+            | '\u{2150}'..='\u{218F}'
+            | '\u{2190}'..='\u{21FF}'
+            | '\u{2200}'..='\u{22FF}'
+            | '\u{2300}'..='\u{23FF}'
+            | '\u{2400}'..='\u{243F}'
+            | '\u{2500}'..='\u{257F}'
+            | '\u{2580}'..='\u{259F}'
+            | '\u{25A0}'..='\u{25FF}'
+            | '\u{2600}'..='\u{26FF}'
+            | '\u{2700}'..='\u{27BF}'
+            | '\u{27C0}'..='\u{27EF}'
+            | '\u{27F0}'..='\u{27FF}'
+            | '\u{2800}'..='\u{28FF}'
+            | '\u{2900}'..='\u{297F}'
+            | '\u{2980}'..='\u{29FF}'
+            | '\u{2A00}'..='\u{2AFF}'
+            | '\u{2B00}'..='\u{2BFF}'
+            | '\u{3000}'..='\u{303F}'
+            | '\u{FE30}'..='\u{FE4F}'
+            | '\u{FE50}'..='\u{FE6F}'
+            | '\u{FF00}'..='\u{FFEF}'
+    ) && !matches!(c, '\u{00A0}' | '\u{2028}' | '\u{2029}')
+}
+
+#[derive(Debug, Clone)]
+struct EmDelim {
+    pos: usize,
+    ch: char,
+    count: usize,
+    can_open: bool,
+    can_close: bool,
+}
+
+/// CommonMark emphasis algorithm. Scans `tokens` for delimiter-run text
+/// tokens (`Text("***")`, `Text("___")`, etc.), computes left/right
+/// flanking using neighboring tokens, and matches opener/closer pairs
+/// per the stack-based algorithm with Rule 9/10 (mod-3) and Rule 13
+/// (`n = 2` when both opener and closer ≥ 2). Matched pairs become
+/// `Token::Emphasis { level, content }`; unmatched delim runs stay as
+/// literal `Text`. Paragraph boundaries (consecutive `Newline` tokens)
+/// split the scan so emphasis can't cross a blank line.
+fn resolve_emphasis(tokens: &mut Vec<Token>) {
+    // Split tokens into paragraph-bounded chunks: anywhere we see two or
+    // more consecutive Newlines, the prior delimiter stack resets.
+    let mut chunk_starts: Vec<usize> = vec![0];
+    let mut i = 0;
+    while i + 1 < tokens.len() {
+        if matches!(tokens[i], Token::Newline)
+            && matches!(tokens[i + 1], Token::Newline)
+        {
+            // The chunk ends at i (inclusive of trailing newlines is fine —
+            // delim search will simply find no delims there).
+            chunk_starts.push(i + 2);
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    // Iterate chunks in reverse order so prior splice operations don't
+    // invalidate later chunk_starts.
+    let starts = chunk_starts;
+    for k in (0..starts.len()).rev() {
+        let chunk_start = starts[k];
+        let chunk_end = starts.get(k + 1).copied().unwrap_or(tokens.len());
+        if chunk_start >= chunk_end {
+            continue;
+        }
+        let mut chunk: Vec<Token> = tokens.drain(chunk_start..chunk_end).collect();
+        resolve_emphasis_chunk(&mut chunk);
+        // Splice resolved chunk back.
+        let chunk_len = chunk.len();
+        let mut idx = chunk_start;
+        for t in chunk {
+            tokens.insert(idx, t);
+            idx += 1;
+        }
+        // Suppress unused warning when chunk is reinserted in-place.
+        let _ = chunk_len;
+    }
+}
+
+fn resolve_emphasis_chunk(tokens: &mut Vec<Token>) {
+    loop {
+        let delims = find_em_delims(tokens);
+        if let Some((opener_di, closer_di, n)) = find_first_em_pair(&delims) {
+            let opener = delims[opener_di].clone();
+            let closer = delims[closer_di].clone();
+            wrap_emphasis_pair(tokens, opener.pos, closer.pos, opener.count, closer.count, n);
+        } else {
+            break;
+        }
+    }
+    // Any DelimRun left after matching becomes literal text.
+    for t in tokens.iter_mut() {
+        if let Token::DelimRun { ch, count } = t {
+            *t = Token::Text(ch.to_string().repeat(*count));
+        }
+    }
+}
+
+fn find_em_delims(tokens: &[Token]) -> Vec<EmDelim> {
+    let mut out = Vec::new();
+    for (i, tok) in tokens.iter().enumerate() {
+        let Token::DelimRun { ch, count } = tok else { continue };
+        let (can_open, can_close) = compute_em_flanking(tokens, i, *ch);
+        out.push(EmDelim { pos: i, ch: *ch, count: *count, can_open, can_close });
+    }
+    out
+}
+
+fn compute_em_flanking(tokens: &[Token], idx: usize, ch: char) -> (bool, bool) {
+    let before = char_before_token(tokens, idx);
+    let after = char_after_token(tokens, idx);
+    let lf = em_is_left_flanking(before, after);
+    let rf = em_is_right_flanking(before, after);
+    if ch == '*' {
+        (lf, rf)
+    } else {
+        let can_open =
+            lf && (!rf || matches!(before, Some(c) if is_md_punctuation(c)));
+        let can_close =
+            rf && (!lf || matches!(after, Some(c) if is_md_punctuation(c)));
+        (can_open, can_close)
+    }
+}
+
+fn em_is_left_flanking(before: Option<char>, after: Option<char>) -> bool {
+    let Some(a) = after else { return false };
+    if a.is_whitespace() {
+        return false;
+    }
+    if !is_md_punctuation(a) {
+        return true;
+    }
+    match before {
+        None => true,
+        Some(b) => b.is_whitespace() || is_md_punctuation(b),
+    }
+}
+
+fn em_is_right_flanking(before: Option<char>, after: Option<char>) -> bool {
+    let Some(b) = before else { return false };
+    if b.is_whitespace() {
+        return false;
+    }
+    if !is_md_punctuation(b) {
+        return true;
+    }
+    match after {
+        None => true,
+        Some(a) => a.is_whitespace() || is_md_punctuation(a),
+    }
+}
+
+fn char_before_token(tokens: &[Token], idx: usize) -> Option<char> {
+    for i in (0..idx).rev() {
+        if let Some(c) = last_meaningful_char(&tokens[i]) {
+            return Some(c);
+        }
+    }
+    None
+}
+
+fn char_after_token(tokens: &[Token], idx: usize) -> Option<char> {
+    for i in (idx + 1)..tokens.len() {
+        if let Some(c) = first_meaningful_char(&tokens[i]) {
+            return Some(c);
+        }
+    }
+    None
+}
+
+fn last_meaningful_char(tok: &Token) -> Option<char> {
+    match tok {
+        Token::Text(s) => s.chars().last(),
+        Token::DelimRun { ch, .. } => Some(*ch),
+        Token::Code { content, .. } => content.chars().last().or(Some('`')),
+        Token::HtmlInline(s) | Token::HtmlComment(s) => s.chars().last(),
+        Token::Emphasis { content, .. } => last_meaningful_in_slice(content),
+        Token::StrongEmphasis(content) => last_meaningful_in_slice(content),
+        Token::Strikethrough(content) => last_meaningful_in_slice(content),
+        Token::Link { content, .. } => last_meaningful_in_slice(content),
+        Token::Image { alt, .. } => last_meaningful_in_slice(alt),
+        Token::Heading(content, _) => last_meaningful_in_slice(content),
+        Token::Newline | Token::HardBreak => Some(' '),
+        Token::Unknown(s) => s.chars().last(),
+        _ => None,
+    }
+}
+
+fn first_meaningful_char(tok: &Token) -> Option<char> {
+    match tok {
+        Token::Text(s) => s.chars().next(),
+        Token::DelimRun { ch, .. } => Some(*ch),
+        Token::Code { content, .. } => content.chars().next().or(Some('`')),
+        Token::HtmlInline(s) | Token::HtmlComment(s) => s.chars().next(),
+        Token::Emphasis { content, .. } => first_meaningful_in_slice(content),
+        Token::StrongEmphasis(content) => first_meaningful_in_slice(content),
+        Token::Strikethrough(content) => first_meaningful_in_slice(content),
+        Token::Link { content, .. } => first_meaningful_in_slice(content),
+        Token::Image { alt, .. } => first_meaningful_in_slice(alt),
+        Token::Heading(content, _) => first_meaningful_in_slice(content),
+        Token::Newline | Token::HardBreak => Some(' '),
+        Token::Unknown(s) => s.chars().next(),
+        _ => None,
+    }
+}
+
+fn last_meaningful_in_slice(slice: &[Token]) -> Option<char> {
+    for t in slice.iter().rev() {
+        if let Some(c) = last_meaningful_char(t) {
+            return Some(c);
+        }
+    }
+    None
+}
+
+fn first_meaningful_in_slice(slice: &[Token]) -> Option<char> {
+    for t in slice {
+        if let Some(c) = first_meaningful_char(t) {
+            return Some(c);
+        }
+    }
+    None
+}
+
+fn find_first_em_pair(delims: &[EmDelim]) -> Option<(usize, usize, usize)> {
+    for i in 0..delims.len() {
+        let closer = &delims[i];
+        if !closer.can_close {
+            continue;
+        }
+        let mut j = i;
+        while j > 0 {
+            j -= 1;
+            let opener = &delims[j];
+            if !opener.can_open {
+                continue;
+            }
+            if opener.ch != closer.ch {
+                continue;
+            }
+            // Rule 9/10: if either side can both open AND close, the
+            // combined length must not be divisible by 3 — unless both
+            // lengths individually are.
+            let opener_both = opener.can_open && opener.can_close;
+            let closer_both = closer.can_open && closer.can_close;
+            if opener_both || closer_both {
+                let sum = opener.count + closer.count;
+                if sum % 3 == 0
+                    && !(opener.count % 3 == 0 && closer.count % 3 == 0)
+                {
+                    continue;
+                }
+            }
+            // Rule 13: emphasis level is 2 when both runs have ≥2
+            // characters, else 1.
+            let n = if opener.count >= 2 && closer.count >= 2 { 2 } else { 1 };
+            return Some((j, i, n));
+        }
+    }
+    None
+}
+
+fn wrap_emphasis_pair(
+    tokens: &mut Vec<Token>,
+    opener_pos: usize,
+    closer_pos: usize,
+    opener_count: usize,
+    closer_count: usize,
+    n: usize,
+) {
+    let opener_ch = match &tokens[opener_pos] {
+        Token::DelimRun { ch, .. } => *ch,
+        _ => return,
+    };
+    let closer_ch = match &tokens[closer_pos] {
+        Token::DelimRun { ch, .. } => *ch,
+        _ => return,
+    };
+    let opener_remaining = opener_count - n;
+    let closer_remaining = closer_count - n;
+    let inside: Vec<Token> = tokens[opener_pos + 1..closer_pos].to_vec();
+    let emph = Token::Emphasis { level: n, content: inside };
+    let mut replacement = Vec::new();
+    if opener_remaining > 0 {
+        replacement.push(Token::DelimRun { ch: opener_ch, count: opener_remaining });
+    }
+    replacement.push(emph);
+    if closer_remaining > 0 {
+        replacement.push(Token::DelimRun { ch: closer_ch, count: closer_remaining });
+    }
+    tokens.splice(opener_pos..closer_pos + 1, replacement);
 }
 
 /// True for the 32 ASCII punctuation characters that allows
@@ -1065,6 +1386,7 @@ impl Lexer {
             }
         }
 
+        resolve_emphasis(&mut tokens);
         Ok(tokens)
     }
 
@@ -1093,21 +1415,7 @@ impl Lexer {
             }
 
             if is_delimiter(ch) {
-                // For emphasis delimiters (`*`/`_`), only treat the run as a
-                // closer if it satisfies CommonMark's right-flanking rule
-                // (and isn't an intra-word `_`). Other delimiter chars (`\n`
-                // for headings, `~` for strikethrough) close unconditionally.
-                let is_emphasis_delim = ch == '*' || ch == '_';
-                let blocks_close = if is_emphasis_delim {
-                    let intra_word =
-                        ch == '_' && self.is_intra_word_underscore_run(self.position);
-                    intra_word || !self.can_close_emphasis(self.position)
-                } else {
-                    false
-                };
-                if !blocks_close {
-                    break;
-                }
+                break;
             }
 
             // Handle nested content
@@ -1150,6 +1458,7 @@ impl Lexer {
             }
         }
 
+        resolve_emphasis(&mut content);
         Ok(content)
     }
 
@@ -1234,19 +1543,9 @@ impl Lexer {
             '*' if is_block_start && allow_block_tokens(ctx) && self.is_list_marker('*') => {
                 self.parse_list_item(false, 0, ctx)?
             }
-            '*' => {
-                if self.can_open_emphasis(self.position) {
-                    self.parse_emphasis()?
-                } else {
-                    self.consume_run_as_text('*')
-                }
-            }
+            '*' => self.parse_emphasis()?,
             '_' if !self.is_intra_word_underscore_run(self.position) => {
-                if self.can_open_emphasis(self.position) {
-                    self.parse_emphasis()?
-                } else {
-                    self.consume_run_as_text('_')
-                }
+                self.parse_emphasis()?
             }
             '_' => self.parse_text(ctx)?,
             '`' => self.parse_code()?,
@@ -1377,67 +1676,20 @@ impl Lexer {
         Ok(Token::Heading(content, level))
     }
 
-    /// Emits a run of identical characters as a literal `Token::Text`,
-    /// preserving any single trailing space so `next_token`'s leading-
-    /// whitespace skip doesn't swallow it. Used by the flanking-rule
-    /// rejections of `*`/`_` runs that can't open emphasis.
-    fn consume_run_as_text(&mut self, ch: char) -> Token {
+    /// Emits a `*`/`_` delimiter run as a `Token::DelimRun`. The matching
+    /// itself happens after the inline scan, in `resolve_emphasis` —
+    /// CommonMark's emphasis rules (stack-based matching, Rule 9/10 mod-3,
+    /// the `*** → <em><strong>` double-wrap) can't be implemented with
+    /// greedy scanning. A `DelimRun` is distinct from a literal `*` or
+    /// `_` produced by `\*` escape decoding, which stays as `Text`.
+    fn parse_emphasis(&mut self) -> Result<Token, LexerError> {
+        let delimiter = self.current_char();
         let mut count = 0;
-        while self.position < self.input.len() && self.current_char() == ch {
+        while self.position < self.input.len() && self.current_char() == delimiter {
             count += 1;
             self.advance();
         }
-        let mut run = ch.to_string().repeat(count);
-        if self.position < self.input.len() && self.current_char() == ' ' {
-            run.push(' ');
-            self.advance();
-        }
-        Token::Text(run)
-    }
-
-    /// Parses emphasis tokens (* or _) with support for multiple levels (1-3).
-    /// Ensures proper matching of opening and closing delimiters.
-    ///
-    /// An unmatched opener falls back to literal text rather than raising
-    /// an error. We implement this with rewind-on-failure: if the closing
-    /// delimiter isn't found, position is reset to right after
-    /// the opener run and the run is emitted as `Token::Text`. The body chars
-    /// are then re-tokenized by the main loop.
-    fn parse_emphasis(&mut self) -> Result<Token, LexerError> {
-        let delimiter = self.current_char();
-        let mut level = 0;
-
-        // Count the number of delimiters
-        while self.current_char() == delimiter {
-            level += 1;
-            self.advance();
-        }
-        let after_opener = self.position;
-
-        let content = self.parse_nested_content(|c| c == delimiter, ParseContext::Inline)?;
-
-        // Ensure proper closing
-        for _ in 0..level {
-            if self.current_char() != delimiter {
-                // Fallback: rewind so the body re-tokenizes, and emit the
-                // opener as literal text. Preserve a single trailing space
-                // if present so `next_token`'s leading-whitespace skip
-                // doesn't swallow a meaningful gap (e.g. "Use * for bullets").
-                self.position = after_opener;
-                let mut run = delimiter.to_string().repeat(level);
-                if self.position < self.input.len() && self.current_char() == ' ' {
-                    run.push(' ');
-                    self.advance();
-                }
-                return Ok(Token::Text(run));
-            }
-            self.advance();
-        }
-
-        Ok(Token::Emphasis {
-            level: level.min(3), // Cap the level at 3
-            content,
-        })
+        Ok(Token::DelimRun { ch: delimiter, count })
     }
 
     /// Parses code blocks, handling both inline code and fenced code blocks
@@ -2006,7 +2258,9 @@ impl Lexer {
     fn parse_link(&mut self) -> Result<Token, LexerError> {
         let bracket_pos = self.position;
         self.advance(); // skip '['
+        let label_text_start = self.position;
         let content = self.parse_nested_content(|c| c == ']', ParseContext::Inline)?;
+        let label_text_end = self.position;
         if self.position >= self.input.len() || self.current_char() != ']' {
             // No closing bracket. If the body parsed cleanly into text +
             // newlines, flatten the whole `[…` run into one Text — the
@@ -2067,6 +2321,14 @@ impl Lexer {
             return Ok(Token::Text(format!("[{}]", text_str)));
         }
 
+        // Raw label text from the source for collapsed/shortcut reference
+        // lookup. Comparison labels are the formatting-stripped source chars
+        // (e.g. `*foo*` in a label normalizes to `*foo*`, not `foo`), so we
+        // can't use `collect_all_text(&content)` which folds emphasis away.
+        let raw_label_text: String = self.input[label_text_start..label_text_end]
+            .iter()
+            .collect();
+
         // Full or collapsed reference: [text][label] or [text][]
         if self.position < self.input.len() && self.current_char() == '[' {
             self.advance(); // skip [
@@ -2076,7 +2338,7 @@ impl Lexer {
             }
             let text_str = Token::collect_all_text(&content);
             let key = if label_str.trim().is_empty() {
-                normalize_label(&text_str)
+                normalize_label(&raw_label_text)
             } else {
                 normalize_label(&label_str)
             };
@@ -2093,13 +2355,13 @@ impl Lexer {
         }
 
         // Shortcut: [text] alone — only a link if the label resolves.
-        let text_str = Token::collect_all_text(&content);
-        let key = normalize_label(&text_str);
+        let key = normalize_label(&raw_label_text);
         if let Some((url, title)) = self.definitions.get(&key).cloned() {
             return Ok(Token::Link { content, url, title });
         }
 
         // Unresolved — emit `[text]` literally so the brackets aren't lost.
+        let text_str = Token::collect_all_text(&content);
         Ok(Token::Text(format!("[{}]", text_str)))
     }
 
@@ -2338,7 +2600,9 @@ impl Lexer {
         }
 
         self.advance();
+        let alt_text_start = self.position;
         let alt = self.parse_nested_content(|c| c == ']', ParseContext::Inline)?;
+        let alt_text_end = self.position;
         if self.position >= self.input.len() || self.current_char() != ']' {
             let mut s = String::from("![");
             s.push_str(&Token::collect_all_text(&alt));
@@ -2356,6 +2620,10 @@ impl Lexer {
             return Ok(Token::Image { alt, url, title });
         }
 
+        let raw_alt_text: String = self.input[alt_text_start..alt_text_end]
+            .iter()
+            .collect();
+
         // Reference / collapsed: ![alt][label] or ![alt][]
         if self.position < self.input.len() && self.current_char() == '[' {
             self.advance();
@@ -2365,7 +2633,7 @@ impl Lexer {
             }
             let alt_text = Token::collect_all_text(&alt);
             let key = if label_str.trim().is_empty() {
-                normalize_label(&alt_text)
+                normalize_label(&raw_alt_text)
             } else {
                 normalize_label(&label_str)
             };
@@ -2381,13 +2649,13 @@ impl Lexer {
         }
 
         // Shortcut: ![alt]
-        let alt_text = Token::collect_all_text(&alt);
-        let key = normalize_label(&alt_text);
+        let key = normalize_label(&raw_alt_text);
         if let Some((url, title)) = self.definitions.get(&key).cloned() {
             return Ok(Token::Image { alt, url, title });
         }
 
         // Unresolved shortcut — emit literally instead of erroring.
+        let alt_text = Token::collect_all_text(&alt);
         Ok(Token::Text(format!("![{}]", alt_text)))
     }
 
@@ -2995,114 +3263,6 @@ impl Lexer {
             }
         }
         (line, col)
-    }
-
-    /// left-flanking-delimiter-run. The run at `pos` is
-    /// left-flanking if it is NOT followed by Unicode whitespace, AND
-    /// EITHER not followed by punctuation OR preceded by whitespace/punc.
-    /// "Followed by end-of-input" counts as whitespace for this rule.
-    fn is_left_flanking_run(&self, pos: usize) -> bool {
-        let delim = match self.input.get(pos) {
-            Some(&c) if c == '*' || c == '_' || c == '~' => c,
-            _ => return false,
-        };
-        let mut end = pos;
-        while end < self.input.len() && self.input[end] == delim {
-            end += 1;
-        }
-        let before = if pos == 0 {
-            None
-        } else {
-            self.input.get(pos - 1).copied()
-        };
-        let after = self.input.get(end).copied();
-
-        let not_followed_by_ws = matches!(after, Some(c) if !c.is_whitespace());
-        if !not_followed_by_ws {
-            return false;
-        }
-        let followed_by_punc = matches!(after, Some(c) if is_md_punctuation(c));
-        if !followed_by_punc {
-            return true;
-        }
-        match before {
-            None => true,
-            Some(c) => c.is_whitespace() || is_md_punctuation(c),
-        }
-    }
-
-    /// right-flanking-delimiter-run. Symmetric to left-flanking.
-    fn is_right_flanking_run(&self, pos: usize) -> bool {
-        let delim = match self.input.get(pos) {
-            Some(&c) if c == '*' || c == '_' || c == '~' => c,
-            _ => return false,
-        };
-        let mut end = pos;
-        while end < self.input.len() && self.input[end] == delim {
-            end += 1;
-        }
-        let before = if pos == 0 {
-            None
-        } else {
-            self.input.get(pos - 1).copied()
-        };
-        let after = self.input.get(end).copied();
-
-        let not_preceded_by_ws = matches!(before, Some(c) if !c.is_whitespace());
-        if !not_preceded_by_ws {
-            return false;
-        }
-        let preceded_by_punc = matches!(before, Some(c) if is_md_punctuation(c));
-        if !preceded_by_punc {
-            return true;
-        }
-        match after {
-            None => true,
-            Some(c) => c.is_whitespace() || is_md_punctuation(c),
-        }
-    }
-
-    /// Whether the `*`/`_` run at `pos` is allowed to open emphasis. `*` runs
-    /// open when left-flanking; `_` additionally must not be right-flanking
-    /// (or must be preceded by punctuation).
-    fn can_open_emphasis(&self, pos: usize) -> bool {
-        let delim = self.input.get(pos).copied();
-        if !self.is_left_flanking_run(pos) {
-            return false;
-        }
-        if delim == Some('*') {
-            return true;
-        }
-        if !self.is_right_flanking_run(pos) {
-            return true;
-        }
-        let before = if pos == 0 {
-            None
-        } else {
-            self.input.get(pos - 1).copied()
-        };
-        matches!(before, Some(c) if is_md_punctuation(c))
-    }
-
-    /// Whether the `*`/`_` run at `pos` is allowed to close emphasis. `*` runs
-    /// close when right-flanking; `_` additionally must not be left-flanking
-    /// (or must be followed by punctuation).
-    fn can_close_emphasis(&self, pos: usize) -> bool {
-        let delim = self.input.get(pos).copied();
-        if !self.is_right_flanking_run(pos) {
-            return false;
-        }
-        if delim == Some('*') {
-            return true;
-        }
-        if !self.is_left_flanking_run(pos) {
-            return true;
-        }
-        let mut end = pos;
-        while end < self.input.len() && self.input.get(end) == delim.as_ref() {
-            end += 1;
-        }
-        matches!(self.input.get(end), Some(c) if is_md_punctuation(*c))
     }
 
     /// Returns true when the `_` run at `pos` is "intra-word" — i.e. flanked on
