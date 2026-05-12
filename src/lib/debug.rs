@@ -116,10 +116,12 @@ impl Token {
                 ordered,
                 number,
                 checked,
+                loose,
             } => {
                 let mut result = format!("{}{{\n", indent);
                 result.push_str(&format!("{}\"type\": \"ListItem\",\n", inner_indent));
                 result.push_str(&format!("{}\"ordered\": {},\n", inner_indent, ordered));
+                result.push_str(&format!("{}\"loose\": {},\n", inner_indent, loose));
 
                 if let Some(num) = number {
                     result.push_str(&format!("{}\"number\": {},\n", inner_indent, num));
@@ -382,6 +384,7 @@ impl Token {
                 ordered,
                 number,
                 checked,
+                loose,
             } => {
                 let num = match number {
                     Some(n) => n.to_string(),
@@ -393,10 +396,11 @@ impl Token {
                     None => "_",
                 };
                 format!(
-                    "ListItem(ordered={}, n={}, checked={}, {})",
+                    "ListItem(ordered={}, n={}, checked={}, loose={}, {})",
                     ordered,
                     num,
                     chk,
+                    loose,
                     list(content)
                 )
             }
@@ -508,30 +512,33 @@ mod compact_tests {
             ordered: false,
             number: None,
             checked: Some(false),
+            loose: false,
         };
         let checked = Token::ListItem {
             content: vec![Token::Text("a".into())],
             ordered: false,
             number: None,
             checked: Some(true),
+            loose: false,
         };
         let regular = Token::ListItem {
             content: vec![Token::Text("a".into())],
             ordered: true,
             number: Some(3),
             checked: None,
+            loose: true,
         };
         assert_eq!(
             unchecked.to_compact(),
-            r#"ListItem(ordered=false, n=_, checked= , [Text("a")])"#
+            r#"ListItem(ordered=false, n=_, checked= , loose=false, [Text("a")])"#
         );
         assert_eq!(
             checked.to_compact(),
-            r#"ListItem(ordered=false, n=_, checked=x, [Text("a")])"#
+            r#"ListItem(ordered=false, n=_, checked=x, loose=false, [Text("a")])"#
         );
         assert_eq!(
             regular.to_compact(),
-            r#"ListItem(ordered=true, n=3, checked=_, [Text("a")])"#
+            r#"ListItem(ordered=true, n=3, checked=_, loose=true, [Text("a")])"#
         );
     }
 

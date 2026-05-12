@@ -345,6 +345,7 @@ impl Pdf {
                     ordered,
                     number,
                     checked,
+                    loose: _,
                 } => {
                     self.flush_paragraph(doc, &current_tokens);
                     current_tokens.clear();
@@ -667,6 +668,7 @@ impl Pdf {
                     ordered,
                     number,
                     checked,
+                    loose: _,
                 } => {
                     flush_inline(self, doc, &mut buffer, &style);
                     self.render_list_item(doc, content, *ordered, *number, *checked, 0);
@@ -765,6 +767,7 @@ impl Pdf {
                 ordered: nested_ordered,
                 number: nested_number,
                 checked: nested_checked,
+                loose: _,
             } = token
             {
                 self.render_list_item(
@@ -909,12 +912,14 @@ mod tests {
                 ordered: false,
                 number: None,
                 checked: None,
+                loose: false,
             },
             Token::ListItem {
                 content: vec![Token::Text("Second item".to_string())],
                 ordered: true,
                 number: Some(1),
                 checked: None,
+                loose: false,
             },
         ];
         let pdf = create_test_pdf(tokens);
@@ -932,11 +937,13 @@ mod tests {
                     ordered: false,
                     number: None,
                     checked: None,
+                    loose: false,
                 },
             ],
             ordered: false,
             number: None,
             checked: None,
+                loose: false,
         }];
         let pdf = create_test_pdf(tokens);
         let doc = pdf.render_into_document();
@@ -1007,6 +1014,7 @@ mod tests {
                 ordered: false,
                 number: None,
                 checked: None,
+                loose: false,
             },
             Token::Code("rust".to_string(), "let x = 42;".to_string()),
         ];
@@ -1070,12 +1078,14 @@ mod tests {
                 ordered: false,
                 number: None,
                 checked: None,
+                loose: false,
             },
             Token::ListItem {
                 content: vec![Token::Text("Second item".to_string())],
                 ordered: false,
                 number: None,
                 checked: None,
+                loose: false,
             },
             Token::Code(
                 "rust".to_string(),

@@ -79,6 +79,12 @@ pub enum Token {
         /// GFM task list state: `None` = regular item, `Some(false)` = `[ ]`,
         /// `Some(true)` = `[x]` / `[X]`.
         checked: Option<bool>,
+        /// True when this item is part of a *loose* list: any pair of
+        /// sibling items at the same level is separated by a blank line.
+        /// All items in the same list share the same value. Renderers
+        /// should add paragraph spacing around the content of loose-list
+        /// items and keep tight-list items inline.
+        loose: bool,
     },
     /// Link with display text and URL
     Link(String, String),
@@ -367,6 +373,68 @@ fn parse_definition_line(line: &str) -> Option<(String, String, Option<String>)>
     Some((label, url, title))
 }
 
+/// Walks the token tree and marks list items as loose when a sibling pair is
+/// separated by one or more blank lines. Operates on the top-level vec and
+/// recurses into each `ListItem.content` to handle nested lists.
+///
+/// A list is loose iff any pair of consecutive sibling items in that list is
+/// blank-line separated. All items in the same list share the resulting
+/// `loose` flag. Blank-line separation surfaces in the token stream as one
+/// or more `Token::Newline` tokens between two `Token::ListItem` siblings.
+fn propagate_loose_tight(tokens: &mut [Token]) {
+    let mut i = 0;
+    while i < tokens.len() {
+        if !matches!(tokens[i], Token::ListItem { .. }) {
+            i += 1;
+            continue;
+        }
+        // Start of a run. Walk forward over (ListItem | Newline*) sequences,
+        // tracking whether any blank line separated two sibling items.
+        let run_start = i;
+        let mut has_blank_between = false;
+        let mut last_item_end = i;
+        loop {
+            i += 1;
+            // Skip across any Newlines — but if there are ≥2 in a row between
+            // two list items, that's a blank line and the list is loose.
+            let mut newlines = 0;
+            while i < tokens.len() && matches!(tokens[i], Token::Newline) {
+                newlines += 1;
+                i += 1;
+            }
+            if i >= tokens.len() || !matches!(tokens[i], Token::ListItem { .. }) {
+                // Run terminated. Roll position back so the outer loop sees
+                // whatever tokens followed (e.g. a paragraph after the list).
+                i = last_item_end + 1;
+                break;
+            }
+            // Another sibling. If we crossed at least one Newline to reach it,
+            // that's a blank-line separation per the lexer's emission shape.
+            if newlines >= 1 {
+                has_blank_between = true;
+            }
+            last_item_end = i;
+        }
+        // Backpatch all items in [run_start, last_item_end] with the loose flag.
+        let loose = has_blank_between;
+        for tok in &mut tokens[run_start..=last_item_end] {
+            if let Token::ListItem { loose: l, .. } = tok {
+                *l = *l || loose;
+            }
+        }
+        i = last_item_end + 1;
+    }
+    // Recurse into children of every ListItem and every BlockQuote so nested
+    // lists also get their loose flag computed.
+    for tok in tokens.iter_mut() {
+        match tok {
+            Token::ListItem { content, .. } => propagate_loose_tight(content),
+            Token::BlockQuote(body) => propagate_loose_tight(body),
+            _ => {}
+        }
+    }
+}
+
 /// Normalizes a reference-link label ASCII case-fold
 /// plus internal-whitespace collapse plus leading/trailing trim.
 fn normalize_label(s: &str) -> String {
@@ -498,7 +566,9 @@ impl Lexer {
         // Pre-pass: collect reference-link definitions and strip those lines
         // so the main lexer doesn't see them as paragraph text.
         self.extract_definitions();
-        self.parse_with_context(ParseContext::Root)
+        let mut tokens = self.parse_with_context(ParseContext::Root)?;
+        propagate_loose_tight(&mut tokens);
+        Ok(tokens)
     }
 
     /// Pre-pass: scans the input line-by-line for `[label]: url "title"`
@@ -2596,6 +2666,7 @@ impl Lexer {
             ordered,
             number,
             checked,
+            loose: false,
         })
     }
 
@@ -2963,12 +3034,14 @@ mod tests {
                         ordered: false,
                         number: None,
                         checked: None,
+                loose: false,
                     },
                     Token::ListItem {
                         content: vec![Token::Text("Item 2".to_string())],
                         ordered: false,
                         number: None,
                         checked: None,
+                loose: false,
                     },
                 ],
             ),
@@ -2980,12 +3053,14 @@ mod tests {
                         ordered: true,
                         number: Some(1),
                         checked: None,
+                loose: false,
                     },
                     Token::ListItem {
                         content: vec![Token::Text("Second".to_string())],
                         ordered: true,
                         number: Some(2),
                         checked: None,
+                loose: false,
                     },
                 ],
             ),
@@ -3008,23 +3083,27 @@ mod tests {
                         ordered: false,
                         number: None,
                         checked: None,
+                        loose: false,
                     },
                     Token::ListItem {
                         content: vec![Token::Text("Nested 2".to_string())],
                         ordered: false,
                         number: None,
                         checked: None,
+                        loose: false,
                     },
                 ],
                 ordered: false,
                 number: None,
                 checked: None,
+                loose: false,
             },
             Token::ListItem {
                 content: vec![Token::Text("Item 2".to_string())],
                 ordered: false,
                 number: None,
                 checked: None,
+                loose: false,
             },
         ];
         assert_eq!(parse(input), expected);
@@ -4541,6 +4620,7 @@ mod gfm_trio_tests {
             checked,
             ordered,
             number,
+            loose: _,
         } = &tokens[0]
         {
             assert!(ordered);
@@ -6671,5 +6751,133 @@ mod fenced_code_info_string_tests {
         assert_eq!(lang, "rust");
         assert!(body.contains("let x = 1;"));
         assert!(body.contains("let y = 2;"));
+    }
+}
+
+#[cfg(test)]
+mod loose_tight_list_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    fn items(tokens: &[Token]) -> Vec<bool> {
+        tokens
+            .iter()
+            .filter_map(|t| {
+                if let Token::ListItem { loose, .. } = t {
+                    Some(*loose)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tight_bullet_list_marks_no_items_loose() {
+        let tokens = parse("- a\n- b\n- c");
+        assert_eq!(items(&tokens), vec![false, false, false]);
+    }
+
+    #[test]
+    fn blank_line_between_items_marks_list_loose() {
+        let tokens = parse("- a\n\n- b\n\n- c");
+        assert_eq!(items(&tokens), vec![true, true, true]);
+    }
+
+    #[test]
+    fn single_blank_anywhere_makes_whole_list_loose() {
+        // Spec: even one blank-separated pair makes ALL items loose.
+        let tokens = parse("- a\n- b\n\n- c");
+        assert_eq!(items(&tokens), vec![true, true, true]);
+    }
+
+    #[test]
+    fn tight_ordered_list() {
+        let tokens = parse("1. one\n2. two\n3. three");
+        assert_eq!(items(&tokens), vec![false, false, false]);
+    }
+
+    #[test]
+    fn loose_ordered_list() {
+        let tokens = parse("1. one\n\n2. two");
+        assert_eq!(items(&tokens), vec![true, true]);
+    }
+
+    #[test]
+    fn single_item_list_is_tight() {
+        let tokens = parse("- solo");
+        assert_eq!(items(&tokens), vec![false]);
+    }
+
+    #[test]
+    fn tight_nested_list_keeps_inner_tight() {
+        let input = "- outer1\n  - in1\n  - in2\n- outer2";
+        let tokens = parse(input);
+        assert_eq!(items(&tokens), vec![false, false]);
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            assert_eq!(items(content), vec![false, false], "inner: {:?}", content);
+        } else {
+            panic!("expected ListItem");
+        }
+    }
+
+    #[test]
+    fn outer_loose_inner_tight() {
+        let input = "- outer1\n  - in1\n  - in2\n\n- outer2";
+        let tokens = parse(input);
+        assert_eq!(items(&tokens), vec![true, true]);
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let inner = items(content);
+            assert_eq!(inner, vec![false, false], "inner items: {:?}", content);
+        } else {
+            panic!("expected ListItem");
+        }
+    }
+
+    #[test]
+    fn list_in_blockquote_loose_detected() {
+        let input = "> - a\n>\n> - b";
+        let tokens = parse(input);
+        if let Token::BlockQuote(body) = &tokens[0] {
+            assert_eq!(
+                items(body),
+                vec![true, true],
+                "quote body: {}",
+                Token::slice_to_compact(body)
+            );
+        } else {
+            panic!("expected BlockQuote, got {}", Token::slice_to_compact(&tokens));
+        }
+    }
+
+    #[test]
+    fn two_separate_lists_each_have_own_loose_flag() {
+        // A blank line followed by content that isn't another item ends the
+        // list. The next list starts fresh.
+        let input = "- a\n- b\n\nparagraph\n\n- c\n\n- d";
+        let tokens = parse(input);
+        let item_states: Vec<bool> = tokens
+            .iter()
+            .filter_map(|t| {
+                if let Token::ListItem { loose, .. } = t {
+                    Some(*loose)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // First list (a, b): tight. Second list (c, d): loose.
+        assert_eq!(item_states, vec![false, false, true, true]);
+    }
+
+    #[test]
+    fn task_list_loose_detection() {
+        let input = "- [ ] task1\n\n- [x] task2";
+        let tokens = parse(input);
+        assert_eq!(items(&tokens), vec![true, true]);
     }
 }
