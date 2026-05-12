@@ -910,20 +910,29 @@ impl Lexer {
         let is_line_start = self.is_at_line_start();
         let start_backticks = self.count_backticks();
 
-        // CommonMark: a fenced code block needs 3+ backticks at line start
-        // AND no run of equal-or-larger backticks on the same line (which
-        // would be an inline-span closer instead).
+        // CommonMark §4.5: a backtick fence opener requires 3+ backticks at
+        // line start AND no further backticks anywhere on the rest of the
+        // line — the info string of a backtick fence may not contain any
+        // backtick characters (which subsumes the closer-on-same-line case
+        // that would otherwise turn this into an inline span).
         let is_fence = start_backticks >= 3
             && is_line_start
-            && self.no_backtick_closer_on_same_line(opener_pos, start_backticks);
+            && self.no_backticks_on_rest_of_line(opener_pos, start_backticks);
 
         if !is_fence {
             return Ok(self.parse_inline_code_span_body(start_backticks));
         }
 
-        // Fenced code block.
+        // Fenced code block. Info string spans to end of line; per §4.5 the
+        // *language* is the first whitespace-delimited word, with any
+        // remaining metadata discarded (we have no consumer for it).
         self.skip_whitespace();
-        let language = self.read_until_newline();
+        let info_string = self.read_until_newline();
+        let language = info_string
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
         let mut content = String::new();
 
         while self.position < self.input.len() {
@@ -953,27 +962,20 @@ impl Lexer {
         }
 
         Ok(Token::Code(
-            language.trim().to_string(),
+            language,
             content.trim().to_string(),
         ))
     }
 
-    /// Walks from `opener_pos + count` to the end of the current line. Returns
-    /// false if a backtick run of `count` or more is found before `\n` (in
-    /// which case the opener is the start of an inline code span, not a fence).
-    fn no_backtick_closer_on_same_line(&self, opener_pos: usize, count: usize) -> bool {
+    /// CommonMark §4.5: walks from `opener_pos + count` to end of line, and
+    /// returns true only if *no* backtick character is present. A backtick
+    /// fence opener's info string must be backtick-free, which also rules
+    /// out an inline-span closer on the same line.
+    fn no_backticks_on_rest_of_line(&self, opener_pos: usize, count: usize) -> bool {
         let mut p = opener_pos + count;
         while p < self.input.len() && self.input[p] != '\n' {
             if self.input[p] == '`' {
-                let mut run = 0usize;
-                while p < self.input.len() && self.input[p] == '`' {
-                    run += 1;
-                    p += 1;
-                }
-                if run >= count {
-                    return false;
-                }
-                continue;
+                return false;
             }
             p += 1;
         }
@@ -1077,8 +1079,15 @@ impl Lexer {
             start_tildes += 1;
             self.advance();
         }
+        // Tilde fences (§4.5): info strings may contain backticks, but
+        // language is still the first whitespace-delimited word.
         self.skip_whitespace();
-        let language = self.read_until_newline();
+        let info_string = self.read_until_newline();
+        let language = info_string
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
         if self.position < self.input.len() && self.current_char() == '\n' {
             self.advance();
         }
@@ -1108,7 +1117,7 @@ impl Lexer {
                         self.advance();
                     }
                     return Ok(Token::Code(
-                        language.trim().to_string(),
+                        language.clone(),
                         content.trim_end_matches('\n').to_string(),
                     ));
                 }
@@ -1119,7 +1128,7 @@ impl Lexer {
 
         // Unclosed fence: still emit what we have.
         Ok(Token::Code(
-            language.trim().to_string(),
+            language,
             content.trim_end_matches('\n').to_string(),
         ))
     }
@@ -3887,6 +3896,143 @@ mod backslash_escape_tests {
         assert!(tokens.iter().any(|t| matches!(t, Token::HardBreak)));
         assert!(tokens.iter().any(|t| matches!(t, Token::Text(ref s) if s == "bar")));
     }
+
+    #[test]
+    fn escape_inside_inline_code_span_is_literal() {
+        // Per CommonMark §2.4: backslash escapes do NOT apply inside code spans.
+        // Body must contain the literal backslash and the asterisk verbatim.
+        let tokens = parse(r"`\*not emphasis\*`");
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), r"\*not emphasis\*".to_string())]
+        );
+    }
+
+    #[test]
+    fn escape_inside_multi_backtick_code_span_is_literal() {
+        let tokens = parse(r"``a \` b``");
+        assert_eq!(
+            tokens,
+            vec![Token::Code("".to_string(), r"a \` b".to_string())]
+        );
+    }
+
+    #[test]
+    fn escape_inside_fenced_code_block_is_literal() {
+        let tokens = parse("```\n\\*not emphasis\\*\n```");
+        let code = tokens
+            .iter()
+            .find_map(|t| if let Token::Code(_, body) = t { Some(body) } else { None })
+            .expect("expected Code token");
+        assert!(
+            code.contains(r"\*not emphasis\*"),
+            "fenced code body should preserve backslashes literally, got {:?}",
+            code
+        );
+    }
+
+    #[test]
+    fn escape_inside_tilde_fenced_code_block_is_literal() {
+        let tokens = parse("~~~\n\\*not emphasis\\*\n~~~");
+        let code = tokens
+            .iter()
+            .find_map(|t| if let Token::Code(_, body) = t { Some(body) } else { None })
+            .expect("expected Code token");
+        assert!(
+            code.contains(r"\*not emphasis\*"),
+            "tilde fence body should preserve backslashes literally, got {:?}",
+            code
+        );
+    }
+
+    #[test]
+    fn escape_inside_autolink_url_is_literal() {
+        // Per §2.4: escapes don't apply in autolinks. `<http://x/\bar>` keeps
+        // the backslash verbatim as part of the URL.
+        let tokens = parse(r"<http://example.com/\bar>");
+        let link = tokens
+            .iter()
+            .find_map(|t| if let Token::Link(_, url) = t { Some(url) } else { None })
+            .expect("expected autolink Link token");
+        assert!(
+            link.contains(r"/\bar"),
+            "autolink URL should preserve backslash literally, got {:?}",
+            link
+        );
+    }
+
+    #[test]
+    fn escape_in_link_url_inside_parens() {
+        // Per §6.3: escapes DO apply inside parenthesized link destinations,
+        // so `\(` produces a literal `(` in the URL.
+        let tokens = parse(r"[t](http://x\)y)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("t".to_string(), "http://x)y".to_string())]
+        );
+    }
+
+    #[test]
+    fn escape_in_link_text() {
+        // Per §6.3: escapes apply in link text — `\]` is literal `]`.
+        let tokens = parse(r"[a\]b](u)");
+        assert_eq!(
+            tokens,
+            vec![Token::Link("a]b".to_string(), "u".to_string())]
+        );
+    }
+
+    #[test]
+    fn escape_propagates_through_heading() {
+        // Heading inline content reuses parse_text, so escapes should also
+        // apply inside an ATX heading.
+        let tokens = parse(r"# foo \* bar");
+        if let Token::Heading(content, 1) = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("foo * bar"), "got {:?}", text);
+            // And no Emphasis should have formed inside.
+            assert!(!content.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+        } else {
+            panic!("expected Heading, got {}", Token::slice_to_compact(&tokens));
+        }
+    }
+
+    #[test]
+    fn escape_propagates_through_blockquote() {
+        let tokens = parse(r"> foo \* bar");
+        if let Token::BlockQuote(body) = &tokens[0] {
+            let text = Token::collect_all_text(body);
+            assert!(text.contains("foo * bar"), "got {:?}", text);
+            assert!(!body.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+        } else {
+            panic!("expected BlockQuote, got {}", Token::slice_to_compact(&tokens));
+        }
+    }
+
+    #[test]
+    fn escape_propagates_through_list_item() {
+        let tokens = parse(r"- foo \* bar");
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("foo * bar"), "got {:?}", text);
+            assert!(!content.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+        } else {
+            panic!("expected ListItem, got {}", Token::slice_to_compact(&tokens));
+        }
+    }
+
+    #[test]
+    fn escape_inside_emphasis_run_keeps_punctuation_literal() {
+        // *\*foo* — outer * opens emphasis, \\* produces literal *, foo* closes.
+        let tokens = parse(r"*\*foo*");
+        if let Token::Emphasis { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(text.starts_with('*'), "got {:?}", text);
+            assert!(text.contains("foo"), "got {:?}", text);
+        } else {
+            panic!("expected Emphasis, got {}", Token::slice_to_compact(&tokens));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -4853,8 +4999,6 @@ mod entity_reference_tests {
         assert_eq!(collected("&#xZZZ;"), "&#xZZZ;");
         assert_eq!(collected("&#abc;"), "&#abc;");
     }
-
-    // --- Section 1 (full HTML5 table) coverage ---
 
     #[test]
     fn extended_named_entities_decode() {
@@ -6274,5 +6418,105 @@ mod list_lazy_continuation_tests {
             tokens.iter().filter(|t| matches!(t, Token::ListItem { .. })).count(),
             2
         );
+    }
+}
+
+#[cfg(test)]
+mod fenced_code_info_string_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    fn fence(input: &str) -> (String, String) {
+        let tokens = parse(input);
+        for t in &tokens {
+            if let Token::Code(lang, body) = t {
+                return (lang.clone(), body.clone());
+            }
+        }
+        panic!("expected Code token, got {}", Token::slice_to_compact(&tokens));
+    }
+
+    #[test]
+    fn backtick_fence_simple_language() {
+        let (lang, _) = fence("```rust\nfn x() {}\n```");
+        assert_eq!(lang, "rust");
+    }
+
+    #[test]
+    fn backtick_fence_language_with_trailing_metadata() {
+        let (lang, _) = fence("```rust title=\"example\" linenos\nfn x() {}\n```");
+        assert_eq!(lang, "rust", "info-string metadata must not be in language");
+    }
+
+    #[test]
+    fn backtick_fence_empty_info_string() {
+        let (lang, _) = fence("```\nplain\n```");
+        assert_eq!(lang, "");
+    }
+
+    #[test]
+    fn backtick_fence_whitespace_only_info_string() {
+        let (lang, _) = fence("```   \nplain\n```");
+        assert_eq!(lang, "");
+    }
+
+    #[test]
+    fn backtick_fence_language_trimmed() {
+        let (lang, _) = fence("```   rust   \ncode\n```");
+        assert_eq!(lang, "rust");
+    }
+
+    #[test]
+    fn tilde_fence_simple_language() {
+        let (lang, _) = fence("~~~python\nprint('hi')\n~~~");
+        assert_eq!(lang, "python");
+    }
+
+    #[test]
+    fn tilde_fence_language_with_metadata() {
+        let (lang, _) = fence("~~~ts strict=true\ntype A = number;\n~~~");
+        assert_eq!(lang, "ts");
+    }
+
+    #[test]
+    fn tilde_fence_allows_backticks_in_info_string() {
+        let (lang, _) = fence("~~~`backticks` allowed here\ncontent\n~~~");
+        assert_eq!(lang, "`backticks`");
+    }
+
+    #[test]
+    fn tilde_fence_empty_info_string() {
+        let (lang, _) = fence("~~~\nplain\n~~~");
+        assert_eq!(lang, "");
+    }
+
+    #[test]
+    fn backtick_fence_with_backticks_in_info_string_is_inline_span() {
+        // Per §4.5 a backtick fence's info string may not contain any
+        // backticks — so this opens an inline span instead. Discriminator:
+        // a real fence would put `body` in content with the info string
+        // dropped; the inline-span fallback includes the info-string text
+        // (`bad` literal) inside the span body.
+        let tokens = parse("``` `bad` info\nbody\n```");
+        let inline_span_with_info_text = tokens.iter().any(|t| {
+            matches!(t, Token::Code(_, body) if body.contains("bad"))
+        });
+        assert!(
+            inline_span_with_info_text,
+            "expected inline span carrying info-string text, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn fence_body_unchanged_by_info_string_split() {
+        let (lang, body) = fence("```rust meta1 meta2\nlet x = 1;\nlet y = 2;\n```");
+        assert_eq!(lang, "rust");
+        assert!(body.contains("let x = 1;"));
+        assert!(body.contains("let y = 2;"));
     }
 }
