@@ -316,6 +316,100 @@ fn try_decode_entity(chars: &[char], start: usize) -> Option<(String, usize)> {
 /// character references in a flat string. Used where escape/entity decoding
 /// must happen but we don't have a Lexer in scope (reference-definition
 /// pre-pass, fenced code info string capture, etc.).
+/// Strips `strip_cols` columns of leading whitespace from `chars[from..to]`,
+/// honoring tab-stop expansion. When a tab boundary lands inside the strip
+/// target, the leftover portion of the tab is emitted as the appropriate
+/// number of spaces in the output. Any non-whitespace content (and any
+/// in-line tabs) past the strip target is preserved verbatim.
+fn strip_leading_cols(chars: &[char], from: usize, to: usize, strip_cols: usize) -> String {
+    let mut out = String::new();
+    let mut col = 0usize;
+    let mut i = from;
+    while i < to {
+        let c = chars[i];
+        if c == ' ' && col < strip_cols {
+            col += 1;
+            i += 1;
+            continue;
+        }
+        if c == '\t' && col < strip_cols {
+            let span = 4 - (col % 4);
+            if col + span <= strip_cols {
+                col += span;
+                i += 1;
+                continue;
+            }
+            // Partial-tab consumption: emit leftover cols as spaces, then
+            // stop stripping and pass the rest of the line through.
+            let remainder = (col + span) - strip_cols;
+            for _ in 0..remainder {
+                out.push(' ');
+            }
+            i += 1;
+            while i < to {
+                out.push(chars[i]);
+                i += 1;
+            }
+            return out;
+        }
+        // Either col >= strip_cols, or we hit non-whitespace — copy the
+        // rest verbatim.
+        while i < to {
+            out.push(chars[i]);
+            i += 1;
+        }
+        return out;
+    }
+    out
+}
+
+/// Strips the optional closing `#` sequence from an ATX heading line per
+/// CommonMark §4.2. The trailing run of unescaped `#` chars is removed, plus
+/// any whitespace that immediately preceded it. An odd-length run of `\`
+/// chars directly before the trailing `#`s escapes them — in that case
+/// nothing is stripped. If the heading line is all `#`s and trailing
+/// whitespace, returns the empty string (empty heading).
+fn strip_atx_trailing_hashes(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut end = chars.len();
+    while end > 0 && (chars[end - 1] == ' ' || chars[end - 1] == '\t') {
+        end -= 1;
+    }
+    let mut hash_run_start = end;
+    while hash_run_start > 0 && chars[hash_run_start - 1] == '#' {
+        hash_run_start -= 1;
+    }
+    if hash_run_start == end {
+        // No trailing # run — pass through.
+        return chars.iter().collect();
+    }
+    // If the # immediately before the run is escaped by an odd number of
+    // backslashes, treat the # as content and don't strip.
+    let mut backslashes = 0;
+    let mut p = hash_run_start;
+    while p > 0 && chars[p - 1] == '\\' {
+        backslashes += 1;
+        p -= 1;
+    }
+    if backslashes % 2 == 1 {
+        return chars.iter().collect();
+    }
+    if hash_run_start == 0 {
+        // Heading is all `#` + trailing whitespace — empty content.
+        return String::new();
+    }
+    let prev = chars[hash_run_start - 1];
+    if prev != ' ' && prev != '\t' {
+        // The # run must be preceded by whitespace to count as closing.
+        return chars.iter().collect();
+    }
+    let mut new_end = hash_run_start;
+    while new_end > 0 && (chars[new_end - 1] == ' ' || chars[new_end - 1] == '\t') {
+        new_end -= 1;
+    }
+    chars[..new_end].iter().collect()
+}
+
 fn decode_escapes_and_entities(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len());
@@ -343,96 +437,228 @@ fn decode_escapes_and_entities(s: &str) -> String {
 /// Tries to parse a single line as a CommonMark link reference definition:
 /// `(spaces 0-3)[label]:(spaces)url(spaces title)?(spaces)?`.
 /// Returns `(label, url, optional_title)` if the whole line matches.
-fn parse_definition_line(line: &str) -> Option<(String, String, Option<String>)> {
-    let chars: Vec<char> = line.chars().collect();
-    let mut i = 0usize;
+/// Tries to parse a link reference definition starting at `chars[start]`.
+/// Definitions may span multiple source lines:
+///   `[label]:` followed by optional whitespace (possibly newlines, no blank
+///   line), then URL, then optional whitespace (possibly newlines, no blank
+///   line), then optional title. The title body itself may span lines as
+///   long as no blank line appears inside it.
+///
+/// Returns `(label, url, optional_title, end_position_in_chars)` on success,
+/// where `end_position` is the index past the trailing newline of the
+/// definition. `None` means no valid definition at this position.
+fn try_parse_definition(
+    chars: &[char],
+    start: usize,
+) -> Option<(String, String, Option<String>, usize)> {
+    let mut i = start;
 
+    // Up to 3 leading spaces.
     let mut leading = 0usize;
     while i < chars.len() && chars[i] == ' ' && leading < 3 {
         i += 1;
         leading += 1;
     }
+
+    // `[`
     if chars.get(i) != Some(&'[') {
         return None;
     }
     i += 1;
+
+    // Label body: read until unescaped `]`. May contain newlines but no
+    // blank line. Unescaped `[` is also disallowed.
     let label_start = i;
-    while i < chars.len() && chars[i] != ']' {
-        if chars[i] == '\n' {
+    loop {
+        if i >= chars.len() {
             return None;
         }
+        let c = chars[i];
+        if c == ']' {
+            break;
+        }
+        if c == '[' {
+            return None;
+        }
+        if c == '\\' && i + 1 < chars.len() && is_ascii_punctuation(chars[i + 1]) {
+            i += 2;
+            continue;
+        }
+        if c == '\n' {
+            // No blank line inside label.
+            let mut j = i + 1;
+            while j < chars.len() && (chars[j] == ' ' || chars[j] == '\t') {
+                j += 1;
+            }
+            if j >= chars.len() || chars[j] == '\n' {
+                return None;
+            }
+            i += 1;
+            continue;
+        }
         i += 1;
-    }
-    if chars.get(i) != Some(&']') {
-        return None;
     }
     let label: String = chars[label_start..i].iter().collect();
     if label.trim().is_empty() {
         return None;
     }
+    // Label must contain at least one non-whitespace char (already checked).
     i += 1; // past ]
+
+    // `:`
     if chars.get(i) != Some(&':') {
         return None;
     }
-    i += 1; // past :
+    i += 1;
 
-    while i < chars.len() && (chars[i] == ' ' || chars[i] == '\t') {
-        i += 1;
+    // Whitespace before URL — at most one newline (no blank line).
+    let mut newlines = 0usize;
+    while i < chars.len() {
+        match chars[i] {
+            ' ' | '\t' => i += 1,
+            '\n' => {
+                newlines += 1;
+                if newlines > 1 {
+                    return None;
+                }
+                i += 1;
+            }
+            _ => break,
+        }
     }
     if i >= chars.len() {
         return None;
     }
 
-    let url_start = i;
-    while i < chars.len() && chars[i] != ' ' && chars[i] != '\t' {
+    // URL — angle-bracket form or plain.
+    let url = if chars[i] == '<' {
         i += 1;
-    }
-    if i == url_start {
-        return None;
-    }
-    let url_raw: String = chars[url_start..i].iter().collect();
-    let url = decode_escapes_and_entities(&url_raw);
-
-    while i < chars.len() && (chars[i] == ' ' || chars[i] == '\t') {
-        i += 1;
-    }
-
-    let title = if i < chars.len() {
-        let (open, close) = match chars[i] {
-            '"' => ('"', '"'),
-            '\'' => ('\'', '\''),
-            '(' => ('(', ')'),
-            _ => return Some((label, url, None)).filter(|_| {
-                // No title — the rest of the line must be whitespace.
-                chars[i..].iter().all(|c| *c == ' ' || *c == '\t')
-            }),
-        };
-        if chars[i] != open {
-            return None;
-        }
-        i += 1;
-        let title_start = i;
-        while i < chars.len() && chars[i] != close {
+        let s = i;
+        loop {
+            if i >= chars.len() {
+                return None;
+            }
+            let c = chars[i];
+            if c == '>' {
+                break;
+            }
+            if c == '<' || c == '\n' {
+                return None;
+            }
+            if c == '\\' && i + 1 < chars.len() && is_ascii_punctuation(chars[i + 1]) {
+                i += 2;
+                continue;
+            }
             i += 1;
         }
-        if chars.get(i) != Some(&close) {
+        let raw: String = chars[s..i].iter().collect();
+        i += 1; // past >
+        decode_escapes_and_entities(&raw)
+    } else {
+        let s = i;
+        while i < chars.len() && !chars[i].is_whitespace() {
+            if chars[i] == '\\' && i + 1 < chars.len() && is_ascii_punctuation(chars[i + 1]) {
+                i += 2;
+                continue;
+            }
+            i += 1;
+        }
+        if i == s {
             return None;
         }
-        let t_raw: String = chars[title_start..i].iter().collect();
-        let t = decode_escapes_and_entities(&t_raw);
-        i += 1;
-        Some(t)
-    } else {
-        None
+        let raw: String = chars[s..i].iter().collect();
+        decode_escapes_and_entities(&raw)
     };
 
-    while i < chars.len() && (chars[i] == ' ' || chars[i] == '\t') {
-        i += 1;
+    // After URL, optionally one or more whitespace chars (possibly newline,
+    // no blank line) before title.
+    let after_url = i;
+    let mut newlines_after_url = 0usize;
+    let mut q = after_url;
+    while q < chars.len() {
+        match chars[q] {
+            ' ' | '\t' => q += 1,
+            '\n' => {
+                newlines_after_url += 1;
+                if newlines_after_url > 1 {
+                    break;
+                }
+                q += 1;
+            }
+            _ => break,
+        }
     }
-    if i != chars.len() {
-        return None; // junk after definition — not a valid definition
+
+    // If we hit blank line / EOF, the definition has no title — but only if
+    // the URL was followed by valid line-ending whitespace.
+    let no_title_def = || -> Option<(String, String, Option<String>, usize)> {
+        // Validate that the URL line had only whitespace before its end.
+        let mut k = after_url;
+        while k < chars.len() && (chars[k] == ' ' || chars[k] == '\t') {
+            k += 1;
+        }
+        if k < chars.len() && chars[k] != '\n' {
+            return None;
+        }
+        let end = if k < chars.len() { k + 1 } else { k };
+        Some((label.clone(), url.clone(), None, end))
+    };
+
+    if q >= chars.len() || (newlines_after_url > 1) {
+        return no_title_def();
     }
-    Some((label, url, title))
+
+    let title_open = chars[q];
+    if !matches!(title_open, '"' | '\'' | '(') {
+        return no_title_def();
+    }
+    let close = match title_open {
+        '"' => '"',
+        '\'' => '\'',
+        '(' => ')',
+        _ => unreachable!(),
+    };
+
+    // Try to read title from position q.
+    let mut t = q + 1;
+    let title_start = t;
+    loop {
+        if t >= chars.len() {
+            return no_title_def();
+        }
+        let c = chars[t];
+        if c == close {
+            break;
+        }
+        if c == '\\' && t + 1 < chars.len() && is_ascii_punctuation(chars[t + 1]) {
+            t += 2;
+            continue;
+        }
+        if c == '\n' {
+            // No blank line inside title.
+            let mut j = t + 1;
+            while j < chars.len() && (chars[j] == ' ' || chars[j] == '\t') {
+                j += 1;
+            }
+            if j >= chars.len() || chars[j] == '\n' {
+                return no_title_def();
+            }
+        }
+        t += 1;
+    }
+    let title_raw: String = chars[title_start..t].iter().collect();
+    let title = decode_escapes_and_entities(&title_raw);
+    t += 1; // past close
+    // Trailing chars on title-end line must be whitespace ending in \n / EOF.
+    let mut k = t;
+    while k < chars.len() && (chars[k] == ' ' || chars[k] == '\t') {
+        k += 1;
+    }
+    if k < chars.len() && chars[k] != '\n' {
+        return no_title_def();
+    }
+    let end = if k < chars.len() { k + 1 } else { k };
+    Some((label, url, Some(title), end))
 }
 
 /// Walks the token tree and marks list items as loose when a sibling pair is
@@ -630,11 +856,20 @@ pub struct Lexer {
     /// cleared by the next `next_token` call so the break is emitted as
     /// `Token::HardBreak`.
     pending_hard_break: bool,
+    /// True while we're parsing the inline content of an ATX/setext heading.
+    /// Hard breaks (`  \n` or `\\\n`) are not valid inside headings, so
+    /// `parse_text` skips its hard-break promotion when this is set.
+    in_heading: bool,
     /// True when the most recently emitted top-level token was a ListItem.
     /// Used by the dispatcher to decide whether `-\n` (empty list marker)
     /// should open / continue a list, which is only legal as a sibling of an
     /// existing list item — never as the first interrupter of a paragraph.
     last_emitted_list_item: bool,
+    /// True when the most recent top-level emission was an inline-content
+    /// token (paragraph text). Reset by block emissions and blank lines.
+    /// Used by indented-code detection: per spec, indented code blocks may
+    /// not interrupt a paragraph, but can follow headings, HRs, etc.
+    last_emitted_was_paragraph_text: bool,
     /// Reference-link definitions collected by `extract_definitions()` in
     /// the pre-pass. Keys are normalized (lowercased, whitespace-collapsed);
     /// values are `(url, title)`.
@@ -651,7 +886,9 @@ impl Lexer {
             input: normalized.chars().collect(),
             position: 0,
             pending_hard_break: false,
+            in_heading: false,
             last_emitted_list_item: false,
+            last_emitted_was_paragraph_text: false,
             definitions: HashMap::new(),
         }
     }
@@ -672,20 +909,26 @@ impl Lexer {
     /// result in `self.definitions` for later resolution by `parse_link` /
     /// `parse_image`. Idempotent: safe to call multiple times.
     fn extract_definitions(&mut self) {
-        let original: String = self.input.iter().collect();
-        let mut kept = String::new();
+        let chars = self.input.clone();
         let mut definitions = HashMap::new();
-        for line in original.split_inclusive('\n') {
-            let stripped = line.trim_end_matches('\n');
-            if let Some((label, url, title)) = parse_definition_line(stripped) {
-                definitions
-                    .entry(normalize_label(&label))
-                    .or_insert((url, title));
-            } else {
-                kept.push_str(line);
+        let mut kept: Vec<char> = Vec::with_capacity(chars.len());
+        let mut i = 0usize;
+        while i < chars.len() {
+            // Definitions only start at line-beginning (BOF or after \n).
+            let at_line_start = i == 0 || chars[i - 1] == '\n';
+            if at_line_start {
+                if let Some((label, url, title, end)) = try_parse_definition(&chars, i) {
+                    definitions
+                        .entry(normalize_label(&label))
+                        .or_insert((url, title));
+                    i = end;
+                    continue;
+                }
             }
+            kept.push(chars[i]);
+            i += 1;
         }
-        self.input = kept.chars().collect();
+        self.input = kept;
         self.position = 0;
         self.definitions = definitions;
     }
@@ -699,11 +942,43 @@ impl Lexer {
         while self.position < self.input.len() {
             if let Some(token) = self.next_token(ctx)? {
                 // Track whether the most recent top-level emission was a
-                // ListItem — only a Newline between items doesn't reset it.
+                // ListItem (Newline doesn't reset it) and whether it was
+                // inline paragraph text (a blank line resets both).
+                let mut newlines_in_a_row = 0;
                 match &token {
-                    Token::ListItem { .. } => self.last_emitted_list_item = true,
-                    Token::Newline => {} // preserve previous flag
-                    _ => self.last_emitted_list_item = false,
+                    Token::ListItem { .. } => {
+                        self.last_emitted_list_item = true;
+                        self.last_emitted_was_paragraph_text = false;
+                    }
+                    Token::Newline => {
+                        // Count consecutive Newlines so a blank line (≥2)
+                        // can reset paragraph state.
+                        let mut n = tokens.len();
+                        while n > 0 && matches!(tokens[n - 1], Token::Newline) {
+                            newlines_in_a_row += 1;
+                            n -= 1;
+                        }
+                        if newlines_in_a_row >= 1 {
+                            // The Newline we're about to push makes ≥2.
+                            self.last_emitted_was_paragraph_text = false;
+                        }
+                    }
+                    Token::Heading(_, _)
+                    | Token::HorizontalRule
+                    | Token::BlockQuote(_)
+                    | Token::Table { .. }
+                    | Token::HtmlComment(_) => {
+                        self.last_emitted_list_item = false;
+                        self.last_emitted_was_paragraph_text = false;
+                    }
+                    Token::Code { block: true, .. } => {
+                        self.last_emitted_list_item = false;
+                        self.last_emitted_was_paragraph_text = false;
+                    }
+                    _ => {
+                        self.last_emitted_list_item = false;
+                        self.last_emitted_was_paragraph_text = true;
+                    }
                 }
                 tokens.push(token);
             }
@@ -815,7 +1090,7 @@ impl Lexer {
         if matches!(ctx, ParseContext::Root | ParseContext::BlockQuote)
             && self.is_at_line_start()
             && self.get_current_indent() >= 4
-            && self.previous_line_is_blank_or_bof()
+            && self.can_start_indented_code()
         {
             return Ok(Some(self.parse_indented_code_block()));
         }
@@ -853,7 +1128,7 @@ impl Lexer {
         // setext detection for `> Title\n> ---`). Skip detection when the
         // CURRENT line is itself a thematic break — `***\n---\n___` is three
         // HRs, not a setext-H2 with `***` content.
-        if is_line_start
+        if is_block_start
             && matches!(ctx, ParseContext::Root | ParseContext::BlockQuote)
             && !(matches!(current_char, '*' | '_' | '-')
                 && self.is_thematic_break_line())
@@ -916,8 +1191,18 @@ impl Lexer {
                 }
             }
             '0'..='9' if is_block_start && allow_block_tokens(ctx) => {
-                if let Some(_) = self.check_ordered_list_marker() {
-                    self.parse_list_item(true, 0, ctx)?
+                if let Some(n) = self.check_ordered_list_marker() {
+                    // An ordered marker with start != 1 cannot interrupt
+                    // an open paragraph. Only `1.` / `1)` is allowed in
+                    // that position; everything else falls through to text.
+                    let can_open = n == 1
+                        || self.last_emitted_list_item
+                        || self.previous_line_is_blank_or_bof();
+                    if can_open {
+                        self.parse_list_item(true, 0, ctx)?
+                    } else {
+                        self.parse_text(ctx)?
+                    }
                 } else {
                     self.parse_text(ctx)?
                 }
@@ -994,34 +1279,20 @@ impl Lexer {
             self.advance();
         }
         self.skip_whitespace();
-        let mut content = self.parse_nested_content(|c| c == '\n', ParseContext::Inline)?;
-
-        // Strip optional closing `#` sequence: ` +#+( +)*$` from the trailing
-        // text token's content. The space-before-the-#-run is required by the
-        // spec — a trailing `C#` with no preceding space stays as content.
-        if let Some(Token::Text(s)) = content.last_mut() {
-            let trimmed = s.trim_end_matches(|c: char| c == ' ' || c == '\t');
-            let mut bytes = trimmed.as_bytes();
-            let mut hash_run = 0usize;
-            while !bytes.is_empty() && *bytes.last().unwrap() == b'#' {
-                hash_run += 1;
-                bytes = &bytes[..bytes.len() - 1];
-            }
-            if hash_run > 0 && !bytes.is_empty() {
-                let prev = *bytes.last().unwrap();
-                if prev == b' ' || prev == b'\t' {
-                    let new_len = bytes.len();
-                    s.truncate(new_len);
-                    while s.ends_with(' ') || s.ends_with('\t') {
-                        s.pop();
-                    }
-                }
-            }
-            if s.is_empty() {
-                content.pop();
-            }
+        // Read the rest of the line raw, strip optional trailing closing
+        // `#` sequence (only when the run is unescaped and preceded by
+        // whitespace or comprises the whole line), then sub-lex the
+        // remainder as inline content.
+        let line_start = self.position;
+        while self.position < self.input.len() && self.current_char() != '\n' {
+            self.advance();
         }
-
+        let raw_line: String = self.input[line_start..self.position].iter().collect();
+        let stripped = strip_atx_trailing_hashes(&raw_line);
+        let mut sub = Lexer::new(stripped);
+        sub.in_heading = true;
+        sub.definitions = self.definitions.clone();
+        let content = sub.parse_with_context(ParseContext::Inline)?;
         Ok(Token::Heading(content, level))
     }
 
@@ -1186,26 +1457,17 @@ impl Lexer {
                 }
             }
             // Not a closer — accumulate this line as content, stripping up
-            // to opener_indent_cols leading cols.
-            let mut strip_col = 0usize;
-            let mut strip_end = line_start;
-            while strip_end < self.input.len()
-                && (self.input[strip_end] == ' ' || self.input[strip_end] == '\t')
-                && strip_col < opener_indent_cols
-            {
-                if self.input[strip_end] == ' ' {
-                    strip_col += 1;
-                } else {
-                    strip_col += 4 - (strip_col % 4);
-                }
-                strip_end += 1;
-            }
-            // Find end of line.
-            let mut p = strip_end;
+            // to opener_indent_cols leading cols (with partial-tab → spaces).
+            let mut p = line_start;
             while p < self.input.len() && self.input[p] != '\n' {
                 p += 1;
             }
-            content_lines.push(self.input[strip_end..p].iter().collect());
+            content_lines.push(strip_leading_cols(
+                &self.input,
+                line_start,
+                p,
+                opener_indent_cols,
+            ));
             if p < self.input.len() {
                 self.position = p + 1;
             } else {
@@ -1409,25 +1671,17 @@ impl Lexer {
                     });
                 }
             }
-            // Content line — strip up to opener_indent_cols.
-            let mut strip_col = 0usize;
-            let mut strip_end = line_start;
-            while strip_end < self.input.len()
-                && (self.input[strip_end] == ' ' || self.input[strip_end] == '\t')
-                && strip_col < opener_indent_cols
-            {
-                if self.input[strip_end] == ' ' {
-                    strip_col += 1;
-                } else {
-                    strip_col += 4 - (strip_col % 4);
-                }
-                strip_end += 1;
-            }
-            let mut p = strip_end;
+            // Content line — strip up to opener_indent_cols (partial-tab → spaces).
+            let mut p = line_start;
             while p < self.input.len() && self.input[p] != '\n' {
                 p += 1;
             }
-            content_lines.push(self.input[strip_end..p].iter().collect());
+            content_lines.push(strip_leading_cols(
+                &self.input,
+                line_start,
+                p,
+                opener_indent_cols,
+            ));
             if p < self.input.len() {
                 self.position = p + 1;
             } else {
@@ -1614,6 +1868,7 @@ impl Lexer {
     /// `[text][]`, and shortcut `[text]` (the last only when the label
     /// resolves; otherwise emits the brackets literally).
     fn parse_link(&mut self) -> Result<Token, LexerError> {
+        let bracket_pos = self.position;
         self.advance(); // skip '['
         let content = self.parse_nested_content(|c| c == ']', ParseContext::Inline)?;
         if self.position >= self.input.len() || self.current_char() != ']' {
@@ -1623,16 +1878,36 @@ impl Lexer {
             s.push_str(&Token::collect_all_text(&content));
             return Ok(Token::Text(s));
         }
+        // Nested-link prevention: if the parsed inline content already
+        // contains a Link, the outer `[…]` must NOT form a link. Rewind
+        // to just after the opening `[`, emit a literal `[`, and let the
+        // dispatcher re-parse the body — the inner link will fire as a
+        // real link and the trailing `]…` becomes literal text.
+        if content
+            .iter()
+            .any(|t| matches!(t, Token::Link { .. }))
+        {
+            self.position = bracket_pos + 1;
+            return Ok(Token::Text("[".to_string()));
+        }
         self.advance(); // skip ']'
 
         // Inline: [text](url "title")
         if self.position < self.input.len() && self.current_char() == '(' {
+            let save = self.position;
             self.advance(); // skip '('
             let (url, title) = self.read_link_destination_and_title();
             if self.position < self.input.len() && self.current_char() == ')' {
                 self.advance(); // skip ')'
+                return Ok(Token::Link { content, url, title });
             }
-            return Ok(Token::Link { content, url, title });
+            // The `(…)` form didn't close cleanly — the whole link is
+            // invalid. Rewind to just before `(` and emit `[text]` + the
+            // leftover `(` as literal text. Subsequent dispatch handles the
+            // tail of the line.
+            self.position = save;
+            let text_str = Token::collect_all_text(&content);
+            return Ok(Token::Text(format!("[{}]", text_str)));
         }
 
         // Full or collapsed reference: [text][label] or [text][]
@@ -1791,21 +2066,37 @@ impl Lexer {
             if ok {
                 s
             } else {
-                self.position = save_pos;
-                self.read_link_url_plain()
+                // Angle form started but didn't close cleanly — the whole
+                // link destination is invalid. Don't fall back to plain
+                // reading (which would silently re-accept the `<` as URL
+                // content). Leave position at the failure point so the
+                // caller's "ended at `)`" check fails the link.
+                let _ = save_pos;
+                s
             }
         } else {
             self.read_link_url_plain()
         };
 
-        // Skip whitespace between URL and potential title.
-        while self.position < self.input.len()
-            && (self.current_char() == ' ' || self.current_char() == '\t')
-        {
-            self.advance();
+        // Skip whitespace between URL and potential title. A single newline
+        // is allowed (multi-line link form `[text](url\n"title")`); two
+        // consecutive newlines terminate the link.
+        let mut newlines_between = 0usize;
+        while self.position < self.input.len() {
+            match self.current_char() {
+                ' ' | '\t' => self.advance(),
+                '\n' => {
+                    newlines_between += 1;
+                    if newlines_between > 1 {
+                        break;
+                    }
+                    self.advance();
+                }
+                _ => break,
+            }
         }
 
-        let title = if self.position < self.input.len() {
+        let title = if self.position < self.input.len() && newlines_between <= 1 {
             match self.current_char() {
                 '"' => Some(self.read_title_delimited('"', '"')),
                 '\'' => Some(self.read_title_delimited('\'', '\'')),
@@ -1817,10 +2108,20 @@ impl Lexer {
         };
 
         // Skip whitespace between title and the final `)` of the link.
-        while self.position < self.input.len()
-            && (self.current_char() == ' ' || self.current_char() == '\t')
-        {
-            self.advance();
+        // Allow a single newline (multi-line link form).
+        let mut trailing_newlines = 0usize;
+        while self.position < self.input.len() {
+            match self.current_char() {
+                ' ' | '\t' => self.advance(),
+                '\n' => {
+                    trailing_newlines += 1;
+                    if trailing_newlines > 1 {
+                        break;
+                    }
+                    self.advance();
+                }
+                _ => break,
+            }
         }
 
         (url, title)
@@ -2263,13 +2564,11 @@ impl Lexer {
         }
 
         // Hard line break: 2+ trailing spaces or a lone trailing backslash
-        // before `\n`, in block-paragraph contexts only.
+        // before `\n`. Valid in any inline run except inside a heading
+        // (which is a single-line construct per spec).
         if self.position < self.input.len()
             && self.current_char() == '\n'
-            && matches!(
-                ctx,
-                ParseContext::Root | ParseContext::ListItem | ParseContext::BlockQuote
-            )
+            && !self.in_heading
         {
             if content.ends_with("  ") {
                 while content.ends_with(' ') {
@@ -2941,6 +3240,8 @@ impl Lexer {
         }
         let joined = content_lines.join("\n");
         let mut sub = Lexer::new(joined.trim().to_string());
+        sub.in_heading = true;
+        sub.definitions = self.definitions.clone();
         let content = sub.parse_with_context(ParseContext::Inline)?;
         Ok(Token::Heading(content, level))
     }
@@ -3434,22 +3735,41 @@ impl Lexer {
     /// indented-code-block detection so we don't lift list-item continuations
     /// or post-paragraph indented lines into code blocks.
     fn previous_line_is_blank_or_bof(&self) -> bool {
-        if self.position == 0 {
+        // Walk back through any leading whitespace on the current line
+        // (the dispatcher's skip_whitespace may have advanced us past
+        // it) to land on either `\n` (preceded by a previous line) or
+        // BOF. Either of those plus a blank previous line counts.
+        let mut p = self.position;
+        while p > 0 && (self.input[p - 1] == ' ' || self.input[p - 1] == '\t') {
+            p -= 1;
+        }
+        if p == 0 {
             return true;
         }
-        if self.input.get(self.position - 1) != Some(&'\n') {
+        if self.input.get(p - 1) != Some(&'\n') {
             return false;
         }
-        // Find the start of the previous line.
-        let mut prev_line_start = self.position - 1; // points at the \n
+        // Find the start of the line BEFORE this one.
+        let mut prev_line_start = p - 1; // points at the \n
         while prev_line_start > 0 && self.input[prev_line_start - 1] != '\n' {
             prev_line_start -= 1;
         }
-        // Previous line is input[prev_line_start..position-1] (excluding the \n).
-        let prev_line_end = self.position - 1;
+        let prev_line_end = p - 1;
         self.input[prev_line_start..prev_line_end]
             .iter()
             .all(|c| *c == ' ' || *c == '\t')
+    }
+
+    /// Per CommonMark §4.4 indented code may not interrupt an *open
+    /// paragraph*, but is fine after a heading, thematic break, fenced
+    /// code, or list item. Returns true when the spot is eligible: at BOF,
+    /// after a blank line, or — if neither — when the last emission was
+    /// not a paragraph text token.
+    fn can_start_indented_code(&self) -> bool {
+        if self.previous_line_is_blank_or_bof() {
+            return true;
+        }
+        !self.last_emitted_was_paragraph_text
     }
 
     /// Collects all subsequent lines that belong to the current list item's
@@ -3523,25 +3843,17 @@ impl Lexer {
             if col < content_offset {
                 break;
             }
-            // Strip up to content_offset cols.
-            let mut strip_col = 0usize;
-            let mut strip_end = line_start;
-            while strip_end < self.input.len()
-                && (self.input[strip_end] == ' ' || self.input[strip_end] == '\t')
-                && strip_col < content_offset
-            {
-                if self.input[strip_end] == ' ' {
-                    strip_col += 1;
-                } else {
-                    strip_col += 4 - (strip_col % 4);
-                }
-                strip_end += 1;
-            }
-            let mut p = strip_end;
+            // Strip up to content_offset cols (partial-tab → spaces).
+            let mut p = line_start;
             while p < self.input.len() && self.input[p] != '\n' {
                 p += 1;
             }
-            lines.push(self.input[strip_end..p].iter().collect());
+            lines.push(strip_leading_cols(
+                &self.input,
+                line_start,
+                p,
+                content_offset,
+            ));
             if p < self.input.len() {
                 self.position = p + 1;
             } else {

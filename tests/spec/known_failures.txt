@@ -4,8 +4,6 @@
 # Seeded from initial measurement: 395/652 passing (60.6%).
 
 # --- ATX headings (3 failing) ---
-76
-79
 
 # --- Autolinks (3 failing) ---
 603
@@ -49,7 +47,6 @@
 # --- Entity and numeric character references (7 failing) ---
 28
 31
-41
 
 # --- Fenced code blocks (16 failing) ---
 126
@@ -98,8 +95,6 @@
 191  # O
 
 # --- Hard line breaks (3 failing) ---
-638
-639
 644
 
 # --- Images (6 failing) ---
@@ -110,35 +105,17 @@
 589
 
 # --- Indented code blocks (6 failing) ---
-115
 117
 
 # --- Link reference definitions (15 failing) ---
-193
 194
-195
-196
-198
-200
 201
-202
-208
 212
 213
-217
 218
 
 # --- Links (46 failing) ---
-488
-490
-491
-493
-494
-497
-508
-510
 514
-518
 519
 520
 522
@@ -146,16 +123,13 @@
 524
 525
 526
-532
 533
 535
 536
 537
 538
 540
-541
 545
-546
 549
 550
 552
@@ -185,7 +159,6 @@
 # --- Lists (16 failing) ---
 301
 302
-304
 310
 312
 318
@@ -206,8 +179,6 @@
 629  # O
 
 # --- Setext headings (7 failing) ---
-82
-84
 93
 
 # --- Soft line breaks (1 failing) ---
