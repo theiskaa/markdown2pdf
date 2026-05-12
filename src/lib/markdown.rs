@@ -22,9 +22,12 @@
 //! };
 //! assert!(matches!(emphasis, Token::Emphasis { level: 1, .. }));
 //!
-//! // Link token with text and URL
-//! let link = Token::Link { content: vec![Token::Text(//!     "Click here".to_string())], url: //!     "https://example.com".to_string()
-//!, title: None };
+//! // Link token: parsed inline content + URL + optional title
+//! let link = Token::Link {
+//!     content: vec![Token::Text("Click here".to_string())],
+//!     url: "https://example.com".to_string(),
+//!     title: None,
+//! };
 //! assert!(matches!(link, Token::Link { .. }));
 //! ```
 //!
@@ -36,8 +39,9 @@
 //!     │   └── Vec<Token>
 //!     │       └── Token::Text
 //!     └── Token::Link
-//!         ├── text: String
-//!         └── url: String
+//!         ├── content: Vec<Token>
+//!         ├── url: String
+//!         └── title: Option<String>
 
 use genpdfi::Alignment;
 use std::collections::HashMap;
