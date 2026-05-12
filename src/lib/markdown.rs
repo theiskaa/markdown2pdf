@@ -403,9 +403,7 @@ fn propagate_loose_tight(tokens: &mut [Token]) {
                 i += 1;
             }
             if i >= tokens.len() || !matches!(tokens[i], Token::ListItem { .. }) {
-                // Run terminated. Roll position back so the outer loop sees
-                // whatever tokens followed (e.g. a paragraph after the list).
-                i = last_item_end + 1;
+                // Run terminated. The outer reassignment below handles position.
                 break;
             }
             // Another sibling. If we crossed at least one Newline to reach it,
@@ -728,6 +726,11 @@ impl Lexer {
 
         let current_char = self.current_char();
         let is_line_start = self.is_at_line_start();
+        // Block markers accept up to 3 columns of leading space indent. We
+        // call `skip_whitespace` above, so by the time we land here the
+        // position has already moved past those spaces; `is_block_marker_start`
+        // walks backward to recover the "would-have-been at line start" check.
+        let is_block_start = self.is_block_marker_start();
 
         // Helper closures to check whether a certain token is allowed in this context.
         let allow_block_tokens = |context: ParseContext| -> bool {
@@ -752,18 +755,18 @@ impl Lexer {
         }
 
         let token = match current_char {
-            '#' if is_line_start && allow_block_tokens(ctx) && self.is_atx_heading_start() => {
+            '#' if is_block_start && allow_block_tokens(ctx) && self.is_atx_heading_start() => {
                 self.parse_heading()?
             }
-            '*' if is_line_start && allow_block_tokens(ctx) && self.is_thematic_break_line() => {
+            '*' if is_block_start && allow_block_tokens(ctx) && self.is_thematic_break_line() => {
                 self.consume_current_line();
                 Token::HorizontalRule
             }
-            '_' if is_line_start && allow_block_tokens(ctx) && self.is_thematic_break_line() => {
+            '_' if is_block_start && allow_block_tokens(ctx) && self.is_thematic_break_line() => {
                 self.consume_current_line();
                 Token::HorizontalRule
             }
-            '*' if is_line_start && allow_block_tokens(ctx) && self.is_list_marker('*') => {
+            '*' if is_block_start && allow_block_tokens(ctx) && self.is_list_marker('*') => {
                 self.parse_list_item(false, 0, ctx)?
             }
             '*' => {
@@ -782,7 +785,7 @@ impl Lexer {
             }
             '_' => self.parse_text(ctx)?,
             '`' => self.parse_code()?,
-            '~' if is_line_start
+            '~' if is_block_start
                 && allow_block_tokens(ctx)
                 && self.count_consecutive('~') >= 3 =>
             {
@@ -790,8 +793,8 @@ impl Lexer {
             }
             '~' if self.count_consecutive('~') >= 2 => self.parse_strikethrough()?,
             '~' => self.parse_text(ctx)?,
-            '>' if is_line_start && allow_block_tokens(ctx) => self.parse_blockquote()?,
-            '-' | '+' if is_line_start && allow_block_tokens(ctx) => {
+            '>' if is_block_start && allow_block_tokens(ctx) => self.parse_blockquote()?,
+            '-' | '+' if is_block_start && allow_block_tokens(ctx) => {
                 if self.is_thematic_break_line() {
                     self.consume_current_line();
                     Token::HorizontalRule
@@ -801,7 +804,7 @@ impl Lexer {
                     self.parse_list_item(false, 0, ctx)?
                 }
             }
-            '0'..='9' if is_line_start && allow_block_tokens(ctx) => {
+            '0'..='9' if is_block_start && allow_block_tokens(ctx) => {
                 if let Some(_) = self.check_ordered_list_marker() {
                     self.parse_list_item(true, 0, ctx)?
                 } else {
@@ -1251,12 +1254,26 @@ impl Lexer {
             if is_marked {
                 self.position = peek;
                 self.advance(); // '>'
-                // Optional single space after `>`.
-                if self.position < self.input.len() && self.current_char() == ' ' {
-                    self.advance();
+                // Optional single space or tab after `>`. A tab at this
+                // position would expand to column 4 (the `>` consumed col 0,
+                // tab spans cols 1-3 to reach col 4); the marker consumes one
+                // of those columns as its own padding slot and leaves the
+                // remaining 3 columns of indent in the body. Inject them as
+                // literal spaces on the body line so the sub-lexer's indent
+                // counting sees the correct content offset.
+                let mut body_prefix = String::new();
+                if self.position < self.input.len() {
+                    match self.current_char() {
+                        ' ' => self.advance(),
+                        '\t' => {
+                            self.advance();
+                            body_prefix.push_str("   ");
+                        }
+                        _ => {}
+                    }
                 }
-                let line = self.read_until_newline();
-                body_lines.push(line);
+                let rest = self.read_until_newline();
+                body_lines.push(body_prefix + &rest);
                 if self.position < self.input.len() && self.current_char() == '\n' {
                     self.advance();
                 }
@@ -1967,6 +1984,32 @@ impl Lexer {
     /// Checks if current position is at the start of a line
     fn is_at_line_start(&self) -> bool {
         self.position == 0 || self.input.get(self.position - 1) == Some(&'\n')
+    }
+
+    /// True when the current position sits at line start *modulo* up to 3
+    /// leading spaces of indent — i.e., every char between this position and
+    /// the previous `\n` (or beginning of input) is a space, and there are at
+    /// most 3 of them. Per CommonMark, all block markers (ATX heading,
+    /// thematic break, list marker, blockquote, fence) accept up to 3 columns
+    /// of leading whitespace. A leading tab disqualifies the line (a tab
+    /// expands to 4 columns).
+    fn is_block_marker_start(&self) -> bool {
+        let mut p = self.position;
+        let mut spaces = 0usize;
+        while p > 0 {
+            match self.input[p - 1] {
+                ' ' => {
+                    spaces += 1;
+                    if spaces > 3 {
+                        return false;
+                    }
+                    p -= 1;
+                }
+                '\n' => return true,
+                _ => return false,
+            }
+        }
+        true
     }
 
     /// Skips whitespace characters except newlines
@@ -6879,5 +6922,137 @@ mod loose_tight_list_tests {
         let input = "- [ ] task1\n\n- [x] task2";
         let tokens = parse(input);
         assert_eq!(items(&tokens), vec![true, true]);
+    }
+}
+
+#[cfg(test)]
+mod tab_indentation_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    #[test]
+    fn leading_tab_is_indented_code_block() {
+        // A leading tab expands to 4 columns → indented code block.
+        let tokens = parse("\tfoo");
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::Code(_, body) if body.contains("foo"))),
+            "expected indented code block, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn two_spaces_plus_tab_is_indented_code_block() {
+        // 2 spaces, then tab → tab expands to next multiple of 4 = col 4
+        // total = 4 columns of indent → indented code block.
+        let tokens = parse("  \tfoo");
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::Code(_, body) if body.contains("foo"))),
+            "expected indented code block, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn three_spaces_plus_tab_is_indented_code_block() {
+        // 3 spaces + tab → tab fills cols 3-4 → 4 columns → indented code.
+        let tokens = parse("   \tfoo");
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::Code(_, body) if body.contains("foo"))),
+            "expected indented code block, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn three_leading_spaces_no_tab_keeps_heading() {
+        // 3 spaces of indent before `#` is still a heading.
+        let tokens = parse("   # heading");
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::Heading(_, 1))),
+            "expected Heading, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn one_space_plus_tab_before_hash_is_indented_code() {
+        // 1 space + tab → 4 columns → indented code, NOT heading.
+        let tokens = parse(" \t# not a heading");
+        assert!(
+            !tokens.iter().any(|t| matches!(t, Token::Heading(_, _))),
+            "unexpected Heading, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::Code(_, _))),
+            "expected indented code, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn tab_after_blockquote_marker_is_content_padding() {
+        // `>\tfoo` — tab after `>` is content-side padding, so the body is
+        // paragraph "foo", not indented code.
+        let tokens = parse(">\tfoo");
+        if let Token::BlockQuote(body) = &tokens[0] {
+            let text = Token::collect_all_text(body);
+            assert!(text.contains("foo"), "got {:?}", text);
+            // The quote body should NOT contain a code block.
+            assert!(
+                !body.iter().any(|t| matches!(t, Token::Code(_, _))),
+                "unexpected code in quote body: {}",
+                Token::slice_to_compact(body)
+            );
+        } else {
+            panic!("expected BlockQuote, got {}", Token::slice_to_compact(&tokens));
+        }
+    }
+
+    #[test]
+    fn tab_after_list_marker_is_content_padding() {
+        // `-\tfoo` — tab after the bullet is item-content padding, content="foo".
+        let tokens = parse("-\tfoo");
+        if let Token::ListItem { content, .. } = &tokens[0] {
+            let text = Token::collect_all_text(content);
+            assert!(text.contains("foo"), "got {:?}", text);
+        } else {
+            panic!("expected ListItem, got {}", Token::slice_to_compact(&tokens));
+        }
+    }
+
+    #[test]
+    fn four_spaces_is_indented_code() {
+        let tokens = parse("    foo");
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::Code(_, body) if body.contains("foo"))),
+            "expected indented code, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn three_spaces_no_tab_is_paragraph() {
+        // 3 spaces, no tab → only 3 columns of indent → still a paragraph.
+        let tokens = parse("   foo");
+        assert!(
+            !tokens.iter().any(|t| matches!(t, Token::Code(_, _))),
+            "unexpected code, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn tab_inside_paragraph_preserved() {
+        // A tab not at line start is just literal text content.
+        let tokens = parse("a\tb");
+        let text = Token::collect_all_text(&tokens);
+        assert!(text.contains("a"), "got {:?}", text);
+        assert!(text.contains("b"), "got {:?}", text);
     }
 }
