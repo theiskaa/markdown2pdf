@@ -232,7 +232,7 @@ const PER_EXAMPLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 enum ParseOutcome {
     Ok(Vec<Token>),
     Err(String),
-    Panic(String),
+    Panic(#[allow(dead_code)] String),
     Timeout,
 }
 

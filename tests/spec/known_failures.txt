@@ -1,0 +1,224 @@
+# CommonMark spec examples we don't yet pass. One example number per
+# line, optional trailing `# comment`. Lines starting with `#` ignored.
+# Categories: R=lexer bug, H=renderer bug, N=normalization, O=out-of-scope (HTML)
+# Seeded from initial measurement: 395/652 passing (60.6%).
+
+# --- ATX headings (3 failing) ---
+76
+79
+
+# --- Autolinks (3 failing) ---
+603
+606
+
+# --- Backslash escapes (6 failing) ---
+21
+
+# --- Block quotes (4 failing) ---
+230
+236
+237
+
+# --- Code spans (2 failing) ---
+342
+
+# --- Emphasis and strong emphasis (22 failing) ---
+354
+408
+411
+412
+413
+415
+417
+426
+429
+430
+442
+444
+445
+454
+456
+457
+464
+465
+466
+468
+469
+470
+
+# --- Entity and numeric character references (7 failing) ---
+28
+31
+41
+
+# --- Fenced code blocks (16 failing) ---
+126
+130
+144
+
+# --- HTML blocks (40 failing) ---
+148  # O
+149  # O
+150  # O
+151  # O
+152  # O
+153  # O
+154  # O
+155  # O
+156  # O
+157  # O
+158  # O
+159  # O
+160  # O
+161  # O
+162  # O
+163  # O
+164  # O
+165  # O
+166  # O
+167  # O
+169  # O
+170  # O
+171  # O
+172  # O
+173  # O
+174  # O
+176  # O
+177  # O
+178  # O
+180  # O
+181  # O
+182  # O
+184  # O
+185  # O
+186  # O
+188  # O
+189  # O
+190  # O
+191  # O
+
+# --- Hard line breaks (3 failing) ---
+638
+639
+644
+
+# --- Images (6 failing) ---
+573
+576
+585
+587
+589
+
+# --- Indented code blocks (6 failing) ---
+115
+117
+
+# --- Link reference definitions (15 failing) ---
+193
+194
+195
+196
+198
+200
+201
+202
+208
+212
+213
+217
+218
+
+# --- Links (46 failing) ---
+488
+490
+491
+493
+494
+497
+508
+510
+514
+518
+519
+520
+522
+523
+524
+525
+526
+532
+533
+535
+536
+537
+538
+540
+541
+545
+546
+549
+550
+552
+554
+556
+558
+559
+560
+568
+569
+571
+
+# --- List items (34 failing) ---
+259
+273
+274
+278
+280
+292
+293
+295
+297
+298
+299
+300
+
+# --- Lists (16 failing) ---
+301
+302
+304
+310
+312
+318
+320
+321
+324
+
+# --- Paragraphs (1 failing) ---
+
+# --- Precedence (1 failing) ---
+42
+
+# --- Raw HTML (5 failing) ---
+620  # O
+626  # O
+627  # O
+628  # O
+629  # O
+
+# --- Setext headings (7 failing) ---
+82
+84
+93
+
+# --- Soft line breaks (1 failing) ---
+649
+
+# --- Tabs (7 failing) ---
+5
+6
+7
+
+# --- Thematic breaks (6 failing) ---
+55
+61
+

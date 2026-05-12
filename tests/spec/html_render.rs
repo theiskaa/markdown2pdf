@@ -37,16 +37,16 @@ fn render_blocks(tokens: &[Token], out: &mut String, in_loose_list_item: bool) {
                 out.push_str("<hr />\n");
                 i += 1;
             }
-            Token::Code(lang, body) if is_code_block(lang, body) => {
+            Token::Code { language, content, block: true } => {
                 out.push_str("<pre><code");
-                let lang_first = lang.split_whitespace().next().unwrap_or("");
+                let lang_first = language.split_whitespace().next().unwrap_or("");
                 if !lang_first.is_empty() {
                     out.push_str(" class=\"language-");
                     out.push_str(&escape_attr(lang_first));
                     out.push('"');
                 }
                 out.push('>');
-                out.push_str(&escape_text(body));
+                out.push_str(&escape_text(content));
                 out.push('\n');
                 out.push_str("</code></pre>\n");
                 i += 1;
@@ -87,11 +87,8 @@ fn render_blocks(tokens: &[Token], out: &mut String, in_loose_list_item: bool) {
     }
 }
 
-fn is_code_block(lang: &str, body: &str) -> bool {
-    // Block code spans show up as Code with a non-empty language or a body
-    // that contains a newline. Inline Code spans always have an empty
-    // language and no newline.
-    !lang.is_empty() || body.contains('\n')
+fn is_code_block_tok(tok: &Token) -> bool {
+    matches!(tok, Token::Code { block: true, .. })
 }
 
 fn scan_list_end(tokens: &[Token], start: usize) -> usize {
@@ -171,9 +168,14 @@ fn render_list_item(
     let (inline_run, nested) = split_item_content(content);
     if loose {
         out.push('\n');
-        out.push_str("<p>");
-        render_inlines(&inline_run, out);
-        out.push_str("</p>\n");
+        // Loose-list item content may contain blank-line-separated
+        // paragraphs (encoded as ≥2 consecutive Newline tokens). Walk the
+        // inline_run, emit a `<p>...</p>` for each paragraph chunk.
+        for chunk in split_paragraphs(&inline_run) {
+            out.push_str("<p>");
+            render_inlines(&chunk, out);
+            out.push_str("</p>\n");
+        }
         if !nested.is_empty() {
             render_blocks(&nested, out, false);
         }
@@ -185,6 +187,32 @@ fn render_list_item(
         }
     }
     out.push_str("</li>\n");
+}
+
+fn split_paragraphs(tokens: &[Token]) -> Vec<Vec<Token>> {
+    let mut out = Vec::new();
+    let mut buf: Vec<Token> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if matches!(tokens[i], Token::Newline)
+            && i + 1 < tokens.len()
+            && matches!(tokens[i + 1], Token::Newline)
+        {
+            if !buf.is_empty() {
+                out.push(std::mem::take(&mut buf));
+            }
+            while i < tokens.len() && matches!(tokens[i], Token::Newline) {
+                i += 1;
+            }
+            continue;
+        }
+        buf.push(tokens[i].clone());
+        i += 1;
+    }
+    if !buf.is_empty() {
+        out.push(buf);
+    }
+    out
 }
 
 fn split_item_content(content: &[Token]) -> (Vec<Token>, Vec<Token>) {
@@ -217,7 +245,7 @@ fn is_block_level(tok: &Token) -> bool {
             | Token::ListItem { .. }
             | Token::HorizontalRule
             | Token::Table { .. }
-    ) || matches!(tok, Token::Code(lang, body) if is_code_block(lang, body))
+    ) || is_code_block_tok(tok)
 }
 
 fn find_inline_run_end(tokens: &[Token], start: usize) -> usize {
@@ -283,7 +311,7 @@ fn render_inline_token(t: &Token, out: &mut String) {
             render_inlines(content, out);
             out.push_str("</del>");
         }
-        Token::Code(_, body) => {
+        Token::Code { content: body, .. } => {
             out.push_str("<code>");
             out.push_str(&escape_text(body));
             out.push_str("</code>");
@@ -396,19 +424,33 @@ fn escape_attr(s: &str) -> String {
 }
 
 fn escape_url(s: &str) -> String {
-    // Per CommonMark spec output: percent-encode bytes that aren't already
-    // a "safe" ASCII set. Also escape `&`/`<`/`>`/`"` as entities so the
-    // resulting attribute is valid HTML.
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
+    // CommonMark reference output percent-encodes URL bytes outside a
+    // specific "safe" ASCII set, then HTML-escapes `&` `<` `>` `"`. The safe
+    // set comes from the cmark reference impl: alphanumerics + a fixed
+    // punctuation list. Anything else (non-ASCII, spaces, backslash, etc.)
+    // is %-encoded byte-by-byte. Then the result is HTML-escaped.
+    fn is_url_safe(b: u8) -> bool {
+        matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9')
+            || matches!(
+                b,
+                b'-' | b'_' | b'.' | b'~' | b'!' | b'*' | b'\'' | b'('
+                | b')' | b';' | b':' | b'@' | b'&' | b'=' | b'+'
+                | b'$' | b',' | b'/' | b'?' | b'#' | b'%' | b'['
+                | b']'
+            )
+    }
+    let mut percent = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        if is_url_safe(byte) {
+            percent.push(byte as char);
+        } else {
+            percent.push_str(&format!("%{:02X}", byte));
+        }
+    }
+    let mut out = String::with_capacity(percent.len());
+    for c in percent.chars() {
         match c {
             '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            ' ' => out.push_str("%20"),
-            // Other URL-unsafe chars per CommonMark spec testing tradition.
-            // Conservative pass-through: ASCII printable + most Unicode.
             _ => out.push(c),
         }
     }

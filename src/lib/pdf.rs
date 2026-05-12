@@ -351,10 +351,10 @@ impl Pdf {
                     current_tokens.clear();
                     self.render_list_item(doc, content, *ordered, *number, *checked, 0);
                 }
-                Token::Code(lang, content) if content.contains('\n') => {
+                Token::Code { language, content, block: true } => {
                     self.flush_paragraph(doc, &current_tokens);
                     current_tokens.clear();
-                    self.render_code_block(doc, lang, content);
+                    self.render_code_block(doc, language, content);
                 }
                 Token::HorizontalRule => {
                     self.flush_paragraph(doc, &current_tokens);
@@ -523,7 +523,7 @@ impl Pdf {
                     let text = Token::collect_all_text(content);
                     para.push_link(text, url.clone(), link_style);
                 }
-                Token::Code(_, content) => {
+                Token::Code { content, .. } => {
                     let mut code_style = style.clone();
                     if let Some(color) = self.style.code.text_color {
                         code_style = code_style
@@ -652,9 +652,9 @@ impl Pdf {
                     flush_inline(self, doc, &mut buffer, &style);
                     self.render_heading(doc, content, *level);
                 }
-                Token::Code(lang, content) if content.contains('\n') => {
+                Token::Code { language, content, block: true } => {
                     flush_inline(self, doc, &mut buffer, &style);
-                    self.render_code_block(doc, lang, content);
+                    self.render_code_block(doc, language, content);
                 }
                 Token::HorizontalRule => {
                     flush_inline(self, doc, &mut buffer, &style);
@@ -951,10 +951,7 @@ mod tests {
 
     #[test]
     fn test_render_code_blocks() {
-        let tokens = vec![Token::Code(
-            "rust".to_string(),
-            "fn main() {\n    println!(\"Hello\");\n}".to_string(),
-        )];
+        let tokens = vec![Token::Code { language: "rust".to_string(), content: "fn main() {\n    println!(\"Hello\");\n}".to_string(), block: true }];
         let pdf = create_test_pdf(tokens);
         let doc = pdf.render_into_document();
         assert!(Pdf::render(doc, "/dev/null").is_none());
@@ -1023,7 +1020,7 @@ mod tests {
                 checked: None,
                 loose: false,
             },
-            Token::Code("rust".to_string(), "let x = 42;".to_string()),
+            Token::Code { language: "rust".to_string(), content: "let x = 42;".to_string(), block: true },
         ];
         let pdf = create_test_pdf(tokens);
         let doc = pdf.render_into_document();
@@ -1094,10 +1091,7 @@ mod tests {
                 checked: None,
                 loose: false,
             },
-            Token::Code(
-                "rust".to_string(),
-                "fn main() {\n    println!(\"Hello\");\n}".to_string(),
-            ),
+            Token::Code { language: "rust".to_string(), content: "fn main() {\n    println!(\"Hello\");\n}".to_string(), block: true },
             Token::Link {
                 content: vec![Token::Text("Example Link".to_string())],
                 url: "https://example.com".to_string(),

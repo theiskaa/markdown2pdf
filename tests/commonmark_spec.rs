@@ -6,7 +6,7 @@ use spec::runner;
 fn commonmark_spec_suite() {
     let result = runner::run();
     runner::print_report(&result);
-    runner::print_failure_details(&result, 25);
+    runner::print_failure_details(&result, 500);
     assert!(
         result.regressed.is_empty(),
         "{} examples failed that aren't in known_failures.txt — see report above. \

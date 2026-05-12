@@ -88,9 +88,9 @@ impl Token {
                 result
             }
 
-            Token::Code(language, content) => {
-                format!("{}{{\n{}\"type\": \"Code\",\n{}\"language\": \"{}\",\n{}\"content\": \"{}\"\n{}}}",
-                    indent, inner_indent, inner_indent,
+            Token::Code { language, content, block } => {
+                format!("{}{{\n{}\"type\": \"Code\",\n{}\"block\": {},\n{}\"language\": \"{}\",\n{}\"content\": \"{}\"\n{}}}",
+                    indent, inner_indent, inner_indent, block, inner_indent,
                     language.replace("\"", "\\\""), inner_indent,
                     content.replace("\"", "\\\"").replace("\n", "\\n"), indent)
             }
@@ -415,8 +415,9 @@ impl Token {
                 format!("Emphasis({}, {})", level, list(content))
             }
             Token::StrongEmphasis(content) => format!("StrongEmphasis({})", list(content)),
-            Token::Code(language, content) => {
-                format!("Code({}, {})", quote(language), quote(content))
+            Token::Code { language, content, block } => {
+                let kind = if *block { "CodeBlock" } else { "CodeSpan" };
+                format!("{}({}, {})", kind, quote(language), quote(content))
             }
             Token::BlockQuote(body) => format!("BlockQuote({})", list(body)),
             Token::ListItem {
