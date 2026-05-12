@@ -43,6 +43,8 @@
 
 use genpdfi::Alignment;
 use std::collections::HashMap;
+
+include!(concat!(env!("OUT_DIR"), "/entities_table.rs"));
 /// Parsing context — determines which tokens are valid in the current location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseContext {
@@ -210,13 +212,22 @@ impl Token {
 /// `Some((decoded_string, length_consumed))` so the caller can advance.
 /// Returns `None` if the sequence isn't a valid recognized entity, in which
 /// case the caller should emit `&` as a literal char.
+///
+/// Per CommonMark §2.5, only semicolon-terminated references are valid.
+/// Numeric references for code point 0, surrogates, or values above
+/// 0x10FFFF decode to U+FFFD (REPLACEMENT CHARACTER) rather than failing —
+/// only syntactically invalid references (empty digits, non-hex digits,
+/// missing `;`) fall back to a literal `&`.
 fn try_decode_entity(chars: &[char], start: usize) -> Option<(String, usize)> {
     if chars.get(start) != Some(&'&') {
         return None;
     }
-    // Find the terminating `;` within a reasonable lookahead.
+    // The longest CommonMark-valid entity name is 31 chars
+    // (`CounterClockwiseContourIntegral`); plus `&` and `;` that's 33.
+    // Numeric refs can reach `&#xXXXXXXXX;` = 12 chars. 64 leaves headroom
+    // and rules out runaway scans through giant paragraphs.
     let mut end = start + 1;
-    while end < chars.len() && end - start < 32 {
+    while end < chars.len() && end - start < 64 {
         if chars[end] == ';' {
             break;
         }
@@ -238,29 +249,29 @@ fn try_decode_entity(chars: &[char], start: usize) -> Option<(String, usize)> {
         if digits.is_empty() {
             return None;
         }
-        let code = u32::from_str_radix(digits, radix).ok()?;
-        let ch = char::from_u32(code)?;
+        // Per CommonMark §2.5: invalid Unicode code points (including the
+        // null character, surrogates, and out-of-range values) are
+        // replaced with U+FFFD. Only a *syntactic* failure (overflowing
+        // u32, non-digits in the chosen radix) falls back to literal.
+        let Ok(code) = u32::from_str_radix(digits, radix) else {
+            return None;
+        };
+        let ch = if code == 0 || (0xD800..=0xDFFF).contains(&code) || code > 0x10FFFF {
+            '\u{FFFD}'
+        } else {
+            match char::from_u32(code) {
+                Some(c) => c,
+                None => '\u{FFFD}',
+            }
+        };
         return Some((ch.to_string(), consumed));
     }
 
-    // Named entity. Only the small whitelisted set is decoded; everything else
-    // passes through unchanged.
-    let decoded = match body.as_str() {
-        "amp" => Some("&"),
-        "lt" => Some("<"),
-        "gt" => Some(">"),
-        "quot" => Some("\""),
-        "apos" => Some("'"),
-        "copy" => Some("©"),
-        "reg" => Some("®"),
-        "trade" => Some("™"),
-        "nbsp" => Some("\u{00A0}"),
-        "mdash" => Some("—"),
-        "ndash" => Some("–"),
-        "hellip" => Some("…"),
-        _ => None,
-    }?;
-    Some((decoded.to_string(), consumed))
+    // Named entity — full CommonMark / WHATWG HTML5 table (~2,125 entries)
+    // built at compile time by build.rs.
+    NAMED_ENTITIES
+        .get(body.as_str())
+        .map(|s| ((*s).to_string(), consumed))
 }
 
 /// Tries to parse a single line as a CommonMark link reference definition:
@@ -4736,6 +4747,102 @@ mod entity_reference_tests {
         // Out-of-range / malformed numerics pass through unchanged.
         assert_eq!(collected("&#xZZZ;"), "&#xZZZ;");
         assert_eq!(collected("&#abc;"), "&#abc;");
+    }
+
+    // --- Section 1 (full HTML5 table) coverage ---
+
+    #[test]
+    fn extended_named_entities_decode() {
+        // Sample entries spanning the alphabet / character planes.
+        assert_eq!(collected("&alpha;"), "\u{03B1}");
+        assert_eq!(collected("&beta;"), "\u{03B2}");
+        assert_eq!(collected("&Pi;"), "\u{03A0}");
+        assert_eq!(collected("&infin;"), "\u{221E}");
+        assert_eq!(collected("&euro;"), "\u{20AC}");
+        assert_eq!(collected("&para;"), "\u{00B6}");
+        assert_eq!(collected("&shy;"), "\u{00AD}"); // soft hyphen
+    }
+
+    #[test]
+    fn longest_named_entity_decodes() {
+        // 31-char body; verifies the lookahead is wide enough.
+        assert_eq!(
+            collected("&CounterClockwiseContourIntegral;"),
+            "\u{2233}"
+        );
+    }
+
+    #[test]
+    fn multi_codepoint_named_entities_decode() {
+        // Some entries map to two code points.
+        assert_eq!(collected("&fjlig;"), "fj");
+        assert_eq!(collected("&ThickSpace;"), "\u{205F}\u{200A}");
+    }
+
+    #[test]
+    fn entity_names_are_case_sensitive() {
+        // Per HTML5: `Aacute` and `aacute` are distinct entries.
+        assert_eq!(collected("&Aacute;"), "\u{00C1}");
+        assert_eq!(collected("&aacute;"), "\u{00E1}");
+    }
+
+    #[test]
+    fn numeric_null_becomes_replacement_char() {
+        // CommonMark §2.5: code point 0 → U+FFFD.
+        assert_eq!(collected("&#0;"), "\u{FFFD}");
+        assert_eq!(collected("&#x0;"), "\u{FFFD}");
+    }
+
+    #[test]
+    fn numeric_surrogate_becomes_replacement_char() {
+        // Surrogates D800..=DFFF → U+FFFD.
+        assert_eq!(collected("&#xD800;"), "\u{FFFD}");
+        assert_eq!(collected("&#xDFFF;"), "\u{FFFD}");
+        assert_eq!(collected("&#55296;"), "\u{FFFD}"); // 0xD800 decimal
+    }
+
+    #[test]
+    fn numeric_out_of_range_becomes_replacement_char() {
+        // > U+10FFFF → U+FFFD.
+        assert_eq!(collected("&#x110000;"), "\u{FFFD}");
+        assert_eq!(collected("&#1114112;"), "\u{FFFD}");
+    }
+
+    #[test]
+    fn numeric_overflow_passes_through_literal() {
+        // A digit string that overflows u32 isn't a valid numeric reference;
+        // it should appear verbatim (not silently decode to FFFD).
+        assert_eq!(collected("&#999999999999;"), "&#999999999999;");
+    }
+
+    #[test]
+    fn empty_numeric_digits_passes_through() {
+        // `&#;` and `&#x;` are malformed — no decoding.
+        assert_eq!(collected("&#;"), "&#;");
+        assert_eq!(collected("&#x;"), "&#x;");
+    }
+
+    #[test]
+    fn legacy_non_semicolon_entity_passes_through() {
+        // Per CommonMark, only semicolon-terminated entries decode, even
+        // though browsers accept some legacy forms like `&amp` or `&AElig`.
+        assert_eq!(collected("&AElig hello"), "&AElig hello");
+    }
+
+    #[test]
+    fn many_entities_in_one_paragraph() {
+        // Stress: a fistful of decodings in a single token stream.
+        let text = collected("&alpha; &beta; &gamma; &delta; &epsilon;");
+        assert_eq!(text, "\u{03B1} \u{03B2} \u{03B3} \u{03B4} \u{03B5}");
+    }
+
+    #[test]
+    fn unknown_long_entity_does_not_runaway() {
+        // A bogus `&` with no `;` for many chars must NOT consume the rest
+        // of the document — emits literal `&` and the rest stays text.
+        let text = collected("a &thisnameisreallylongandnotrealatall but continues here.");
+        assert!(text.starts_with("a &thisname"), "got: {:?}", text);
+        assert!(text.contains("continues here"), "got: {:?}", text);
     }
 }
 
