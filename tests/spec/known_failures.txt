@@ -6,11 +6,9 @@
 # --- ATX headings (3 failing) ---
 
 # --- Autolinks (3 failing) ---
-603
-606
 
 # --- Backslash escapes (6 failing) ---
-21
+21  # O
 
 # --- Block quotes (4 failing) ---
 230
@@ -18,7 +16,6 @@
 237
 
 # --- Code spans (2 failing) ---
-342
 
 # --- Emphasis and strong emphasis (22 failing) ---
 354
@@ -45,13 +42,9 @@
 470
 
 # --- Entity and numeric character references (7 failing) ---
-28
-31
+31  # O
 
 # --- Fenced code blocks (16 failing) ---
-126
-130
-144
 
 # --- HTML blocks (40 failing) ---
 148  # O
@@ -95,71 +88,45 @@
 191  # O
 
 # --- Hard line breaks (3 failing) ---
-644
 
 # --- Images (6 failing) ---
 573
 576
 585
-587
 589
 
 # --- Indented code blocks (6 failing) ---
-117
 
 # --- Link reference definitions (15 failing) ---
-194
 201
-212
-213
 218
 
 # --- Links (46 failing) ---
-514
 519
 520
 522
 523
-524
-525
-526
 533
 535
-536
-537
-538
 540
 545
-549
-550
-552
 554
-556
 558
 559
-560
 568
 569
 571
 
 # --- List items (34 failing) ---
 259
-273
-274
 278
-280
 292
 293
-295
-297
-298
-299
 300
 
 # --- Lists (16 failing) ---
 301
 302
-310
 312
 318
 320
@@ -169,7 +136,6 @@
 # --- Paragraphs (1 failing) ---
 
 # --- Precedence (1 failing) ---
-42
 
 # --- Raw HTML (5 failing) ---
 620  # O
@@ -182,14 +148,8 @@
 93
 
 # --- Soft line breaks (1 failing) ---
-649
 
 # --- Tabs (7 failing) ---
-5
-6
-7
 
 # --- Thematic breaks (6 failing) ---
-55
-61
 

@@ -47,7 +47,9 @@ fn render_blocks(tokens: &[Token], out: &mut String, in_loose_list_item: bool) {
                 }
                 out.push('>');
                 out.push_str(&escape_text(content));
-                out.push('\n');
+                if !content.is_empty() {
+                    out.push('\n');
+                }
                 out.push_str("</code></pre>\n");
                 i += 1;
             }
@@ -435,8 +437,7 @@ fn escape_url(s: &str) -> String {
                 b,
                 b'-' | b'_' | b'.' | b'~' | b'!' | b'*' | b'\'' | b'('
                 | b')' | b';' | b':' | b'@' | b'&' | b'=' | b'+'
-                | b'$' | b',' | b'/' | b'?' | b'#' | b'%' | b'['
-                | b']'
+                | b'$' | b',' | b'/' | b'?' | b'#' | b'%'
             )
     }
     let mut percent = String::with_capacity(s.len());

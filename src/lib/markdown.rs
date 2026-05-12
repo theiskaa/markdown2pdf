@@ -287,6 +287,10 @@ fn try_decode_entity(chars: &[char], start: usize) -> Option<(String, usize)> {
         if digits.is_empty() {
             return None;
         }
+        let max_digits = if radix == 16 { 6 } else { 7 };
+        if digits.len() > max_digits {
+            return None;
+        }
         // Invalid Unicode code points (including the null character,
         // surrogates, and out-of-range values) are replaced with U+FFFD.
         // Only a *syntactic* failure (overflowing u32, non-digits in the
@@ -322,43 +326,39 @@ fn try_decode_entity(chars: &[char], start: usize) -> Option<(String, usize)> {
 /// number of spaces in the output. Any non-whitespace content (and any
 /// in-line tabs) past the strip target is preserved verbatim.
 fn strip_leading_cols(chars: &[char], from: usize, to: usize, strip_cols: usize) -> String {
-    let mut out = String::new();
+    // Expand leading whitespace tabs to spaces (tab-stop = 4), strip
+    // `strip_cols` from the result, then append the rest of the line
+    // verbatim. Expanding at the leading edge is what keeps column-aligned
+    // stripping correct under cumulative passes (e.g. list-item content
+    // strip → indented-code strip). Without it, the second pass measures
+    // the post-strip tab as 2 cols instead of its original 4, silently
+    // dropping 2 cols of width.
+    let mut leading = String::new();
     let mut col = 0usize;
     let mut i = from;
     while i < to {
-        let c = chars[i];
-        if c == ' ' && col < strip_cols {
-            col += 1;
-            i += 1;
-            continue;
-        }
-        if c == '\t' && col < strip_cols {
-            let span = 4 - (col % 4);
-            if col + span <= strip_cols {
+        match chars[i] {
+            ' ' => {
+                leading.push(' ');
+                col += 1;
+                i += 1;
+            }
+            '\t' => {
+                let span = 4 - (col % 4);
+                for _ in 0..span {
+                    leading.push(' ');
+                }
                 col += span;
                 i += 1;
-                continue;
             }
-            // Partial-tab consumption: emit leftover cols as spaces, then
-            // stop stripping and pass the rest of the line through.
-            let remainder = (col + span) - strip_cols;
-            for _ in 0..remainder {
-                out.push(' ');
-            }
-            i += 1;
-            while i < to {
-                out.push(chars[i]);
-                i += 1;
-            }
-            return out;
+            _ => break,
         }
-        // Either col >= strip_cols, or we hit non-whitespace — copy the
-        // rest verbatim.
-        while i < to {
-            out.push(chars[i]);
-            i += 1;
-        }
-        return out;
+    }
+    let stripped: String = leading.chars().skip(strip_cols).collect();
+    let mut out = stripped;
+    while i < to {
+        out.push(chars[i]);
+        i += 1;
     }
     out
 }
@@ -753,10 +753,76 @@ fn item_has_internal_blank(tok: &Token) -> bool {
 
 /// Normalizes a reference-link label ASCII case-fold
 /// plus internal-whitespace collapse plus leading/trailing trim.
+/// True if the line `chars[start..end]` is blank or is a single-line block
+/// construct (ATX heading, thematic break) — i.e., it does NOT leave an open
+/// paragraph behind. Used by `extract_definitions` to decide whether the
+/// next line is allowed to begin a link-reference definition.
+fn is_paragraph_breaking_line_chars(chars: &[char], start: usize, end: usize) -> bool {
+    let mut p = start;
+    let mut indent = 0;
+    while p < end && chars[p] == ' ' && indent < 3 {
+        p += 1;
+        indent += 1;
+    }
+    if p >= end {
+        return true; // blank line
+    }
+    // ATX heading: 1-6 `#` then space/tab/EOL.
+    if chars[p] == '#' {
+        let mut h = 0;
+        while p + h < end && chars[p + h] == '#' {
+            h += 1;
+        }
+        if (1..=6).contains(&h) {
+            let after = chars.get(p + h);
+            if after.is_none()
+                || matches!(after, Some(' ') | Some('\t') | Some('\n'))
+            {
+                return true;
+            }
+        }
+    }
+    // Thematic break: 3+ matching markers from `-`/`*`/`_`, with allowed
+    // interspersed whitespace.
+    if matches!(chars[p], '-' | '*' | '_') {
+        let marker = chars[p];
+        let mut count = 0;
+        let mut q = p;
+        while q < end {
+            if chars[q] == marker {
+                count += 1;
+            } else if chars[q] != ' ' && chars[q] != '\t' {
+                return false;
+            }
+            q += 1;
+        }
+        if count >= 3 {
+            return true;
+        }
+    }
+    false
+}
+
 fn normalize_label(s: &str) -> String {
     let mut out = String::new();
-    let mut prev_ws = true; // leading whitespace is collapsed away
-    for c in s.chars() {
+    let mut prev_ws = true;
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        // Backslash escapes are processed before label comparison so a
+        // definition `[foo\]]` matches a reference `[foo\]]`.
+        if c == '\\'
+            && i + 1 < chars.len()
+            && is_ascii_punctuation(chars[i + 1])
+        {
+            for ch in chars[i + 1].to_lowercase() {
+                out.push(ch);
+            }
+            prev_ws = false;
+            i += 2;
+            continue;
+        }
         if c.is_whitespace() {
             if !prev_ws {
                 out.push(' ');
@@ -768,6 +834,7 @@ fn normalize_label(s: &str) -> String {
             }
             prev_ws = false;
         }
+        i += 1;
     }
     while out.ends_with(' ') {
         out.pop();
@@ -913,17 +980,31 @@ impl Lexer {
         let mut definitions = HashMap::new();
         let mut kept: Vec<char> = Vec::with_capacity(chars.len());
         let mut i = 0usize;
+        // A link-reference definition cannot interrupt a paragraph. It is
+        // only valid at a position where a new block can begin — meaning
+        // the previous line was blank, was a single-line block (ATX
+        // heading, thematic break), was itself a definition, or we're at
+        // BOF.
+        let mut may_start_def = true;
+        let mut line_start = 0usize;
         while i < chars.len() {
-            // Definitions only start at line-beginning (BOF or after \n).
             let at_line_start = i == 0 || chars[i - 1] == '\n';
             if at_line_start {
-                if let Some((label, url, title, end)) = try_parse_definition(&chars, i) {
-                    definitions
-                        .entry(normalize_label(&label))
-                        .or_insert((url, title));
-                    i = end;
-                    continue;
+                line_start = i;
+                if may_start_def {
+                    if let Some((label, url, title, end)) = try_parse_definition(&chars, i) {
+                        definitions
+                            .entry(normalize_label(&label))
+                            .or_insert((url, title));
+                        i = end;
+                        may_start_def = true;
+                        continue;
+                    }
                 }
+            }
+            if chars[i] == '\n' {
+                may_start_def =
+                    is_paragraph_breaking_line_chars(&chars, line_start, i);
             }
             kept.push(chars[i]);
             i += 1;
@@ -1515,6 +1596,29 @@ impl Lexer {
                     self.position = body_start;
                     return Token::Text("`".repeat(opener_count));
                 }
+                // A line starting a new block (list marker, ATX heading,
+                // thematic break, fenced code) terminates the surrounding
+                // paragraph, so the code span cannot reach across it.
+                let next_line_start = self.position + 1;
+                let mut p = next_line_start;
+                let mut cols = 0usize;
+                while p < self.input.len() && cols < 3 {
+                    match self.input[p] {
+                        ' ' => {
+                            cols += 1;
+                            p += 1;
+                        }
+                        '\t' => {
+                            cols += 4 - (cols % 4);
+                            p += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                if p < self.input.len() && self.line_starts_new_block_at(p) {
+                    self.position = body_start;
+                    return Token::Text("`".repeat(opener_count));
+                }
                 content.push(' ');
                 self.advance();
                 continue;
@@ -1751,15 +1855,47 @@ impl Lexer {
                 // remaining 3 columns of indent in the body. Inject them as
                 // literal spaces on the body line so the sub-lexer's indent
                 // counting sees the correct content offset.
+                // `>` consumed col 0. After it, an optional single space or
+                // tab acts as the marker separator. Track original column so
+                // that tabs in the body's leading whitespace expand to spaces
+                // with correct column alignment (a tab at original col N
+                // spans to the next multiple of 4).
                 let mut body_prefix = String::new();
+                let mut orig_col: usize = 1;
                 if self.position < self.input.len() {
                     match self.current_char() {
-                        ' ' => self.advance(),
+                        ' ' => {
+                            self.advance();
+                            orig_col += 1;
+                        }
                         '\t' => {
                             self.advance();
-                            body_prefix.push_str("   ");
+                            let span = 4 - (orig_col % 4);
+                            // 1 col is the separator slot; the rest is body indent.
+                            for _ in 0..(span - 1) {
+                                body_prefix.push(' ');
+                            }
+                            orig_col += span;
                         }
                         _ => {}
+                    }
+                }
+                while self.position < self.input.len() {
+                    match self.current_char() {
+                        '\t' => {
+                            let span = 4 - (orig_col % 4);
+                            for _ in 0..span {
+                                body_prefix.push(' ');
+                            }
+                            orig_col += span;
+                            self.advance();
+                        }
+                        ' ' => {
+                            body_prefix.push(' ');
+                            orig_col += 1;
+                            self.advance();
+                        }
+                        _ => break,
                     }
                 }
                 let rest = self.read_until_newline();
@@ -1872,11 +2008,32 @@ impl Lexer {
         self.advance(); // skip '['
         let content = self.parse_nested_content(|c| c == ']', ParseContext::Inline)?;
         if self.position >= self.input.len() || self.current_char() != ']' {
-            // No closing bracket found — emit literal `[` plus whatever we
-            // parsed so the brackets aren't lost.
-            let mut s = String::from("[");
-            s.push_str(&Token::collect_all_text(&content));
-            return Ok(Token::Text(s));
+            // No closing bracket. If the body parsed cleanly into text +
+            // newlines, flatten the whole `[…` run into one Text — the
+            // dispatcher would re-emit the same chars anyway, and a bare
+            // rewind on inputs like `[[[` would cause the outer call to
+            // re-encounter the same `[`. Newlines must round-trip as `\n`
+            // so multi-line link-text fragments preserve the line break.
+            // If the body produced structured inlines (Code, HtmlInline,
+            // Emphasis, etc.), rewind so the dispatcher can re-emit them
+            // with structure intact.
+            let only_text = content
+                .iter()
+                .all(|t| matches!(t, Token::Text(_) | Token::Newline));
+            if only_text {
+                let mut s = String::from("[");
+                for t in &content {
+                    match t {
+                        Token::Text(t) => s.push_str(t),
+                        Token::Newline => s.push('\n'),
+                        _ => {}
+                    }
+                }
+                return Ok(Token::Text(s));
+            }
+            self.pending_hard_break = false;
+            self.position = bracket_pos + 1;
+            return Ok(Token::Text("[".to_string()));
         }
         // Nested-link prevention: if the parsed inline content already
         // contains a Link, the outer `[…]` must NOT form a link. Rewind
@@ -2479,7 +2636,29 @@ impl Lexer {
             let mut parts = body.splitn(2, '@');
             let local = parts.next().unwrap_or("");
             let domain = parts.next().unwrap_or("");
-            !local.is_empty() && domain.contains('.')
+            // Email autolinks restrict the local part to a specific char set
+            // (no `\`, no parentheses, etc.) and require the domain to look
+            // like one-or-more dot-separated labels of ASCII alphanumerics
+            // and hyphens.
+            let local_ok = !local.is_empty()
+                && local.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(
+                            c,
+                            '.' | '!' | '#' | '$' | '%' | '&' | '\'' | '*'
+                            | '+' | '/' | '=' | '?' | '^' | '_' | '`' | '{'
+                            | '|' | '}' | '~' | '-'
+                        )
+                });
+            let domain_ok = !domain.is_empty()
+                && domain.split('.').all(|label| {
+                    !label.is_empty()
+                        && label.len() <= 63
+                        && !label.starts_with('-')
+                        && !label.ends_with('-')
+                        && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                });
+            local_ok && domain_ok && domain.contains('.')
         };
 
         if !is_url_scheme && !is_email {
@@ -2565,21 +2744,35 @@ impl Lexer {
 
         // Hard line break: 2+ trailing spaces or a lone trailing backslash
         // before `\n`. Valid in any inline run except inside a heading
-        // (which is a single-line construct per spec).
+        // (which is a single-line construct per spec). A hard break only
+        // forms when actual content follows on the next line — at EOF or
+        // before a blank line the trailing `\` is just literal text.
         if self.position < self.input.len()
             && self.current_char() == '\n'
             && !self.in_heading
         {
-            if content.ends_with("  ") {
+            let has_follow = self.has_content_after_newline(self.position);
+            if content.ends_with("  ") && has_follow {
                 while content.ends_with(' ') {
                     content.pop();
                 }
-                self.advance(); // consume the \n
+                self.advance();
                 self.pending_hard_break = true;
-            } else if !last_was_escape && content.ends_with('\\') {
+            } else if !last_was_escape
+                && content.ends_with('\\')
+                && has_follow
+            {
                 content.pop();
-                self.advance(); // consume the \n
+                self.advance();
                 self.pending_hard_break = true;
+            } else {
+                // Soft break: strip trailing spaces so they don't render in
+                // the paragraph text. Leading spaces on the continuation line
+                // are already eaten by `skip_whitespace` before the next
+                // parse_text call.
+                while content.ends_with(' ') {
+                    content.pop();
+                }
             }
         }
 
@@ -2960,22 +3153,46 @@ impl Lexer {
         )
     }
 
-    /// Checks if the current position contains a horizontal rule (---)
+    /// True if the byte at `pos` is `\n` AND the next line contains some
+    /// non-whitespace character before its terminating newline. Used to gate
+    /// hard-line-break formation at end-of-paragraph: a trailing `\` or two
+    /// trailing spaces only form a `<br />` when there's an actual following
+    /// line of inline content to break to.
+    fn has_content_after_newline(&self, pos: usize) -> bool {
+        let mut p = pos + 1;
+        while p < self.input.len() {
+            match self.input[p] {
+                '\n' => return false,
+                ' ' | '\t' => p += 1,
+                _ => return true,
+            }
+        }
+        false
+    }
+
+    /// Checks if the current position contains a horizontal rule (---).
+    /// Requires ≥3 consecutive hyphens AND only whitespace before the next
+    /// `\n` — otherwise inputs like `---a---` would split into HR + text.
     fn check_horizontal_rule(&mut self) -> Result<bool, LexerError> {
         if self.current_char() == '-' {
             let mut count = 1;
             let mut pos = self.position + 1;
-
-            // Look ahead for at least 3 consecutive hyphens
             while pos < self.input.len() && self.input[pos] == '-' {
                 count += 1;
                 pos += 1;
             }
-
-            if count >= 3 {
-                self.position = pos;
-                return Ok(true);
+            if count < 3 {
+                return Ok(false);
             }
+            let mut tail = pos;
+            while tail < self.input.len() && self.input[tail] != '\n' {
+                if self.input[tail] != ' ' && self.input[tail] != '\t' {
+                    return Ok(false);
+                }
+                tail += 1;
+            }
+            self.position = pos;
+            return Ok(true);
         }
         Ok(false)
     }
@@ -3374,7 +3591,16 @@ impl Lexer {
         };
         let content_offset = marker_col + marker_width + separator;
 
-        self.skip_whitespace();
+        // If the gap between marker and content is 5+ columns AND there's
+        // non-blank content following on the same line, the first line is
+        // an indented code block. Strip exactly content_offset cols
+        // (marker + 1-col separator) and feed the remainder into a
+        // sub-lexer as Root-context content so the indented-code path fires.
+        let first_line_is_indented_code = spaces_after >= 5 && !following_is_eol;
+
+        if !first_line_is_indented_code {
+            self.skip_whitespace();
+        }
 
         // GFM task list: detect `[ ]`, `[x]`, `[X]` immediately after the
         // list marker. Must be followed by a space (or EOL) to count.
@@ -3403,6 +3629,69 @@ impl Lexer {
         }
 
         let mut content = Vec::new();
+        if first_line_is_indented_code {
+            // Expand leading tabs to spaces using the ORIGINAL column
+            // (self.position currently corresponds to col marker_col +
+            // marker_width), strip 1 col for the marker's separator slot,
+            // and feed the rest to a sub-lexer. The ≥4 cols of remaining
+            // leading whitespace trigger the sub-lexer's indented-code path.
+            let line_end = (self.position..self.input.len())
+                .find(|&i| self.input[i] == '\n')
+                .unwrap_or(self.input.len());
+            let mut col = marker_col + marker_width;
+            let mut expanded = String::new();
+            let mut i = self.position;
+            while i < line_end {
+                match self.input[i] {
+                    '\t' => {
+                        let span = 4 - (col % 4);
+                        for _ in 0..span {
+                            expanded.push(' ');
+                        }
+                        col += span;
+                        i += 1;
+                    }
+                    ' ' => {
+                        expanded.push(' ');
+                        col += 1;
+                        i += 1;
+                    }
+                    _ => break,
+                }
+            }
+            while i < line_end {
+                expanded.push(self.input[i]);
+                i += 1;
+            }
+            let stripped: String = expanded.chars().skip(separator).collect();
+            self.position = line_end;
+            let mut sub = Lexer::new(stripped);
+            let sub_tokens = sub.parse_with_context(ParseContext::Root)?;
+            content.extend(sub_tokens);
+        }
+        // First-line block constructs that the regular inline dispatcher won't
+        // recognize past the list marker (block_marker_start fails because
+        // walking back hits the `-`/digit, not `\n`). A thematic break,
+        // ATX heading, or nested list marker can occupy the entire content
+        // of a list item — handle them up front before the inline-token loop.
+        if !first_line_is_indented_code
+            && self.position < self.input.len()
+            && self.current_char() != '\n'
+        {
+            let ch = self.current_char();
+            if self.is_thematic_break_line() {
+                self.consume_current_line();
+                content.push(Token::HorizontalRule);
+            } else if ch == '#' && self.is_atx_heading_start() {
+                content.push(self.parse_heading()?);
+            } else if (ch == '-' || ch == '+') && self.is_list_marker(ch) {
+                content.push(self.parse_list_item(false, content_offset, parent_ctx)?);
+            } else if ch == '*' && self.is_list_marker('*') {
+                content.push(self.parse_list_item(false, content_offset, parent_ctx)?);
+            } else if ch.is_ascii_digit() && self.check_ordered_list_marker().is_some() {
+                content.push(self.parse_list_item(true, content_offset, parent_ctx)?);
+            }
+        }
         while self.position < self.input.len() && self.current_char() != '\n' {
             if let Some(token) = self.next_token(ParseContext::ListItem)? {
                 content.push(token);
@@ -3444,6 +3733,14 @@ impl Lexer {
             // is indented to at least the item's content offset, the item
             // continues with a new paragraph; otherwise it ends here.
             if after_indent >= self.input.len() || self.input[after_indent] == '\n' {
+                // An empty list item (no content on the first line) cannot
+                // grow lazy continuation across a blank line — the item
+                // terminates and any indented content below becomes a
+                // separate block.
+                let item_has_content = content.iter().any(|t| !matches!(t, Token::Newline));
+                if !item_has_content {
+                    break;
+                }
                 let mut p = line_start;
                 while p < self.input.len() {
                     let line_end = (p..self.input.len())
@@ -3515,8 +3812,13 @@ impl Lexer {
             let is_marker_line = self.line_starts_with_list_marker(after_indent);
             let next_ch = self.input[after_indent];
 
-            if cur_indent > indent_level {
-                // Deeper-indented line: prefer nested-list-marker handling.
+            if cur_indent >= content_offset {
+                // Indent reaches the item's content offset: continuation
+                // or nested-marker territory. Below this threshold, even a
+                // line whose indent exceeds the item's leading column is a
+                // SIBLING (e.g. ` - bar` after a `- foo` opener cannot
+                // nest because content_offset is 2 cols but the next
+                // marker sits at col 1).
                 if is_marker_line {
                     self.position = after_indent;
                     match next_ch {
@@ -3955,7 +4257,7 @@ impl Lexer {
         }
         Token::Code {
             language: String::new(),
-            content: content.trim_end_matches('\n').to_string(),
+            content: content.trim_matches('\n').to_string(),
             block: true,
         }
     }
