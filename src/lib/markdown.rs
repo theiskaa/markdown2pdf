@@ -1136,33 +1136,85 @@ impl Lexer {
 
     /// Parses a blockquote, consuming consecutive `>`-prefixed lines and
     /// recursively lexing the body so inline formatting works (CommonMark
-    /// §5.1). A blank line ends the quote; lazy continuation is not yet
-    /// supported.
+    /// §5.1). Supports §5.2 lazy continuation: a non-`>`-prefixed line that
+    /// doesn't itself start a new block construct joins the open paragraph.
+    ///
+    /// A line terminates the quote when it is blank at top level, or when it
+    /// begins a new block construct that interrupts paragraphs (ATX heading,
+    /// thematic break, list marker, fenced code). Lazy continuation is only
+    /// permitted when the most recent body line was non-blank (a blank `>`
+    /// line closes the paragraph, after which a top-level line is no longer
+    /// lazy). Nesting works because the sub-lexer reruns this logic.
+    ///
+    /// Known limitation: lazy continuation does NOT track which kind of block
+    /// is open inside the quote. If the inner block is an indented code block
+    /// or heading rather than a paragraph, lazy lines will incorrectly extend
+    /// it. Fixing that needs full block-state tracking and is deferred.
     fn parse_blockquote(&mut self) -> Result<Token, LexerError> {
         let mut body_lines: Vec<String> = Vec::new();
 
         loop {
-            // Consume the `>` marker.
-            if self.position >= self.input.len() || self.current_char() != '>' {
+            if self.position >= self.input.len() || !self.is_at_line_start() {
                 break;
             }
-            self.advance();
-            // Optional single space after `>`.
-            if self.position < self.input.len() && self.current_char() == ' ' {
-                self.advance();
+            let line_start = self.position;
+            // Skip up to 3 leading spaces for marker detection (per §5.1
+            // marker may have 0-3 spaces of indent).
+            let mut peek = line_start;
+            let mut leading = 0usize;
+            while peek < self.input.len() && self.input[peek] == ' ' && leading < 3 {
+                peek += 1;
+                leading += 1;
             }
-            // Take the rest of the line.
-            let line = self.read_until_newline();
-            body_lines.push(line);
+            let is_marked =
+                peek < self.input.len() && self.input[peek] == '>';
+
+            if is_marked {
+                self.position = peek;
+                self.advance(); // '>'
+                // Optional single space after `>`.
+                if self.position < self.input.len() && self.current_char() == ' ' {
+                    self.advance();
+                }
+                let line = self.read_until_newline();
+                body_lines.push(line);
+                if self.position < self.input.len() && self.current_char() == '\n' {
+                    self.advance();
+                }
+                continue;
+            }
+
+            // Non-`>` line. parse_blockquote is only invoked after we've
+            // seen a `>` at the entry point, so on iteration 0 the marker
+            // path above must have fired — if body_lines is still empty,
+            // something is off and we bail rather than mislabel content.
+            if body_lines.is_empty() {
+                break;
+            }
+            // Blank line or EOF closes the quote at top level.
+            if peek >= self.input.len() || self.input[peek] == '\n' {
+                break;
+            }
+            // Lazy continuation requires an OPEN paragraph — a blank `>`
+            // line closes the paragraph, so we forbid lazy after that.
+            let last_was_paragraph = body_lines
+                .last()
+                .map(|l| !l.trim().is_empty())
+                .unwrap_or(false);
+            if !last_was_paragraph {
+                break;
+            }
+            // Block-starters interrupt a paragraph.
+            if self.line_starts_new_block_at(peek) {
+                break;
+            }
+            // Accept as lazy continuation: capture the raw line (including
+            // its 0-3 leading spaces) and append.
+            self.position = line_start;
+            let lazy_line = self.read_until_newline();
+            body_lines.push(lazy_line);
             if self.position < self.input.len() && self.current_char() == '\n' {
                 self.advance();
-            }
-            // Continue if next line also starts with `>` (no blank line in between).
-            if self.position >= self.input.len() {
-                break;
-            }
-            if !self.is_at_line_start() || self.current_char() != '>' {
-                break;
             }
         }
 
@@ -1170,6 +1222,59 @@ impl Lexer {
         let mut sub = Lexer::new(body_text);
         let body = sub.parse_with_context(ParseContext::BlockQuote)?;
         Ok(Token::BlockQuote(body))
+    }
+
+    /// Returns true if the line beginning at `pos` (already past any 0-3
+    /// leading spaces) starts a new block-level construct that interrupts
+    /// an open paragraph per CommonMark §5.2 / §4.10. Covers ATX heading,
+    /// thematic break, list marker, and fenced code. Does NOT detect
+    /// indented-code interruptions, since they only apply when the open
+    /// block in the surrounding context is itself a paragraph.
+    fn line_starts_new_block_at(&mut self, pos: usize) -> bool {
+        if pos >= self.input.len() {
+            return false;
+        }
+        let c = self.input[pos];
+        match c {
+            '#' | '-' | '+' | '*' | '_' | '`' | '~' | '0'..='9' => {}
+            _ => return false,
+        }
+        if self.line_starts_with_list_marker(pos) {
+            // A list marker terminates an open paragraph — but only if it
+            // doesn't conflict with a thematic break (handled below).
+            // Bullet markers `-`, `*` can clash with `---`/`***` thematic
+            // breaks; the thematic-break check below covers those.
+            if !matches!(c, '-' | '*' | '_') {
+                return true;
+            }
+        }
+        let savepos = self.position;
+        self.position = pos;
+        if c == '#' && self.is_atx_heading_start() {
+            self.position = savepos;
+            return true;
+        }
+        if (c == '-' || c == '*' || c == '_') && self.is_thematic_break_line() {
+            self.position = savepos;
+            return true;
+        }
+        self.position = savepos;
+        // After thematic-break check, re-test list marker for `-`/`*`
+        // (which we deferred above).
+        if matches!(c, '-' | '*') && self.line_starts_with_list_marker(pos) {
+            return true;
+        }
+        // Fenced code: 3+ run of `` ` `` or `~`.
+        if c == '`' || c == '~' {
+            let mut p = pos;
+            while p < self.input.len() && self.input[p] == c {
+                p += 1;
+            }
+            if p - pos >= 3 {
+                return true;
+            }
+        }
+        false
     }
 
     /// Parses a link token, extracting display text and URL. Supports inline
@@ -5814,6 +5919,185 @@ mod blockquote_block_constructs_tests {
         let tokens = parse("> Just a sentence with three spaces:    not code.");
         let body = block_body(&tokens[0]);
         assert!(!body.iter().any(|t| matches!(t, Token::Code(_, _))));
+    }
+}
+
+#[cfg(test)]
+mod blockquote_lazy_continuation_tests {
+    use super::*;
+
+    fn parse(input: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(input.to_string());
+        lexer.parse().unwrap()
+    }
+
+    fn body(t: &Token) -> &Vec<Token> {
+        if let Token::BlockQuote(body) = t {
+            body
+        } else {
+            panic!("expected BlockQuote, got {:?}", t);
+        }
+    }
+
+    // CommonMark §5.2: a non-prefixed line that doesn't start a new block
+    // joins the open paragraph inside the quote.
+    #[test]
+    fn single_lazy_line_joins_paragraph() {
+        let tokens = parse("> foo\nbar");
+        assert_eq!(tokens.len(), 1, "got {}", Token::slice_to_compact(&tokens));
+        let text = Token::collect_all_text(body(&tokens[0]));
+        assert!(
+            text.contains("foo") && text.contains("bar"),
+            "got {:?}",
+            text
+        );
+    }
+
+    #[test]
+    fn multiple_lazy_lines_all_join() {
+        let tokens = parse("> foo\nbar\nbaz");
+        assert_eq!(tokens.len(), 1, "got {}", Token::slice_to_compact(&tokens));
+        let text = Token::collect_all_text(body(&tokens[0]));
+        for needle in &["foo", "bar", "baz"] {
+            assert!(text.contains(needle), "{:?} missing from {:?}", needle, text);
+        }
+    }
+
+    #[test]
+    fn lazy_mixed_with_marker_lines() {
+        // Spec §5.2: lazy lines can be interleaved with `>` lines.
+        let tokens = parse("> foo\nbar\n> baz");
+        assert_eq!(tokens.len(), 1, "got {}", Token::slice_to_compact(&tokens));
+        let text = Token::collect_all_text(body(&tokens[0]));
+        for needle in &["foo", "bar", "baz"] {
+            assert!(text.contains(needle), "{:?} missing from {:?}", needle, text);
+        }
+    }
+
+    #[test]
+    fn blank_line_terminates_lazy() {
+        let tokens = parse("> foo\nbar\n\nbaz");
+        let q_text = Token::collect_all_text(body(&tokens[0]));
+        assert!(q_text.contains("foo") && q_text.contains("bar"));
+        assert!(!q_text.contains("baz"), "blank line didn't stop quote: {:?}", q_text);
+        // baz should appear as a separate top-level token.
+        let after = Token::collect_all_text(&tokens[1..]);
+        assert!(after.contains("baz"), "baz missing from rest {:?}", after);
+    }
+
+    #[test]
+    fn thematic_break_interrupts_lazy() {
+        let tokens = parse("> foo\n---");
+        let q_text = Token::collect_all_text(body(&tokens[0]));
+        assert!(q_text.contains("foo"));
+        assert!(!q_text.contains("---"), "thematic leaked in: {:?}", q_text);
+        assert!(
+            tokens[1..].iter().any(|t| matches!(t, Token::HorizontalRule)),
+            "expected HR after quote, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn list_marker_interrupts_lazy() {
+        let tokens = parse("> foo\n- bar");
+        let q_text = Token::collect_all_text(body(&tokens[0]));
+        assert!(q_text.contains("foo"));
+        assert!(!q_text.contains("bar"), "marker leaked in: {:?}", q_text);
+        assert!(
+            tokens[1..].iter().any(|t| matches!(t, Token::ListItem { .. })),
+            "expected ListItem after quote, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn atx_heading_interrupts_lazy() {
+        let tokens = parse("> foo\n# heading");
+        let q_text = Token::collect_all_text(body(&tokens[0]));
+        assert!(q_text.contains("foo"));
+        assert!(!q_text.contains("heading"));
+        assert!(
+            tokens[1..].iter().any(|t| matches!(t, Token::Heading(_, 1))),
+            "expected H1 after quote, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn fenced_code_interrupts_lazy() {
+        let tokens = parse("> foo\n```\ncode\n```");
+        let q_text = Token::collect_all_text(body(&tokens[0]));
+        assert!(q_text.contains("foo"));
+        assert!(!q_text.contains("code"), "fence leaked in: {:?}", q_text);
+        assert!(
+            tokens[1..].iter().any(|t| matches!(t, Token::Code(_, _))),
+            "expected Code after quote, got {}",
+            Token::slice_to_compact(&tokens)
+        );
+    }
+
+    #[test]
+    fn lazy_in_nested_blockquote_attaches_innermost() {
+        // Per spec example 234: `>> foo\nbar` → bar joins the inner quote's
+        // paragraph. We rely on the sub-lexer running the same lazy logic
+        // recursively.
+        let tokens = parse(">> foo\nbar");
+        assert_eq!(tokens.len(), 1, "got {}", Token::slice_to_compact(&tokens));
+        let outer = body(&tokens[0]);
+        // The outer body must contain exactly one nested BlockQuote, whose
+        // body contains both `foo` and `bar`.
+        let inner = outer
+            .iter()
+            .find_map(|t| if let Token::BlockQuote(b) = t { Some(b) } else { None })
+            .expect("expected nested BlockQuote");
+        let inner_text = Token::collect_all_text(inner);
+        assert!(
+            inner_text.contains("foo") && inner_text.contains("bar"),
+            "inner text: {:?}",
+            inner_text
+        );
+    }
+
+    #[test]
+    fn empty_quote_line_closes_paragraph_no_lazy() {
+        // `> foo\n>\nbar` — the empty `>` line closes the open paragraph;
+        // `bar` should NOT lazy-continue into the quote.
+        let tokens = parse("> foo\n>\nbar");
+        let q_text = Token::collect_all_text(body(&tokens[0]));
+        assert!(q_text.contains("foo"));
+        assert!(
+            !q_text.contains("bar"),
+            "bar must not be lazy after empty `>` line: {:?}",
+            q_text
+        );
+    }
+
+    #[test]
+    fn lazy_line_inline_formatting_is_parsed() {
+        // The lazy line goes through the same sub-lexer pass — emphasis,
+        // links, etc. must still be recognized inside it.
+        let tokens = parse("> normal\n*lazy emphasis*");
+        let quote = body(&tokens[0]);
+        assert!(
+            quote.iter().any(|t| matches!(t, Token::Emphasis { .. })),
+            "expected emphasis in quote body, got {}",
+            Token::slice_to_compact(quote)
+        );
+    }
+
+    #[test]
+    fn nested_blockquote_marker_continues_quote() {
+        // `> foo\n>> bar` — second line starts another quote inside the
+        // first; should not be lazy. Both should be inside the outer quote.
+        let tokens = parse("> foo\n>> bar");
+        assert_eq!(tokens.len(), 1, "got {}", Token::slice_to_compact(&tokens));
+        let outer = body(&tokens[0]);
+        assert!(
+            outer.iter().any(|t| matches!(t, Token::BlockQuote(_))),
+            "expected nested BlockQuote inside outer, got {}",
+            Token::slice_to_compact(outer)
+        );
     }
 }
 
