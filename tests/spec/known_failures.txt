@@ -11,9 +11,6 @@
 21  # O
 
 # --- Block quotes (4 failing) ---
-230
-236
-237
 
 # --- Code spans (2 failing) ---
 
@@ -72,34 +69,12 @@
 # --- Indented code blocks (6 failing) ---
 
 # --- Link reference definitions (15 failing) ---
-201
-218
 
 # --- Links (46 failing) ---
-520
-523
-533
-540
-545
-568
-569
-571
 
 # --- List items (34 failing) ---
-259
-278
-292
-293
-300
 
 # --- Lists (16 failing) ---
-301
-302
-312
-318
-320
-321
-324
 
 # --- Paragraphs (1 failing) ---
 
@@ -113,7 +88,6 @@
 629  # O
 
 # --- Setext headings (7 failing) ---
-93
 
 # --- Soft line breaks (1 failing) ---
 

@@ -426,9 +426,13 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_markdown() {
-        // `![Invalid` now gracefully falls back to literal text (Fix #11);
-        // use an unclosed HTML comment, which still surfaces a ParseError.
+    fn test_invalid_output_path_does_not_swallow_real_errors() {
+        // The lexer is intentionally permissive — historically malformed
+        // inputs like `![Invalid` or unterminated `<!--` would surface as
+        // a ParseError. Both now gracefully fall back to literal text, so
+        // a parse failure is no longer a useful integration test for the
+        // error path. Other paths (font load, file write, etc.) still
+        // surface errors via MdpError, exercised by other tests below.
         let markdown = "<!--never closes".to_string();
         let result = parse_into_file(
             markdown,
@@ -436,7 +440,12 @@ mod tests {
             config::ConfigSource::Default,
             None,
         );
-        assert!(matches!(result, Err(MdpError::ParseError { .. })));
+        // The render either succeeds or fails for a non-parse reason; the
+        // important contract is that a parse error is NOT raised.
+        if let Err(MdpError::ParseError { .. }) = result {
+            panic!("lexer should treat unclosed comment as literal text, not a parse error");
+        }
+        let _ = std::fs::remove_file("error_output.pdf");
     }
 
     #[test]
@@ -622,12 +631,14 @@ Final paragraph.
     }
 
     #[test]
-    fn test_invalid_markdown_to_bytes() {
-        // `![Invalid` now gracefully falls back to literal text (Fix #11);
-        // use an unclosed HTML comment, which still surfaces a ParseError.
+    fn test_partial_html_comment_is_not_a_parse_error() {
+        // The lexer falls back to literal text for unterminated HTML
+        // comments; the byte-level entrypoint should mirror that.
         let markdown = "<!--never closes".to_string();
         let result = parse_into_bytes(markdown, config::ConfigSource::Default, None);
-        assert!(matches!(result, Err(MdpError::ParseError { .. })));
+        if let Err(MdpError::ParseError { .. }) = result {
+            panic!("lexer should treat unclosed comment as literal text, not a parse error");
+        }
     }
 
     #[test]

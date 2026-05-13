@@ -97,16 +97,19 @@ fn scan_list_end(tokens: &[Token], start: usize) -> usize {
     // A list run is consecutive ListItem tokens, possibly interspersed with
     // Newline tokens. It ends at the first non-(ListItem/Newline) token or
     // end of slice. All items in the run must share the same `ordered`
-    // flag — a switch ends the run.
-    let first_ordered = match &tokens[start] {
-        Token::ListItem { ordered, .. } => *ordered,
+    // AND `marker` — a marker switch (`- foo\n+ bar`, `1. a\n1) b`) breaks
+    // the run into two separate lists.
+    let (first_ordered, first_marker) = match &tokens[start] {
+        Token::ListItem { ordered, marker, .. } => (*ordered, *marker),
         _ => return start + 1,
     };
     let mut i = start + 1;
     let mut last_item = start;
     while i < tokens.len() {
         match &tokens[i] {
-            Token::ListItem { ordered, .. } if *ordered == first_ordered => {
+            Token::ListItem { ordered, marker, .. }
+                if *ordered == first_ordered && *marker == first_marker =>
+            {
                 last_item = i;
                 i += 1;
             }
@@ -185,10 +188,69 @@ fn render_list_item(
         render_inlines(&inline_run, out);
         if !nested.is_empty() {
             out.push('\n');
-            render_blocks(&nested, out, false);
+            render_tight_blocks(&nested, out);
         }
     }
     out.push_str("</li>\n");
+}
+
+/// Block renderer specialized for tight list items: same as `render_blocks`
+/// except inline runs are emitted without `<p>` wrapping. A tight item's
+/// inline paragraphs render bare; block children (headings, fenced code,
+/// nested lists) still get their normal markup.
+fn render_tight_blocks(tokens: &[Token], out: &mut String) {
+    let mut i = 0;
+    while i < tokens.len() {
+        match &tokens[i] {
+            Token::Newline => {
+                i += 1;
+            }
+            Token::Heading(content, level) => {
+                out.push_str(&format!("<h{}>", level));
+                render_inlines(content, out);
+                out.push_str(&format!("</h{}>\n", level));
+                i += 1;
+            }
+            Token::BlockQuote(body) => {
+                out.push_str("<blockquote>\n");
+                render_blocks(body, out, false);
+                out.push_str("</blockquote>\n");
+                i += 1;
+            }
+            Token::HorizontalRule => {
+                out.push_str("<hr />\n");
+                i += 1;
+            }
+            Token::Code { language, content, block: true } => {
+                out.push_str("<pre><code");
+                let lang_first = language.split_whitespace().next().unwrap_or("");
+                if !lang_first.is_empty() {
+                    out.push_str(" class=\"language-");
+                    out.push_str(&escape_attr(lang_first));
+                    out.push('"');
+                }
+                out.push('>');
+                out.push_str(&escape_text(content));
+                if !content.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str("</code></pre>\n");
+                i += 1;
+            }
+            Token::ListItem { ordered, .. } => {
+                let group_end = scan_list_end(tokens, i);
+                let loose = group_has_loose_item(&tokens[i..group_end]);
+                let start_num = list_start_number(&tokens[i]);
+                render_list(&tokens[i..group_end], *ordered, start_num, loose, out);
+                i = group_end;
+            }
+            _ => {
+                let para_end = find_inline_run_end(tokens, i);
+                render_inlines(&tokens[i..para_end], out);
+                i = para_end;
+            }
+        }
+    }
 }
 
 fn split_paragraphs(tokens: &[Token]) -> Vec<Vec<Token>> {

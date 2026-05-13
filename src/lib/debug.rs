@@ -115,6 +115,7 @@ impl Token {
                 content,
                 ordered,
                 number,
+                marker: _,
                 checked,
                 loose,
             } => {
@@ -432,6 +433,7 @@ impl Token {
                 content,
                 ordered,
                 number,
+                marker: _,
                 checked,
                 loose,
             } => {
@@ -575,6 +577,7 @@ mod compact_tests {
             content: vec![Token::Text("a".into())],
             ordered: false,
             number: None,
+            marker: '-',
             checked: Some(false),
             loose: false,
         };
@@ -582,6 +585,7 @@ mod compact_tests {
             content: vec![Token::Text("a".into())],
             ordered: false,
             number: None,
+            marker: '-',
             checked: Some(true),
             loose: false,
         };
@@ -589,6 +593,7 @@ mod compact_tests {
             content: vec![Token::Text("a".into())],
             ordered: true,
             number: Some(3),
+            marker: '.',
             checked: None,
             loose: true,
         };
