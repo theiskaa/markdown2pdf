@@ -1842,6 +1842,12 @@ impl Lexer {
                         .collect();
                     self.position += len;
                     Token::HtmlInline(html)
+                } else if let Some(len) = self.try_match_inline_raw_html_special() {
+                    let html: String = self.input[self.position..self.position + len]
+                        .iter()
+                        .collect();
+                    self.position += len;
+                    Token::HtmlInline(html)
                 } else {
                     self.parse_text(ctx)?
                 }
@@ -1851,6 +1857,12 @@ impl Lexer {
                 if let Some(autolink) = self.try_parse_autolink() {
                     autolink
                 } else if let Some(len) = self.try_match_html_tag_len() {
+                    let html: String = self.input[self.position..self.position + len]
+                        .iter()
+                        .collect();
+                    self.position += len;
+                    Token::HtmlInline(html)
+                } else if let Some(len) = self.try_match_inline_raw_html_special() {
                     let html: String = self.input[self.position..self.position + len]
                         .iter()
                         .collect();
@@ -3181,14 +3193,17 @@ impl Lexer {
                         p += 1;
                     }
                     _ => {
-                        // Unquoted value: chars until whitespace/`>`.
+                        // Unquoted attribute value per CommonMark §6.6:
+                        // a nonempty string of characters excluding
+                        // whitespace, `"`, `'`, `=`, `<`, `>`, `` ` ``.
+                        // Note `/` IS allowed (e.g. `href=/path`); the
+                        // outer attribute loop separately handles `/>`.
                         if "\"'=<>`".contains(chars[p]) {
                             return None;
                         }
                         while p < chars.len()
                             && !chars[p].is_whitespace()
-                            && chars[p] != '>'
-                            && chars[p] != '/'
+                            && !"\"'=<>`".contains(chars[p])
                         {
                             p += 1;
                         }
@@ -3199,6 +3214,77 @@ impl Lexer {
                 p = attr_end;
             }
         }
+    }
+
+    /// Recognizes inline raw HTML that isn't an open / close tag —
+    /// processing instructions (`<?…?>`), declarations (`<!LETTER…>`),
+    /// and CDATA sections (`<![CDATA[…]]>`). Returns the matched
+    /// length on success or `None` if the current position doesn't
+    /// open one of these constructs (or the terminator never appears).
+    ///
+    /// Block-level forms are handled by `try_parse_html_block`; this
+    /// method covers the inline (mid-paragraph) case.
+    fn try_match_inline_raw_html_special(&self) -> Option<usize> {
+        if self.current_char() != '<' {
+            return None;
+        }
+        let pos = self.position;
+        let chars = &self.input;
+        if pos + 1 >= chars.len() {
+            return None;
+        }
+
+        // Processing instruction: `<?…?>`.
+        if chars[pos + 1] == '?' {
+            let mut p = pos + 2;
+            while p + 1 < chars.len() {
+                if chars[p] == '?' && chars[p + 1] == '>' {
+                    return Some(p + 2 - pos);
+                }
+                p += 1;
+            }
+            return None;
+        }
+
+        // CDATA section: `<![CDATA[…]]>`.
+        if pos + 8 < chars.len()
+            && chars[pos + 1] == '!'
+            && chars[pos + 2] == '['
+            && chars[pos + 3] == 'C'
+            && chars[pos + 4] == 'D'
+            && chars[pos + 5] == 'A'
+            && chars[pos + 6] == 'T'
+            && chars[pos + 7] == 'A'
+            && chars[pos + 8] == '['
+        {
+            let mut p = pos + 9;
+            while p + 2 < chars.len() {
+                if chars[p] == ']' && chars[p + 1] == ']' && chars[p + 2] == '>' {
+                    return Some(p + 3 - pos);
+                }
+                p += 1;
+            }
+            return None;
+        }
+
+        // Declaration: `<!LETTER…>`. Distinguished from CDATA by the
+        // third character (`[` vs ASCII letter) and from comments by
+        // the third character (`-` for comments, letter here).
+        if pos + 2 < chars.len()
+            && chars[pos + 1] == '!'
+            && chars[pos + 2].is_ascii_alphabetic()
+        {
+            let mut p = pos + 3;
+            while p < chars.len() {
+                if chars[p] == '>' {
+                    return Some(p + 1 - pos);
+                }
+                p += 1;
+            }
+            return None;
+        }
+
+        None
     }
 
     /// Cheap predicate used by `is_start_of_special_token`: scans the chars
@@ -3471,8 +3557,25 @@ impl Lexer {
         // that happens to contain a partial comment.
         let opener = self.position;
         self.position += 4; // Skip past '<', '!', '-', '-'
-        let start = self.position;
 
+        // Short-form comments per CommonMark §6.6:
+        //   <!-->   — empty body
+        //   <!--->  — body is a single hyphen
+        // Both must close immediately at this position; otherwise we
+        // fall through to the regular `-->` scan below.
+        if self.position < self.input.len() && self.input[self.position] == '>' {
+            self.position += 1;
+            return Ok(Token::HtmlComment(String::new()));
+        }
+        if self.position + 1 < self.input.len()
+            && self.input[self.position] == '-'
+            && self.input[self.position + 1] == '>'
+        {
+            self.position += 2;
+            return Ok(Token::HtmlComment("-".to_string()));
+        }
+
+        let start = self.position;
         while self.position + 2 < self.input.len() {
             if self.input[self.position] == '-'
                 && self.input[self.position + 1] == '-'
@@ -4061,7 +4164,13 @@ impl Lexer {
                     return true;
                 }
                 // Raw HTML tags (`<span>`, `</span>`, `<br/>`).
-                self.try_match_html_tag_len().is_some()
+                if self.try_match_html_tag_len().is_some() {
+                    return true;
+                }
+                // Inline raw-HTML specials: processing instructions
+                // `<?…?>`, declarations `<!LETTER…>`, CDATA sections
+                // `<![CDATA[…]]>`.
+                self.try_match_inline_raw_html_special().is_some()
             }
 
             _ => false,

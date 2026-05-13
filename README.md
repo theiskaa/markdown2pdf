@@ -221,12 +221,12 @@ For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the e
 
 ## Markdown Coverage
 
-Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). CommonMark spec pass rate: **92.9% (606/652)**. All 46 remaining failures are HTML-block / raw-HTML cases (intentionally out of scope) — every non-HTML section passes at 100%. Backed by ~680 inline unit tests organized in `src/lib/markdown_tests/`, the full spec runner in `tests/commonmark_spec.rs`, and a 36-test robustness suite in `tests/stress.rs`.
+Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). CommonMark spec pass rate: **100% (652/652)** — every section passes. Backed by ~740 inline unit tests organized in `tests/markdown/`, the full spec runner in `tests/commonmark_spec.rs`, and a 36-test robustness suite in `tests/stress.rs`.
 
 | Block-level                          | Status  | Inline                               | Status  |
 |--------------------------------------|---------|--------------------------------------|---------|
 | ATX headings (`#` to `######`)       | Full    | Backslash escapes                    | Full    |
-| Setext headings (`===` / `---`)      | Full    | Entity / numeric references          | Partial |
+| Setext headings (`===` / `---`)      | Full    | Entity / numeric references          | Full    |
 | Paragraphs                           | Full    | Code spans (single & multi-backtick) | Full    |
 | Thematic breaks (`---` `***` `___`)  | Full    | Emphasis & strong (`*` and `_`)      | Full    |
 | Indented code blocks (4-space)       | Full    | Inline links                         | Full    |
@@ -234,10 +234,10 @@ Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https:/
 | Blockquotes                          | Full    | Autolinks (`<https://…>`, `<email>`) | Full    |
 | Bullet lists (`-` `+` `*`)           | Full    | Images (rendered as styled link)     | Partial |
 | Ordered lists (`1.` and `1)`)        | Full    | Strikethrough (`~~text~~`)           | Full    |
-| Tables (GFM)                         | Full    | Raw inline HTML                      | Partial |
+| Tables (GFM)                         | Full    | Raw inline HTML                      | Full    |
 | Task list items (GFM)                | Full    | Hard / soft line breaks              | Full    |
 | Reference link definitions           | Full    |                                      |         |
-| HTML blocks (types 1–7)              | None    |                                      |         |
+| HTML blocks (7 kinds)                | Full    |                                      |         |
 
 ## Contributing
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.
