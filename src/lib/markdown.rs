@@ -4116,10 +4116,16 @@ impl Lexer {
 
     /// Checks if current position starts an HTML comment
     fn is_html_comment_start(&self) -> bool {
-        self.input[self.position..]
-            .iter()
-            .collect::<String>()
-            .starts_with("<!--")
+        // Per-character compare avoids the O(n) full-tail allocation
+        // that the old `iter().collect::<String>().starts_with("<!--")`
+        // shape produced. `parse_text` calls this once per character,
+        // so an O(n) probe here would turn the whole parse quadratic.
+        let p = self.position;
+        p + 3 < self.input.len()
+            && self.input[p] == '<'
+            && self.input[p + 1] == '!'
+            && self.input[p + 2] == '-'
+            && self.input[p + 3] == '-'
     }
 
     /// Checks if current position could start a special token given a context

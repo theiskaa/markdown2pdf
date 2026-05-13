@@ -380,3 +380,91 @@ fn pathological_table_unbalanced_pipes() {
     }
     run_within_budget("pathological_table_unbalanced_pipes", s);
 }
+
+#[test]
+fn mass_html_block_div_openers() {
+    // Many block-element opener lines followed by blank-line
+    // terminators. Each pair is its own HtmlBlock; the scanner
+    // must not become quadratic in the count.
+    let n = 5_000;
+    let mut s = String::new();
+    for _ in 0..n {
+        s.push_str("<div>\nx\n</div>\n\n");
+    }
+    run_within_budget("mass_html_block_div_openers", s);
+}
+
+#[test]
+fn mass_unclosed_raw_html_blocks() {
+    // Each `<script>` opener with no matching closer would individually
+    // consume to EOF. Stacking many forces the lexer to recover after
+    // each block claims a chunk; verify no quadratic behavior.
+    let n = 1_000;
+    let mut s = String::new();
+    for i in 0..n {
+        s.push_str(&format!("<script>\nbody {}\n</script>\n\n", i));
+    }
+    run_within_budget("mass_unclosed_raw_html_blocks", s);
+}
+
+#[test]
+fn deeply_nested_html_inside_blockquote() {
+    // `> > > > <div>foo</div>` — deeply nested blockquote whose body
+    // is an HTML block. Recursion limit applies to blockquote depth.
+    let depth = 30;
+    let mut s = String::new();
+    for _ in 0..depth {
+        s.push_str("> ");
+    }
+    s.push_str("<div>\nbody\n</div>\n");
+    run_within_budget("deeply_nested_html_inside_blockquote", s);
+}
+
+#[test]
+fn pathological_html_attribute_storm() {
+    // A single open tag with many attributes — the tag matcher's
+    // attribute loop must handle this without slowing dramatically.
+    let n = 1_000;
+    let mut s = String::from("<a");
+    for i in 0..n {
+        s.push_str(&format!(" attr{}=\"value{}\"", i, i));
+    }
+    s.push_str(">\nbody\n</a>\n");
+    run_within_budget("pathological_html_attribute_storm", s);
+}
+
+#[test]
+fn mass_inline_processing_instructions() {
+    // Many inline PIs in a single paragraph. The inline-special
+    // matcher should handle each in O(its-own-length) without
+    // re-scanning prior content.
+    let n = 1_000;
+    let mut s = String::new();
+    for i in 0..n {
+        s.push_str(&format!("text <?php echo {}; ?> ", i));
+    }
+    s.push('\n');
+    run_within_budget("mass_inline_processing_instructions", s);
+}
+
+#[test]
+fn mass_html_comment_short_forms() {
+    let n = 5_000;
+    let mut s = String::new();
+    for _ in 0..n {
+        s.push_str("foo <!--> bar <!---> baz ");
+    }
+    s.push('\n');
+    run_within_budget("mass_html_comment_short_forms", s);
+}
+
+#[test]
+fn alternating_html_block_and_paragraph() {
+    // Forces repeated paragraph-interrupt-by-Type-6 decisions.
+    let n = 2_000;
+    let mut s = String::new();
+    for i in 0..n {
+        s.push_str(&format!("paragraph {}\n<div>\nbody {}\n</div>\n\n", i, i));
+    }
+    run_within_budget("alternating_html_block_and_paragraph", s);
+}
