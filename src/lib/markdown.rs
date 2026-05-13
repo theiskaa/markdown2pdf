@@ -47,6 +47,30 @@ use genpdfi::Alignment;
 use std::collections::HashMap;
 
 include!(concat!(env!("OUT_DIR"), "/entities_table.rs"));
+
+/// Tag names that open a raw-content HTML block (CommonMark §4.6).
+/// Body runs verbatim until a matching closer appears on any line.
+const RAW_HTML_BLOCK_TAG_NAMES: &[&str] = &["script", "pre", "style", "textarea"];
+
+/// Tag names that open a block-element HTML block (CommonMark §4.6).
+/// Used for two purposes today:
+///   1. To EXCLUDE these names from the standalone-tag arm (so a
+///      `<div>` line doesn't get claimed by the wrong arm).
+///   2. As the basis for the dedicated block-element arm that will
+///      land in a follow-up commit (with its own opener-completeness
+///      and paragraph-interrupt rules).
+const BLOCK_ELEMENT_TAG_NAMES: &[&str] = &[
+    "address", "article", "aside", "base", "basefont", "blockquote",
+    "body", "caption", "center", "col", "colgroup", "dd", "details",
+    "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption",
+    "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3",
+    "h4", "h5", "h6", "head", "header", "hr", "html", "iframe",
+    "legend", "li", "link", "main", "menu", "menuitem", "nav",
+    "noframes", "ol", "optgroup", "option", "p", "param", "search",
+    "section", "summary", "table", "tbody", "td", "tfoot", "th",
+    "thead", "title", "tr", "track", "ul",
+];
+
 /// Parsing context — determines which tokens are valid in the current location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseContext {
@@ -3599,6 +3623,63 @@ impl Lexer {
             return Some(Token::HtmlBlock(content));
         }
 
+        // Standalone HTML tag blocks: any complete open or close tag,
+        // followed by ONLY spaces or tabs to the end of the line, whose
+        // tag name is not in the raw-content list (handled above) and
+        // not in the block-element whitelist (handled by the
+        // not-yet-implemented block-element arm — once that lands,
+        // these two arms split cleanly). Body runs until a blank line
+        // or EOF; content is verbatim.
+        //
+        // Precedence rule: this kind CANNOT interrupt an open paragraph
+        // (per CommonMark spec). When the previous line is non-blank,
+        // we fall through so the line stays part of the paragraph.
+        if self.input[self.position] == '<' && self.previous_line_is_blank_or_bof() {
+            if let Some(tag_name) = self.extract_html_tag_name_at(self.position) {
+                let name_lower = tag_name.to_ascii_lowercase();
+                let is_block_element = BLOCK_ELEMENT_TAG_NAMES
+                    .iter()
+                    .any(|t| t.eq_ignore_ascii_case(&name_lower));
+                let is_raw_content = RAW_HTML_BLOCK_TAG_NAMES
+                    .iter()
+                    .any(|t| t.eq_ignore_ascii_case(&name_lower));
+                if !is_block_element && !is_raw_content {
+                    if let Some(tag_len) = self.try_match_html_tag_len() {
+                        let after_tag = self.position + tag_len;
+                        // The complete tag must fit on a single line.
+                        // CommonMark's Type 7 start condition is "line
+                        // begins with a complete open tag ... followed
+                        // by ... the end of the line" — a tag whose
+                        // attributes wrap onto a continuation line
+                        // (e.g. `<a href="foo\nbar">`) doesn't qualify
+                        // and stays as inline HTML inside a paragraph.
+                        let tag_spans_newline = self.input[self.position..after_tag]
+                            .iter()
+                            .any(|c| *c == '\n');
+                        if !tag_spans_newline
+                            && self.is_only_whitespace_to_eol(after_tag)
+                        {
+                            // Move past the opener line's `\n` so the
+                            // blank-line scan starts on the next line.
+                            let mut after_opener_line = after_tag;
+                            while after_opener_line < self.input.len()
+                                && self.input[after_opener_line] != '\n'
+                            {
+                                after_opener_line += 1;
+                            }
+                            if after_opener_line < self.input.len() {
+                                after_opener_line += 1;
+                            }
+                            let end = self.scan_to_blank_line(after_opener_line);
+                            let content: String = self.input[block_start..end].iter().collect();
+                            self.position = end;
+                            return Some(Token::HtmlBlock(content));
+                        }
+                    }
+                }
+            }
+        }
+
         None
     }
 
@@ -3664,6 +3745,75 @@ impl Lexer {
             }
         }
         false
+    }
+
+    /// Returns the (lowercase) tag name at `pos` if the position sits
+    /// at the start of a complete or partial HTML tag. Handles both
+    /// open tags `<name>` and close tags `</name>`. Returns `None` if
+    /// the position is not at a recognizable tag opener.
+    fn extract_html_tag_name_at(&self, pos: usize) -> Option<String> {
+        if pos >= self.input.len() || self.input[pos] != '<' {
+            return None;
+        }
+        let mut p = pos + 1;
+        if p < self.input.len() && self.input[p] == '/' {
+            p += 1;
+        }
+        if p >= self.input.len() || !self.input[p].is_ascii_alphabetic() {
+            return None;
+        }
+        let name_start = p;
+        while p < self.input.len()
+            && (self.input[p].is_ascii_alphanumeric() || self.input[p] == '-')
+        {
+            p += 1;
+        }
+        let name: String = self.input[name_start..p].iter().collect();
+        Some(name.to_ascii_lowercase())
+    }
+
+    /// True if every character from `pos` until the next `\n` (or EOF)
+    /// is a space or tab. Used by the standalone-tag arm to enforce
+    /// the "complete tag followed by ONLY whitespace to end-of-line"
+    /// rule.
+    fn is_only_whitespace_to_eol(&self, pos: usize) -> bool {
+        let mut p = pos;
+        while p < self.input.len() && self.input[p] != '\n' {
+            if self.input[p] != ' ' && self.input[p] != '\t' {
+                return false;
+            }
+            p += 1;
+        }
+        true
+    }
+
+    /// Scans from `start` (must be at line-start) line by line until a
+    /// blank line (only whitespace + newline, or empty line). Returns
+    /// the position at the start of that blank line — the blank line
+    /// itself is NOT included in the result. If no blank line ever
+    /// appears, returns `self.input.len()` so the caller treats the
+    /// rest of the document as block content.
+    fn scan_to_blank_line(&self, start: usize) -> usize {
+        let mut p = start;
+        while p < self.input.len() {
+            let line_start = p;
+            let mut line_end = line_start;
+            while line_end < self.input.len() && self.input[line_end] != '\n' {
+                line_end += 1;
+            }
+            let is_blank = self.input[line_start..line_end]
+                .iter()
+                .all(|c| *c == ' ' || *c == '\t');
+            if is_blank {
+                return line_start;
+            }
+            p = if line_end < self.input.len() {
+                line_end + 1
+            } else {
+                line_end
+            };
+        }
+        self.input.len()
     }
 
     /// Scans line-by-line from `start` looking for any of the four
