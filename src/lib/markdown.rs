@@ -3480,20 +3480,27 @@ impl Lexer {
     /// Caller is responsible for verifying line-start and 0-3-space
     /// indent before calling.
     ///
-    /// This is the dispatcher across the seven CommonMark HTML block
-    /// types. Each type is recognized by its OPENER, then its body runs
-    /// per the type-specific termination rule:
-    ///   Type 1: until matching `</script|pre|style|textarea>` (any line)
-    ///   Type 2: until `-->`
-    ///   Type 3: until `?>`
-    ///   Type 4: until `>`
-    ///   Type 5: until `]]>`
-    ///   Type 6: until blank line or EOF
-    ///   Type 7: until blank line or EOF
+    /// Recognizes any of the seven CommonMark HTML block kinds by
+    /// matching its opener, then consuming the body per kind-specific
+    /// termination rules:
     ///
-    /// Types are checked in spec order — that's required because Type 4
-    /// would otherwise mis-claim Type 2 / Type 5 openers (`<!--` and
-    /// `<![CDATA[` both start with `<!`).
+    ///   Raw-content blocks (`<script|pre|style|textarea …>`):
+    ///       until a line containing `</script>` / `</pre>` /
+    ///       `</style>` / `</textarea>` (case-insensitive) appears.
+    ///   HTML block comments (`<!--…-->`): until `-->`.
+    ///   Processing instructions (`<?…?>`): until `?>`.
+    ///   Declarations (`<!LETTER…>`, e.g. DOCTYPE): until `>`.
+    ///   CDATA sections (`<![CDATA[…]]>`): until `]]>`.
+    ///   Block-element tags (whitelisted: `<div>`, `<table>`, …):
+    ///       until blank line or EOF (NOT YET IMPLEMENTED).
+    ///   Standalone tags (any complete tag on its own line):
+    ///       until blank line or EOF (NOT YET IMPLEMENTED).
+    ///
+    /// Openers that share the `<!` prefix (comments, declarations,
+    /// CDATA) are distinguished by the third character (`-`, ASCII
+    /// letter, or `[`); the checks below sit in this dispatch order
+    /// to mirror spec ordering even where patterns are technically
+    /// disjoint.
     fn try_parse_html_block(&mut self) -> Option<Token> {
         // We're called from `next_token` at the current `<`. The caller
         // has already verified `is_block_marker_start()` (line start +
@@ -3511,10 +3518,27 @@ impl Lexer {
             p
         };
 
-        // Type 2: `<!--…-->` block comments. Opener `<!--` at line start;
-        // body terminates at `-->` (multi-line allowed). Same `<!`
-        // prefix as Type 4 / Type 5 but disambiguated by the third char
-        // (`-` vs ASCII-letter vs `[`).
+        // Raw-content blocks (`<script>`, `<pre>`, `<style>`,
+        // `<textarea>`). Opener is the tag name (case-insensitive)
+        // followed by space, tab, `>`, or end-of-line. Body terminates
+        // at a line that *contains* any of `</script>` / `</pre>` /
+        // `</style>` / `</textarea>` (case-insensitive — per spec the
+        // closer "need not match the start tag"). If no closer ever
+        // appears, the block runs to EOF. Body is verbatim — no
+        // markdown parsing happens inside.
+        if self.input[self.position] == '<'
+            && self.is_raw_html_block_opener_at(self.position + 1)
+        {
+            let end = self.scan_to_raw_html_block_close(self.position);
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
+        // HTML block comments: opener `<!--` at line start; body
+        // terminates at `-->` (multi-line allowed). Distinct from the
+        // declaration / CDATA arms below by the third char (`-` vs
+        // ASCII-letter vs `[`).
         if self.position + 3 < self.input.len()
             && self.input[self.position] == '<'
             && self.input[self.position + 1] == '!'
@@ -3527,9 +3551,9 @@ impl Lexer {
             return Some(Token::HtmlBlock(content));
         }
 
-        // Type 4: `<!LETTER…>` declarations (DOCTYPE, ELEMENT, etc.).
-        // Body terminates at the first `>` on this or a subsequent
-        // line. Opener pattern: `<!` followed by ASCII alphabetic char.
+        // Declarations (`<!DOCTYPE`, `<!ELEMENT`, `<!ATTLIST`, …):
+        // body terminates at the first `>` on this or a subsequent
+        // line. Opener pattern is `<!` followed by an ASCII letter.
         if self.position + 2 < self.input.len()
             && self.input[self.position] == '<'
             && self.input[self.position + 1] == '!'
@@ -3541,10 +3565,10 @@ impl Lexer {
             return Some(Token::HtmlBlock(content));
         }
 
-        // Type 5: `<![CDATA[…]]>` blocks.
-        // Body terminates at `]]>` (multi-line allowed). Opener pattern
-        // is the literal 9-char sequence `<![CDATA[`. Doesn't overlap
-        // with Type 4 because `<!` is followed by `[`, not a letter.
+        // CDATA sections (`<![CDATA[…]]>`): body terminates at `]]>`
+        // (multi-line allowed). Opener is the literal 9-char sequence
+        // `<![CDATA[`. Doesn't overlap with the declaration arm because
+        // `<!` is followed by `[`, not a letter.
         if self.position + 8 < self.input.len()
             && self.input[self.position] == '<'
             && self.input[self.position + 1] == '!'
@@ -3562,8 +3586,8 @@ impl Lexer {
             return Some(Token::HtmlBlock(content));
         }
 
-        // Type 3: `<?…?>` processing instructions (e.g. PHP, XML PIs).
-        // Body terminates at `?>` (multi-line allowed). Opener is the
+        // Processing instructions (`<?…?>`, e.g. PHP, XML PIs):
+        // body terminates at `?>` (multi-line allowed). Opener is the
         // 2-char sequence `<?`.
         if self.position + 1 < self.input.len()
             && self.input[self.position] == '<'
@@ -3578,10 +3602,10 @@ impl Lexer {
         None
     }
 
-    /// Scans forward from `start` looking for `terminator` (e.g. `>` for
-    /// Type 4 decl, `?>` for Type 3 PI, `]]>` for Type 5 CDATA, `-->`
-    /// for Type 2 comment) and returns the byte index AFTER the
-    /// terminator + the trailing newline (if any) — so the caller can
+    /// Scans forward from `start` looking for `terminator` (e.g. `>`
+    /// for a declaration, `?>` for a processing instruction, `]]>` for
+    /// CDATA, `-->` for a block comment) and returns the byte index
+    /// AFTER the terminator + the trailing newline (if any) — caller can
     /// slice `[block_start..returned]` as the verbatim block content
     /// and set `self.position = returned` to move past the block.
     ///
@@ -3610,6 +3634,72 @@ impl Lexer {
             p += 1;
         }
         None
+    }
+
+    /// Returns true if `chars[pos..]` starts with one of the four
+    /// raw-content HTML block tag names (`script`, `pre`, `style`,
+    /// `textarea`, case-insensitive) followed by a valid opener
+    /// delimiter (space, tab, `>`, or end-of-line). Used by
+    /// `try_parse_html_block` after the initial `<` is consumed
+    /// (caller passes `self.position + 1`).
+    fn is_raw_html_block_opener_at(&self, pos: usize) -> bool {
+        const TAGS: &[&str] = &["script", "pre", "style", "textarea"];
+        for &tag in TAGS {
+            let len = tag.chars().count();
+            if pos + len > self.input.len() {
+                continue;
+            }
+            // Case-insensitive ASCII match on the tag name.
+            let ok = self.input[pos..pos + len]
+                .iter()
+                .zip(tag.chars())
+                .all(|(a, b)| a.eq_ignore_ascii_case(&b));
+            if !ok {
+                continue;
+            }
+            // Validate the char after the tag name.
+            match self.input.get(pos + len).copied() {
+                None | Some(' ') | Some('\t') | Some('\n') | Some('>') => return true,
+                _ => continue,
+            }
+        }
+        false
+    }
+
+    /// Scans line-by-line from `start` looking for any of the four
+    /// raw-content closing tags (`</script>`, `</pre>`, `</style>`,
+    /// `</textarea>`, case-insensitive) anywhere on a line. Returns the
+    /// position just past the newline of the closing line, or
+    /// `self.input.len()` if no closer is found — in that case the
+    /// block runs to EOF, which the CommonMark spec explicitly allows.
+    fn scan_to_raw_html_block_close(&self, start: usize) -> usize {
+        const CLOSERS: &[&str] = &["</script>", "</pre>", "</style>", "</textarea>"];
+        let mut line_start = start;
+        while line_start < self.input.len() {
+            let mut line_end = line_start;
+            while line_end < self.input.len() && self.input[line_end] != '\n' {
+                line_end += 1;
+            }
+            let line_lower: String = self.input[line_start..line_end]
+                .iter()
+                .flat_map(|c| c.to_lowercase())
+                .collect();
+            for &closer in CLOSERS {
+                if line_lower.contains(closer) {
+                    return if line_end < self.input.len() {
+                        line_end + 1
+                    } else {
+                        line_end
+                    };
+                }
+            }
+            line_start = if line_end < self.input.len() {
+                line_end + 1
+            } else {
+                line_end
+            };
+        }
+        self.input.len()
     }
 
     /// Checks if current position is at the start of a line

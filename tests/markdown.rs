@@ -68,6 +68,9 @@ mod html_processing_instruction_tests;
 #[path = "markdown/html_comment_block_tests.rs"]
 mod html_comment_block_tests;
 
+#[path = "markdown/html_raw_content_block_tests.rs"]
+mod html_raw_content_block_tests;
+
 #[path = "markdown/hard_line_break_tests.rs"]
 mod hard_line_break_tests;
 
