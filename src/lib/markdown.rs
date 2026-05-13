@@ -47,6 +47,30 @@ use genpdfi::Alignment;
 use std::collections::HashMap;
 
 include!(concat!(env!("OUT_DIR"), "/entities_table.rs"));
+
+/// Tag names that open a raw-content HTML block (CommonMark §4.6).
+/// Body runs verbatim until a matching closer appears on any line.
+const RAW_HTML_BLOCK_TAG_NAMES: &[&str] = &["script", "pre", "style", "textarea"];
+
+/// Tag names that open a block-element HTML block (CommonMark §4.6).
+/// Used for two purposes today:
+///   1. To EXCLUDE these names from the standalone-tag arm (so a
+///      `<div>` line doesn't get claimed by the wrong arm).
+///   2. As the basis for the dedicated block-element arm that will
+///      land in a follow-up commit (with its own opener-completeness
+///      and paragraph-interrupt rules).
+const BLOCK_ELEMENT_TAG_NAMES: &[&str] = &[
+    "address", "article", "aside", "base", "basefont", "blockquote",
+    "body", "caption", "center", "col", "colgroup", "dd", "details",
+    "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption",
+    "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3",
+    "h4", "h5", "h6", "head", "header", "hr", "html", "iframe",
+    "legend", "li", "link", "main", "menu", "menuitem", "nav",
+    "noframes", "ol", "optgroup", "option", "p", "param", "search",
+    "section", "summary", "table", "tbody", "td", "tfoot", "th",
+    "thead", "title", "tr", "track", "ul",
+];
+
 /// Parsing context — determines which tokens are valid in the current location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseContext {
@@ -142,6 +166,11 @@ pub enum Token {
     /// Raw inline HTML (`<span>`, `</span>`, `<br/>`, etc.)
     /// Stored verbatim including the angle brackets.
     HtmlInline(String),
+    /// Block-level raw HTML (CommonMark §4.6). Content is the verbatim
+    /// block text including all original whitespace and line endings.
+    /// Renderers should pass it through unmodified or skip it — no
+    /// markdown parsing happens inside.
+    HtmlBlock(String),
     /// Soft line break (single `\n`).
     Newline,
     /// Hard line break: two-or-more trailing spaces or a
@@ -229,6 +258,7 @@ impl Token {
             }
             Token::HtmlComment(comment) => result.push_str(comment),
             Token::HtmlInline(html) => result.push_str(html),
+            Token::HtmlBlock(html) => result.push_str(html),
             Token::Unknown(text) => result.push_str(text),
             Token::Newline | Token::HardBreak | Token::HorizontalRule => {
                 // These don't contain text
@@ -1796,11 +1826,43 @@ impl Lexer {
                     self.parse_text(ctx)?
                 }
             }
+            '<' if is_block_start && allow_block_tokens(ctx) => {
+                // HTML block detection runs first at line start; falls
+                // through to inline-comment / autolink / inline-tag /
+                // text if no block construct fits.
+                if let Some(block) = self.try_parse_html_block() {
+                    block
+                } else if self.is_html_comment_start() {
+                    self.parse_html_comment()?
+                } else if let Some(autolink) = self.try_parse_autolink() {
+                    autolink
+                } else if let Some(len) = self.try_match_html_tag_len() {
+                    let html: String = self.input[self.position..self.position + len]
+                        .iter()
+                        .collect();
+                    self.position += len;
+                    Token::HtmlInline(html)
+                } else if let Some(len) = self.try_match_inline_raw_html_special() {
+                    let html: String = self.input[self.position..self.position + len]
+                        .iter()
+                        .collect();
+                    self.position += len;
+                    Token::HtmlInline(html)
+                } else {
+                    self.parse_text(ctx)?
+                }
+            }
             '<' if self.is_html_comment_start() => self.parse_html_comment()?,
             '<' => {
                 if let Some(autolink) = self.try_parse_autolink() {
                     autolink
                 } else if let Some(len) = self.try_match_html_tag_len() {
+                    let html: String = self.input[self.position..self.position + len]
+                        .iter()
+                        .collect();
+                    self.position += len;
+                    Token::HtmlInline(html)
+                } else if let Some(len) = self.try_match_inline_raw_html_special() {
                     let html: String = self.input[self.position..self.position + len]
                         .iter()
                         .collect();
@@ -3131,14 +3193,17 @@ impl Lexer {
                         p += 1;
                     }
                     _ => {
-                        // Unquoted value: chars until whitespace/`>`.
+                        // Unquoted attribute value per CommonMark §6.6:
+                        // a nonempty string of characters excluding
+                        // whitespace, `"`, `'`, `=`, `<`, `>`, `` ` ``.
+                        // Note `/` IS allowed (e.g. `href=/path`); the
+                        // outer attribute loop separately handles `/>`.
                         if "\"'=<>`".contains(chars[p]) {
                             return None;
                         }
                         while p < chars.len()
                             && !chars[p].is_whitespace()
-                            && chars[p] != '>'
-                            && chars[p] != '/'
+                            && !"\"'=<>`".contains(chars[p])
                         {
                             p += 1;
                         }
@@ -3149,6 +3214,77 @@ impl Lexer {
                 p = attr_end;
             }
         }
+    }
+
+    /// Recognizes inline raw HTML that isn't an open / close tag —
+    /// processing instructions (`<?…?>`), declarations (`<!LETTER…>`),
+    /// and CDATA sections (`<![CDATA[…]]>`). Returns the matched
+    /// length on success or `None` if the current position doesn't
+    /// open one of these constructs (or the terminator never appears).
+    ///
+    /// Block-level forms are handled by `try_parse_html_block`; this
+    /// method covers the inline (mid-paragraph) case.
+    fn try_match_inline_raw_html_special(&self) -> Option<usize> {
+        if self.current_char() != '<' {
+            return None;
+        }
+        let pos = self.position;
+        let chars = &self.input;
+        if pos + 1 >= chars.len() {
+            return None;
+        }
+
+        // Processing instruction: `<?…?>`.
+        if chars[pos + 1] == '?' {
+            let mut p = pos + 2;
+            while p + 1 < chars.len() {
+                if chars[p] == '?' && chars[p + 1] == '>' {
+                    return Some(p + 2 - pos);
+                }
+                p += 1;
+            }
+            return None;
+        }
+
+        // CDATA section: `<![CDATA[…]]>`.
+        if pos + 8 < chars.len()
+            && chars[pos + 1] == '!'
+            && chars[pos + 2] == '['
+            && chars[pos + 3] == 'C'
+            && chars[pos + 4] == 'D'
+            && chars[pos + 5] == 'A'
+            && chars[pos + 6] == 'T'
+            && chars[pos + 7] == 'A'
+            && chars[pos + 8] == '['
+        {
+            let mut p = pos + 9;
+            while p + 2 < chars.len() {
+                if chars[p] == ']' && chars[p + 1] == ']' && chars[p + 2] == '>' {
+                    return Some(p + 3 - pos);
+                }
+                p += 1;
+            }
+            return None;
+        }
+
+        // Declaration: `<!LETTER…>`. Distinguished from CDATA by the
+        // third character (`[` vs ASCII letter) and from comments by
+        // the third character (`-` for comments, letter here).
+        if pos + 2 < chars.len()
+            && chars[pos + 1] == '!'
+            && chars[pos + 2].is_ascii_alphabetic()
+        {
+            let mut p = pos + 3;
+            while p < chars.len() {
+                if chars[p] == '>' {
+                    return Some(p + 1 - pos);
+                }
+                p += 1;
+            }
+            return None;
+        }
+
+        None
     }
 
     /// Cheap predicate used by `is_start_of_special_token`: scans the chars
@@ -3421,8 +3557,25 @@ impl Lexer {
         // that happens to contain a partial comment.
         let opener = self.position;
         self.position += 4; // Skip past '<', '!', '-', '-'
-        let start = self.position;
 
+        // Short-form comments per CommonMark §6.6:
+        //   <!-->   — empty body
+        //   <!--->  — body is a single hyphen
+        // Both must close immediately at this position; otherwise we
+        // fall through to the regular `-->` scan below.
+        if self.position < self.input.len() && self.input[self.position] == '>' {
+            self.position += 1;
+            return Ok(Token::HtmlComment(String::new()));
+        }
+        if self.position + 1 < self.input.len()
+            && self.input[self.position] == '-'
+            && self.input[self.position + 1] == '>'
+        {
+            self.position += 2;
+            return Ok(Token::HtmlComment("-".to_string()));
+        }
+
+        let start = self.position;
         while self.position + 2 < self.input.len() {
             if self.input[self.position] == '-'
                 && self.input[self.position + 1] == '-'
@@ -3442,6 +3595,428 @@ impl Lexer {
             self.position = self.input.len();
             Ok(Token::Text(raw))
         }
+    }
+
+    /// Tries to consume an HTML block (CommonMark §4.6) starting at the
+    /// current position. Returns `Some(Token::HtmlBlock(content))` on a
+    /// successful match — content is the verbatim block text including
+    /// the opening line and any trailing newline — or `None` if no HTML
+    /// block fits, in which case the caller can fall through to inline
+    /// HTML handling (comment / autolink / inline tag / text).
+    ///
+    /// Caller is responsible for verifying line-start and 0-3-space
+    /// indent before calling.
+    ///
+    /// Recognizes any of the seven CommonMark HTML block kinds by
+    /// matching its opener, then consuming the body per kind-specific
+    /// termination rules:
+    ///
+    ///   Raw-content blocks (`<script|pre|style|textarea …>`):
+    ///       until a line containing `</script>` / `</pre>` /
+    ///       `</style>` / `</textarea>` (case-insensitive) appears.
+    ///   HTML block comments (`<!--…-->`): until `-->`.
+    ///   Processing instructions (`<?…?>`): until `?>`.
+    ///   Declarations (`<!LETTER…>`, e.g. DOCTYPE): until `>`.
+    ///   CDATA sections (`<![CDATA[…]]>`): until `]]>`.
+    ///   Block-element tags (whitelisted: `<div>`, `<table>`, …):
+    ///       until blank line or EOF (NOT YET IMPLEMENTED).
+    ///   Standalone tags (any complete tag on its own line):
+    ///       until blank line or EOF (NOT YET IMPLEMENTED).
+    ///
+    /// Openers that share the `<!` prefix (comments, declarations,
+    /// CDATA) are distinguished by the third character (`-`, ASCII
+    /// letter, or `[`); the checks below sit in this dispatch order
+    /// to mirror spec ordering even where patterns are technically
+    /// disjoint.
+    fn try_parse_html_block(&mut self) -> Option<Token> {
+        // We're called from `next_token` at the current `<`. The caller
+        // has already verified `is_block_marker_start()` (line start +
+        // 0-3 space indent), but `self.position` itself sits at the `<`
+        // because `skip_whitespace` ran first. We need to capture the
+        // ORIGINAL line start (including the up-to-3 spaces of indent)
+        // so the block body preserves that indent verbatim per spec
+        // (example 184: `  <div>\n…` keeps the 2-space indent in the
+        // emitted HtmlBlock content).
+        let block_start = {
+            let mut p = self.position;
+            while p > 0 && self.input[p - 1] == ' ' {
+                p -= 1;
+            }
+            p
+        };
+
+        // Raw-content blocks (`<script>`, `<pre>`, `<style>`,
+        // `<textarea>`). Opener is the tag name (case-insensitive)
+        // followed by space, tab, `>`, or end-of-line. Body terminates
+        // at a line that *contains* any of `</script>` / `</pre>` /
+        // `</style>` / `</textarea>` (case-insensitive — per spec the
+        // closer "need not match the start tag"). If no closer ever
+        // appears, the block runs to EOF. Body is verbatim — no
+        // markdown parsing happens inside.
+        if self.input[self.position] == '<'
+            && self.is_raw_html_block_opener_at(self.position + 1)
+        {
+            let end = self.scan_to_raw_html_block_close(self.position);
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
+        // HTML block comments: opener `<!--` at line start; body
+        // terminates at `-->` (multi-line allowed). Distinct from the
+        // declaration / CDATA arms below by the third char (`-` vs
+        // ASCII-letter vs `[`).
+        if self.position + 3 < self.input.len()
+            && self.input[self.position] == '<'
+            && self.input[self.position + 1] == '!'
+            && self.input[self.position + 2] == '-'
+            && self.input[self.position + 3] == '-'
+        {
+            let end = self.scan_html_block_to_terminator(self.position, "-->")?;
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
+        // Declarations (`<!DOCTYPE`, `<!ELEMENT`, `<!ATTLIST`, …):
+        // body terminates at the first `>` on this or a subsequent
+        // line. Opener pattern is `<!` followed by an ASCII letter.
+        if self.position + 2 < self.input.len()
+            && self.input[self.position] == '<'
+            && self.input[self.position + 1] == '!'
+            && self.input[self.position + 2].is_ascii_alphabetic()
+        {
+            let end = self.scan_html_block_to_terminator(self.position, ">")?;
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
+        // CDATA sections (`<![CDATA[…]]>`): body terminates at `]]>`
+        // (multi-line allowed). Opener is the literal 9-char sequence
+        // `<![CDATA[`. Doesn't overlap with the declaration arm because
+        // `<!` is followed by `[`, not a letter.
+        if self.position + 8 < self.input.len()
+            && self.input[self.position] == '<'
+            && self.input[self.position + 1] == '!'
+            && self.input[self.position + 2] == '['
+            && self.input[self.position + 3] == 'C'
+            && self.input[self.position + 4] == 'D'
+            && self.input[self.position + 5] == 'A'
+            && self.input[self.position + 6] == 'T'
+            && self.input[self.position + 7] == 'A'
+            && self.input[self.position + 8] == '['
+        {
+            let end = self.scan_html_block_to_terminator(self.position, "]]>")?;
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
+        // Processing instructions (`<?…?>`, e.g. PHP, XML PIs):
+        // body terminates at `?>` (multi-line allowed). Opener is the
+        // 2-char sequence `<?`.
+        if self.position + 1 < self.input.len()
+            && self.input[self.position] == '<'
+            && self.input[self.position + 1] == '?'
+        {
+            let end = self.scan_html_block_to_terminator(self.position, "?>")?;
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
+        // Block-element HTML blocks: opener is `<NAME` or `</NAME`
+        // where NAME (case-insensitive) is in BLOCK_ELEMENT_TAG_NAMES,
+        // followed by space, tab, end-of-line, `>`, or `/>`. The opener
+        // does NOT have to be syntactically complete — a line like
+        // `<div id="foo"` with no closing `>` is still a valid block
+        // start. Body runs to the next blank line or EOF; content is
+        // verbatim. This kind CAN interrupt an open paragraph (no
+        // previous_line_is_blank_or_bof check).
+        if self.input[self.position] == '<'
+            && self.is_block_element_opener_at(self.position)
+        {
+            let mut after_opener_line = self.position;
+            while after_opener_line < self.input.len()
+                && self.input[after_opener_line] != '\n'
+            {
+                after_opener_line += 1;
+            }
+            if after_opener_line < self.input.len() {
+                after_opener_line += 1;
+            }
+            let end = self.scan_to_blank_line(after_opener_line);
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
+        // Standalone HTML tag blocks: any complete open or close tag,
+        // followed by ONLY spaces or tabs to the end of the line, whose
+        // tag name is not in the raw-content list (handled above) and
+        // not in the block-element whitelist (handled by the
+        // not-yet-implemented block-element arm — once that lands,
+        // these two arms split cleanly). Body runs until a blank line
+        // or EOF; content is verbatim.
+        //
+        // Precedence rule: this kind CANNOT interrupt an open paragraph
+        // (per CommonMark spec). When the previous line is non-blank,
+        // we fall through so the line stays part of the paragraph.
+        if self.input[self.position] == '<' && self.previous_line_is_blank_or_bof() {
+            if let Some(tag_name) = self.extract_html_tag_name_at(self.position) {
+                let name_lower = tag_name.to_ascii_lowercase();
+                let is_block_element = BLOCK_ELEMENT_TAG_NAMES
+                    .iter()
+                    .any(|t| t.eq_ignore_ascii_case(&name_lower));
+                let is_raw_content = RAW_HTML_BLOCK_TAG_NAMES
+                    .iter()
+                    .any(|t| t.eq_ignore_ascii_case(&name_lower));
+                if !is_block_element && !is_raw_content {
+                    if let Some(tag_len) = self.try_match_html_tag_len() {
+                        let after_tag = self.position + tag_len;
+                        // The complete tag must fit on a single line.
+                        // CommonMark's Type 7 start condition is "line
+                        // begins with a complete open tag ... followed
+                        // by ... the end of the line" — a tag whose
+                        // attributes wrap onto a continuation line
+                        // (e.g. `<a href="foo\nbar">`) doesn't qualify
+                        // and stays as inline HTML inside a paragraph.
+                        let tag_spans_newline = self.input[self.position..after_tag]
+                            .iter()
+                            .any(|c| *c == '\n');
+                        if !tag_spans_newline
+                            && self.is_only_whitespace_to_eol(after_tag)
+                        {
+                            // Move past the opener line's `\n` so the
+                            // blank-line scan starts on the next line.
+                            let mut after_opener_line = after_tag;
+                            while after_opener_line < self.input.len()
+                                && self.input[after_opener_line] != '\n'
+                            {
+                                after_opener_line += 1;
+                            }
+                            if after_opener_line < self.input.len() {
+                                after_opener_line += 1;
+                            }
+                            let end = self.scan_to_blank_line(after_opener_line);
+                            let content: String = self.input[block_start..end].iter().collect();
+                            self.position = end;
+                            return Some(Token::HtmlBlock(content));
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Scans forward from `start` looking for `terminator` (e.g. `>`
+    /// for a declaration, `?>` for a processing instruction, `]]>` for
+    /// CDATA, `-->` for a block comment) and returns the byte index
+    /// AFTER the terminator + the trailing newline (if any) — caller can
+    /// slice `[block_start..returned]` as the verbatim block content
+    /// and set `self.position = returned` to move past the block.
+    ///
+    /// Returns `None` if the terminator is never reached before EOF —
+    /// the caller falls through to inline HTML handling so an
+    /// unterminated declaration / PI / CDATA / comment doesn't consume
+    /// the rest of the document as a block.
+    fn scan_html_block_to_terminator(&self, start: usize, terminator: &str) -> Option<usize> {
+        let term: Vec<char> = terminator.chars().collect();
+        let mut p = start;
+        while p + term.len() <= self.input.len() {
+            if self.input[p..p + term.len()] == term[..] {
+                let after = p + term.len();
+                // Consume the rest of the line (terminator may be
+                // followed by whitespace + newline, all of which is
+                // part of the block per spec).
+                let mut tail = after;
+                while tail < self.input.len() && self.input[tail] != '\n' {
+                    tail += 1;
+                }
+                if tail < self.input.len() {
+                    tail += 1; // include the `\n`
+                }
+                return Some(tail);
+            }
+            p += 1;
+        }
+        None
+    }
+
+    /// Returns true if `chars[pos..]` starts with one of the four
+    /// raw-content HTML block tag names (`script`, `pre`, `style`,
+    /// `textarea`, case-insensitive) followed by a valid opener
+    /// delimiter (space, tab, `>`, or end-of-line). Used by
+    /// `try_parse_html_block` after the initial `<` is consumed
+    /// (caller passes `self.position + 1`).
+    fn is_raw_html_block_opener_at(&self, pos: usize) -> bool {
+        const TAGS: &[&str] = &["script", "pre", "style", "textarea"];
+        for &tag in TAGS {
+            let len = tag.chars().count();
+            if pos + len > self.input.len() {
+                continue;
+            }
+            // Case-insensitive ASCII match on the tag name.
+            let ok = self.input[pos..pos + len]
+                .iter()
+                .zip(tag.chars())
+                .all(|(a, b)| a.eq_ignore_ascii_case(&b));
+            if !ok {
+                continue;
+            }
+            // Validate the char after the tag name.
+            match self.input.get(pos + len).copied() {
+                None | Some(' ') | Some('\t') | Some('\n') | Some('>') => return true,
+                _ => continue,
+            }
+        }
+        false
+    }
+
+    /// Returns the (lowercase) tag name at `pos` if the position sits
+    /// at the start of a complete or partial HTML tag. Handles both
+    /// open tags `<name>` and close tags `</name>`. Returns `None` if
+    /// the position is not at a recognizable tag opener.
+    fn extract_html_tag_name_at(&self, pos: usize) -> Option<String> {
+        if pos >= self.input.len() || self.input[pos] != '<' {
+            return None;
+        }
+        let mut p = pos + 1;
+        if p < self.input.len() && self.input[p] == '/' {
+            p += 1;
+        }
+        if p >= self.input.len() || !self.input[p].is_ascii_alphabetic() {
+            return None;
+        }
+        let name_start = p;
+        while p < self.input.len()
+            && (self.input[p].is_ascii_alphanumeric() || self.input[p] == '-')
+        {
+            p += 1;
+        }
+        let name: String = self.input[name_start..p].iter().collect();
+        Some(name.to_ascii_lowercase())
+    }
+
+    /// Returns true if `chars[pos..]` matches the opener of a
+    /// block-element HTML block — `<NAME` or `</NAME` where NAME (case-
+    /// insensitive) is in BLOCK_ELEMENT_TAG_NAMES, followed by space,
+    /// tab, end-of-line, `>`, or `/>`. The opener does NOT need to be
+    /// syntactically complete; this check stops right after the tag
+    /// name and validates the trailing delimiter.
+    fn is_block_element_opener_at(&self, pos: usize) -> bool {
+        if pos >= self.input.len() || self.input[pos] != '<' {
+            return false;
+        }
+        let mut p = pos + 1;
+        if p < self.input.len() && self.input[p] == '/' {
+            p += 1;
+        }
+        if p >= self.input.len() || !self.input[p].is_ascii_alphabetic() {
+            return false;
+        }
+        let name_start = p;
+        while p < self.input.len()
+            && (self.input[p].is_ascii_alphanumeric() || self.input[p] == '-')
+        {
+            p += 1;
+        }
+        let name: String = self.input[name_start..p].iter().collect();
+        let name_lower = name.to_ascii_lowercase();
+        if !BLOCK_ELEMENT_TAG_NAMES
+            .iter()
+            .any(|t| *t == name_lower.as_str())
+        {
+            return false;
+        }
+        match self.input.get(p).copied() {
+            None | Some(' ') | Some('\t') | Some('\n') | Some('>') => true,
+            Some('/') => self.input.get(p + 1).copied() == Some('>'),
+            _ => false,
+        }
+    }
+
+    /// True if every character from `pos` until the next `\n` (or EOF)
+    /// is a space or tab. Used by the standalone-tag arm to enforce
+    /// the "complete tag followed by ONLY whitespace to end-of-line"
+    /// rule.
+    fn is_only_whitespace_to_eol(&self, pos: usize) -> bool {
+        let mut p = pos;
+        while p < self.input.len() && self.input[p] != '\n' {
+            if self.input[p] != ' ' && self.input[p] != '\t' {
+                return false;
+            }
+            p += 1;
+        }
+        true
+    }
+
+    /// Scans from `start` (must be at line-start) line by line until a
+    /// blank line (only whitespace + newline, or empty line). Returns
+    /// the position at the start of that blank line — the blank line
+    /// itself is NOT included in the result. If no blank line ever
+    /// appears, returns `self.input.len()` so the caller treats the
+    /// rest of the document as block content.
+    fn scan_to_blank_line(&self, start: usize) -> usize {
+        let mut p = start;
+        while p < self.input.len() {
+            let line_start = p;
+            let mut line_end = line_start;
+            while line_end < self.input.len() && self.input[line_end] != '\n' {
+                line_end += 1;
+            }
+            let is_blank = self.input[line_start..line_end]
+                .iter()
+                .all(|c| *c == ' ' || *c == '\t');
+            if is_blank {
+                return line_start;
+            }
+            p = if line_end < self.input.len() {
+                line_end + 1
+            } else {
+                line_end
+            };
+        }
+        self.input.len()
+    }
+
+    /// Scans line-by-line from `start` looking for any of the four
+    /// raw-content closing tags (`</script>`, `</pre>`, `</style>`,
+    /// `</textarea>`, case-insensitive) anywhere on a line. Returns the
+    /// position just past the newline of the closing line, or
+    /// `self.input.len()` if no closer is found — in that case the
+    /// block runs to EOF, which the CommonMark spec explicitly allows.
+    fn scan_to_raw_html_block_close(&self, start: usize) -> usize {
+        const CLOSERS: &[&str] = &["</script>", "</pre>", "</style>", "</textarea>"];
+        let mut line_start = start;
+        while line_start < self.input.len() {
+            let mut line_end = line_start;
+            while line_end < self.input.len() && self.input[line_end] != '\n' {
+                line_end += 1;
+            }
+            let line_lower: String = self.input[line_start..line_end]
+                .iter()
+                .flat_map(|c| c.to_lowercase())
+                .collect();
+            for &closer in CLOSERS {
+                if line_lower.contains(closer) {
+                    return if line_end < self.input.len() {
+                        line_end + 1
+                    } else {
+                        line_end
+                    };
+                }
+            }
+            line_start = if line_end < self.input.len() {
+                line_end + 1
+            } else {
+                line_end
+            };
+        }
+        self.input.len()
     }
 
     /// Checks if current position is at the start of a line
@@ -3541,10 +4116,16 @@ impl Lexer {
 
     /// Checks if current position starts an HTML comment
     fn is_html_comment_start(&self) -> bool {
-        self.input[self.position..]
-            .iter()
-            .collect::<String>()
-            .starts_with("<!--")
+        // Per-character compare avoids the O(n) full-tail allocation
+        // that the old `iter().collect::<String>().starts_with("<!--")`
+        // shape produced. `parse_text` calls this once per character,
+        // so an O(n) probe here would turn the whole parse quadratic.
+        let p = self.position;
+        p + 3 < self.input.len()
+            && self.input[p] == '<'
+            && self.input[p + 1] == '!'
+            && self.input[p + 2] == '-'
+            && self.input[p + 3] == '-'
     }
 
     /// Checks if current position could start a special token given a context
@@ -3589,7 +4170,13 @@ impl Lexer {
                     return true;
                 }
                 // Raw HTML tags (`<span>`, `</span>`, `<br/>`).
-                self.try_match_html_tag_len().is_some()
+                if self.try_match_html_tag_len().is_some() {
+                    return true;
+                }
+                // Inline raw-HTML specials: processing instructions
+                // `<?…?>`, declarations `<!LETTER…>`, CDATA sections
+                // `<![CDATA[…]]>`.
+                self.try_match_inline_raw_html_special().is_some()
             }
 
             _ => false,

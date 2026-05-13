@@ -344,6 +344,17 @@ impl Token {
                 )
             }
 
+            Token::HtmlBlock(html) => {
+                format!(
+                    "{}{{\n{}\"type\": \"HtmlBlock\",\n{}\"content\": \"{}\"\n{}}}",
+                    indent,
+                    inner_indent,
+                    inner_indent,
+                    html.replace("\"", "\\\""),
+                    indent
+                )
+            }
+
             Token::HardBreak => format!(
                 "{}{{\n{}\"type\": \"HardBreak\"\n{}}}",
                 indent, inner_indent, indent
@@ -511,6 +522,7 @@ impl Token {
             }
             Token::HtmlComment(content) => format!("HtmlComment({})", quote(content)),
             Token::HtmlInline(html) => format!("HtmlInline({})", quote(html)),
+            Token::HtmlBlock(html) => format!("HtmlBlock({})", quote(html)),
             Token::Newline => "Newline".to_string(),
             Token::HardBreak => "HardBreak".to_string(),
             Token::HorizontalRule => "HorizontalRule".to_string(),

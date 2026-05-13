@@ -435,14 +435,19 @@ A paragraph with `code` and [link](url).
 
 #[test]
 fn test_html_comment_variations() {
+    // `<!--…-->` at line start now produces a block-level HtmlBlock
+    // (CommonMark §4.6 type 2) carrying the verbatim block including
+    // delimiters. Inline comments (mid-paragraph) still produce
+    // HtmlComment — see html_comment_block_tests.rs and
+    // parse_html_comment_tests.rs respectively.
     let tests = vec![
         (
             "<!-- Simple -->",
-            vec![Token::HtmlComment(" Simple ".to_string())],
+            vec![Token::HtmlBlock("<!-- Simple -->".to_string())],
         ),
         (
             "<!--Multi\nline\ncomment-->",
-            vec![Token::HtmlComment("Multi\nline\ncomment".to_string())],
+            vec![Token::HtmlBlock("<!--Multi\nline\ncomment-->".to_string())],
         ),
     ];
 

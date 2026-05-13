@@ -25,7 +25,10 @@ fn closing_tag_inline() {
 
 #[test]
 fn open_tag_with_attribute() {
-    let tokens = parse(r#"<a href="https://example.com">"#);
+    // INLINE: needs a non-tag prefix on the same line — a complete tag
+    // alone at line start is now a standalone-tag HtmlBlock. The
+    // block-level path is tested in html_standalone_tag_block_tests.rs.
+    let tokens = parse(r#"text <a href="https://example.com">"#);
     assert!(
         tokens.iter().any(|t| matches!(t, Token::HtmlInline(_))),
         "got {:?}",
@@ -35,7 +38,7 @@ fn open_tag_with_attribute() {
 
 #[test]
 fn open_tag_self_closing() {
-    let tokens = parse("<br/>");
+    let tokens = parse("text <br/>");
     assert!(
         tokens.iter().any(|t| matches!(t, Token::HtmlInline(s) if s.contains("br"))),
         "got {:?}",
@@ -45,8 +48,11 @@ fn open_tag_self_closing() {
 
 #[test]
 fn html_comment_still_works() {
+    // At line start, `<!--…-->` is now a block-level HtmlBlock per
+    // CommonMark §4.6 type 2. The inline HtmlComment variant is
+    // covered separately when the comment sits mid-paragraph.
     let tokens = parse("<!-- comment -->");
-    assert!(matches!(tokens[0], Token::HtmlComment(_)));
+    assert!(matches!(tokens[0], Token::HtmlBlock(_)));
 }
 
 #[test]

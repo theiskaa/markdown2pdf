@@ -56,6 +56,30 @@ mod gfm_trio_tests;
 #[path = "markdown/hard_break_extended_tests.rs"]
 mod hard_break_extended_tests;
 
+#[path = "markdown/html_declaration_tests.rs"]
+mod html_declaration_tests;
+
+#[path = "markdown/html_cdata_tests.rs"]
+mod html_cdata_tests;
+
+#[path = "markdown/html_processing_instruction_tests.rs"]
+mod html_processing_instruction_tests;
+
+#[path = "markdown/html_comment_block_tests.rs"]
+mod html_comment_block_tests;
+
+#[path = "markdown/html_raw_content_block_tests.rs"]
+mod html_raw_content_block_tests;
+
+#[path = "markdown/html_standalone_tag_block_tests.rs"]
+mod html_standalone_tag_block_tests;
+
+#[path = "markdown/html_block_element_tests.rs"]
+mod html_block_element_tests;
+
+#[path = "markdown/html_inline_edge_tests.rs"]
+mod html_inline_edge_tests;
+
 #[path = "markdown/hard_line_break_tests.rs"]
 mod hard_line_break_tests;
 

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  # Lets you re-run the CI manually from the Actions tab.
+  workflow_dispatch:
+
+# Cancel in-progress runs of the same workflow on the same branch when
+# new commits are pushed — saves CI minutes during rapid iteration.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The lexer + tests are warning-clean today; any new warning should
+  # block the merge until it's addressed.
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --all-targets --verbose
+
+      - name: Test (lib unit + integration + spec + stress + doc)
+        run: cargo test --all-targets --verbose
+
+      - name: Doc tests
+        run: cargo test --doc --verbose
+
+      - name: CommonMark spec — surface full report in CI log
+        # Same suite as above, but re-runs the spec target with the
+        # per-section breakdown captured in the workflow log so any
+        # regression in spec compliance is visible without re-running
+        # CI locally.
+        run: cargo test --test commonmark_spec -- --nocapture

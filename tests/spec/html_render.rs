@@ -65,9 +65,29 @@ fn render_blocks(tokens: &[Token], out: &mut String, in_loose_list_item: bool) {
                 i += 1;
             }
             Token::HtmlComment(content) => {
-                out.push_str("<!--");
+                // Short comment forms from CommonMark §6.6 round-trip
+                // to themselves rather than the wrapped `<!--body-->`
+                // shape — empty body is `<!-->`, single-hyphen body
+                // is `<!--->`.
+                match content.as_str() {
+                    "" => out.push_str("<!-->\n"),
+                    "-" => out.push_str("<!--->\n"),
+                    _ => {
+                        out.push_str("<!--");
+                        out.push_str(content);
+                        out.push_str("-->\n");
+                    }
+                }
+                i += 1;
+            }
+            Token::HtmlBlock(content) => {
+                // HTML block content is verbatim per CommonMark §4.6.
+                // The trailing newline mirrors the spec runner's expected
+                // output for block-level constructs.
                 out.push_str(content);
-                out.push_str("-->\n");
+                if !content.ends_with('\n') {
+                    out.push('\n');
+                }
                 i += 1;
             }
             // Inline tokens at this level form a paragraph (or, inside a
@@ -309,6 +329,7 @@ fn is_block_level(tok: &Token) -> bool {
             | Token::ListItem { .. }
             | Token::HorizontalRule
             | Token::Table { .. }
+            | Token::HtmlBlock(_)
     ) || is_code_block_tok(tok)
 }
 
@@ -412,11 +433,15 @@ fn render_inline_token(t: &Token, out: &mut String) {
             out.push_str(" />");
         }
         Token::HtmlInline(html) => out.push_str(html),
-        Token::HtmlComment(content) => {
-            out.push_str("<!--");
-            out.push_str(content);
-            out.push_str("-->");
-        }
+        Token::HtmlComment(content) => match content.as_str() {
+            "" => out.push_str("<!-->"),
+            "-" => out.push_str("<!--->"),
+            _ => {
+                out.push_str("<!--");
+                out.push_str(content);
+                out.push_str("-->");
+            }
+        },
         Token::HardBreak => out.push_str("<br />\n"),
         Token::Newline => out.push('\n'),
         Token::HorizontalRule => out.push_str("<hr />\n"),
@@ -424,7 +449,8 @@ fn render_inline_token(t: &Token, out: &mut String) {
         | Token::BlockQuote(_)
         | Token::ListItem { .. }
         | Token::Table { .. }
-        | Token::TableAlignment(_) => {
+        | Token::TableAlignment(_)
+        | Token::HtmlBlock(_) => {
             // Block tokens shouldn't appear at inline position. If they do,
             // emit them as a block escape hatch.
             render_blocks(std::slice::from_ref(t), out, false);
