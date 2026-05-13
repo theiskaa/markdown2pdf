@@ -1,0 +1,51 @@
+# CommonMark spec examples we don't yet pass. One example number per
+# line, optional trailing `# comment`. Lines starting with `#` ignored.
+# Categories: R=lexer bug, H=renderer bug, N=normalization, O=out-of-scope (HTML)
+# Last measured: 652/652 passing (100.0%). All CommonMark 0.31.2 examples pass.
+
+# --- ATX headings (0 failing) ---
+
+# --- Autolinks (0 failing) ---
+
+# --- Backslash escapes (0 failing) ---
+
+# --- Block quotes (0 failing) ---
+
+# --- Code spans (0 failing) ---
+
+# --- Emphasis and strong emphasis (0 failing) ---
+
+# --- Entity and numeric character references (0 failing) ---
+
+# --- Fenced code blocks (0 failing) ---
+
+# --- HTML blocks (0 failing) ---
+
+# --- Hard line breaks (0 failing) ---
+
+# --- Images (0 failing) ---
+
+# --- Indented code blocks (0 failing) ---
+
+# --- Link reference definitions (0 failing) ---
+
+# --- Links (0 failing) ---
+
+# --- List items (0 failing) ---
+
+# --- Lists (0 failing) ---
+
+# --- Paragraphs (0 failing) ---
+
+# --- Precedence (0 failing) ---
+
+# --- Raw HTML (0 failing) ---
+
+# --- Setext headings (0 failing) ---
+
+# --- Soft line breaks (0 failing) ---
+
+# --- Tabs (0 failing) ---
+
+# --- Thematic breaks (0 failing) ---
+

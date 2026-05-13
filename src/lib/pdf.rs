@@ -315,7 +315,7 @@ impl Pdf {
         let mut i = 0usize;
         while i < self.input.len() {
             let token = &self.input[i];
-            // CommonMark §4.8 / §6.8: a *blank* line (two or more
+            // a *blank* line (two or more
             // consecutive Newlines) terminates a paragraph; a single Newline
             // is a soft break and stays inside the current paragraph.
             if let Token::Newline = token {
@@ -344,16 +344,18 @@ impl Pdf {
                     content,
                     ordered,
                     number,
+                    marker: _,
                     checked,
+                    loose: _,
                 } => {
                     self.flush_paragraph(doc, &current_tokens);
                     current_tokens.clear();
                     self.render_list_item(doc, content, *ordered, *number, *checked, 0);
                 }
-                Token::Code(lang, content) if content.contains('\n') => {
+                Token::Code { language, content, block: true } => {
                     self.flush_paragraph(doc, &current_tokens);
                     current_tokens.clear();
-                    self.render_code_block(doc, lang, content);
+                    self.render_code_block(doc, language, content);
                 }
                 Token::HorizontalRule => {
                     self.flush_paragraph(doc, &current_tokens);
@@ -501,7 +503,7 @@ impl Pdf {
                     let nested_style = style.clone().bold();
                     self.render_inline_content_with_state(para, content, nested_style, html);
                 }
-                Token::Link(text, url) => {
+                Token::Link { content, url, title: _ } => {
                     let mut link_style = style.clone();
                     if let Some(color) = self.style.link.text_color {
                         link_style = link_style
@@ -519,9 +521,10 @@ impl Pdf {
                     if self.style.link.strikethrough {
                         link_style = link_style.strikethrough();
                     }
-                    para.push_link(text.clone(), url.clone(), link_style);
+                    let text = Token::collect_all_text(content);
+                    para.push_link(text, url.clone(), link_style);
                 }
-                Token::Code(_, content) => {
+                Token::Code { content, .. } => {
                     let mut code_style = style.clone();
                     if let Some(color) = self.style.code.text_color {
                         code_style = code_style
@@ -533,14 +536,12 @@ impl Pdf {
                     let strike_style = style.clone().strikethrough();
                     self.render_inline_content_with_state(para, content, strike_style, html);
                 }
-                Token::Image(alt, url) => {
-                    // genpdfi doesn't embed images yet. Render the image as
-                    // a styled link so the alt-text is a clean clickable
-                    // label and the underline sits cleanly underneath it.
-                    let label = if alt.is_empty() {
+                Token::Image { alt, url, title: _ } => {
+                    let alt_text = Token::collect_all_text(alt);
+                    let label = if alt_text.is_empty() {
                         url.clone()
                     } else {
-                        alt.clone()
+                        alt_text
                     };
                     if !url.is_empty() {
                         let mut link_style = style.clone();
@@ -652,9 +653,9 @@ impl Pdf {
                     flush_inline(self, doc, &mut buffer, &style);
                     self.render_heading(doc, content, *level);
                 }
-                Token::Code(lang, content) if content.contains('\n') => {
+                Token::Code { language, content, block: true } => {
                     flush_inline(self, doc, &mut buffer, &style);
-                    self.render_code_block(doc, lang, content);
+                    self.render_code_block(doc, language, content);
                 }
                 Token::HorizontalRule => {
                     flush_inline(self, doc, &mut buffer, &style);
@@ -666,7 +667,9 @@ impl Pdf {
                     content,
                     ordered,
                     number,
+                    marker: _,
                     checked,
+                    loose: _,
                 } => {
                     flush_inline(self, doc, &mut buffer, &style);
                     self.render_list_item(doc, content, *ordered, *number, *checked, 0);
@@ -764,7 +767,9 @@ impl Pdf {
                 content: nested_content,
                 ordered: nested_ordered,
                 number: nested_number,
+                marker: _,
                 checked: nested_checked,
+                loose: _,
             } = token
             {
                 self.render_list_item(
@@ -908,13 +913,17 @@ mod tests {
                 content: vec![Token::Text("First item".to_string())],
                 ordered: false,
                 number: None,
+                marker: '-',
                 checked: None,
+                loose: false,
             },
             Token::ListItem {
                 content: vec![Token::Text("Second item".to_string())],
                 ordered: true,
                 number: Some(1),
+                marker: '.',
                 checked: None,
+                loose: false,
             },
         ];
         let pdf = create_test_pdf(tokens);
@@ -931,12 +940,16 @@ mod tests {
                     content: vec![Token::Text("Child item".to_string())],
                     ordered: false,
                     number: None,
+                    marker: '-',
                     checked: None,
+                    loose: false,
                 },
             ],
             ordered: false,
             number: None,
+            marker: '-',
             checked: None,
+            loose: false,
         }];
         let pdf = create_test_pdf(tokens);
         let doc = pdf.render_into_document();
@@ -945,10 +958,7 @@ mod tests {
 
     #[test]
     fn test_render_code_blocks() {
-        let tokens = vec![Token::Code(
-            "rust".to_string(),
-            "fn main() {\n    println!(\"Hello\");\n}".to_string(),
-        )];
+        let tokens = vec![Token::Code { language: "rust".to_string(), content: "fn main() {\n    println!(\"Hello\");\n}".to_string(), block: true }];
         let pdf = create_test_pdf(tokens);
         let doc = pdf.render_into_document();
         assert!(Pdf::render(doc, "/dev/null").is_none());
@@ -975,7 +985,11 @@ mod tests {
     fn test_render_links() {
         let tokens = vec![
             Token::Text("Here is a ".to_string()),
-            Token::Link("link".to_string(), "https://example.com".to_string()),
+            Token::Link {
+                content: vec![Token::Text("link".to_string())],
+                url: "https://example.com".to_string(),
+                title: None,
+            },
             Token::Text(" to click".to_string()),
         ];
         let pdf = create_test_pdf(tokens);
@@ -1000,15 +1014,21 @@ mod tests {
         let tokens = vec![
             Token::Heading(vec![Token::Text("Title".to_string())], 1),
             Token::Text("Some text ".to_string()),
-            Token::Link("with link".to_string(), "https://example.com".to_string()),
+            Token::Link {
+                content: vec![Token::Text("with link".to_string())],
+                url: "https://example.com".to_string(),
+                title: None,
+            },
             Token::Newline,
             Token::ListItem {
                 content: vec![Token::Text("List item".to_string())],
                 ordered: false,
                 number: None,
+                marker: '-',
                 checked: None,
+                loose: false,
             },
-            Token::Code("rust".to_string(), "let x = 42;".to_string()),
+            Token::Code { language: "rust".to_string(), content: "let x = 42;".to_string(), block: true },
         ];
         let pdf = create_test_pdf(tokens);
         let doc = pdf.render_into_document();
@@ -1069,22 +1089,24 @@ mod tests {
                 content: vec![Token::Text("First item".to_string())],
                 ordered: false,
                 number: None,
+                marker: '-',
                 checked: None,
+                loose: false,
             },
             Token::ListItem {
                 content: vec![Token::Text("Second item".to_string())],
                 ordered: false,
                 number: None,
+                marker: '-',
                 checked: None,
+                loose: false,
             },
-            Token::Code(
-                "rust".to_string(),
-                "fn main() {\n    println!(\"Hello\");\n}".to_string(),
-            ),
-            Token::Link(
-                "Example Link".to_string(),
-                "https://example.com".to_string(),
-            ),
+            Token::Code { language: "rust".to_string(), content: "fn main() {\n    println!(\"Hello\");\n}".to_string(), block: true },
+            Token::Link {
+                content: vec![Token::Text("Example Link".to_string())],
+                url: "https://example.com".to_string(),
+                title: None,
+            },
         ];
         let pdf = create_test_pdf(tokens);
         let doc = pdf.render_into_document();

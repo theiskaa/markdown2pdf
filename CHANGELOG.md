@@ -1,3 +1,47 @@
+## [0.4.0] - 2026-05-13
+
+### Features
+
+- *(lexer)* Parse inline raw-html edges
+- *(lexer)* Parse block-element HTML blocks (<div>, <table>, <p>, etc.)
+- *(lexer)* Parse standalone HTML tag blocks (any complete tag on its own line)
+- *(lexer)* Parse raw-content HTML blocks (<script>/<pre>/<style>/<textarea>)
+- *(lexer)* Parse block-level HTML comments (<!--…-->) as block tokens
+- *(lexer)* Parse processing instructions (<?…?>) as block tokens
+- *(lexer)* Parse CDATA sections (<![CDATA[…]]>) as block tokens
+- *(lexer)* Parse HTML declarations (<!DOCTYPE>, <!ELEMENT>, etc.) as block tokens
+- *(lexer)* Replace greedy emphasis with stack-based algorithm (84.0% → 89.0%)
+- *(lexer)* Close 84 CommonMark spec gaps (60.6% → 73.5%) + spec test harness
+- *(lexer)* Widen Link/Image AST + parse inline content + preserve titles
+- *(lexer)* Detect loose vs tight lists
+- *(lexer)* Decode entities in link text, URL, image alt + reference labels
+- *(lexer)* Blockquote lazy continuation
+- *(lexer)* Full HTML5 named-entity table and proper numeric fallbacks
+
+### Bug Fixes
+
+- *(lexer)* Linear-time emphasis + BOM stripping + table invariant
+- *(lexer)* Close 40 more spec gaps across tabs, lists, links, refs (77.9% → 84.0%)
+- *(lexer)* Close 29 more CommonMark spec gaps (73.5% → 77.9%)
+- *(lexer)* Tab-aware block-marker detection + leading-space tolerance
+- *(build)* Add missing build.rs and entities.json
+
+
+### Performance
+
+- *(lexer)* O(n) is_html_comment_start; stress guards for HTML edges
+
+### Testing
+
+- *(markdown)* Move tests to tests/markdown/, add ~250 coverage tests
+- *(lexer)* CommonMark spec runner + stress suite
+- *(lexer)* Regression guards for backslash escapes
+
+### Miscellaneous Tasks
+
+- Drop macos runner from test workflow
+- Run cargo test on every PR (ubuntu + macos)
+
 ## [0.3.0] - 2026-05-10
 
 ### Features

@@ -60,7 +60,7 @@ cargo add markdown2pdf
 Or add to your Cargo.toml:
 
 ```toml
-markdown2pdf = "0.3.0"
+markdown2pdf = "0.4.0"
 ```
 
 ### Feature Flags
@@ -74,16 +74,16 @@ The library provides optional feature flags to control dependencies:
 
 ```toml
 # Minimal installation (no network dependencies)
-markdown2pdf = "0.3.0"
+markdown2pdf = "0.4.0"
 ```
 
 ```toml
 # With URL fetching support (native TLS)
-markdown2pdf = { version = "0.3.0", features = ["native-tls"] }
+markdown2pdf = { version = "0.4.0", features = ["native-tls"] }
 ```
 ```toml
 # With URL fetching support (rustls)
-markdown2pdf = { version = "0.3.0", features = ["rustls-tls"] }
+markdown2pdf = { version = "0.4.0", features = ["rustls-tls"] }
 ```
 
 **Note**: Binary installations via cargo or prebuilt downloads do not include URL fetching by default. To build the binary with URL support:
@@ -221,12 +221,12 @@ For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the e
 
 ## Markdown Coverage
 
-Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). Around 85% of the spec is covered with 323 unit tests; the gaps are HTML block types 1–7, image embedding, and loose vs tight list distinction.
+Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). CommonMark spec pass rate: **100% (652/652)** — every section passes. Backed by ~740 inline unit tests organized in `tests/markdown/`, the full spec runner in `tests/commonmark_spec.rs`, and a 36-test robustness suite in `tests/stress.rs`.
 
 | Block-level                          | Status  | Inline                               | Status  |
 |--------------------------------------|---------|--------------------------------------|---------|
 | ATX headings (`#` to `######`)       | Full    | Backslash escapes                    | Full    |
-| Setext headings (`===` / `---`)      | Full    | Entity / numeric references          | Partial |
+| Setext headings (`===` / `---`)      | Full    | Entity / numeric references          | Full    |
 | Paragraphs                           | Full    | Code spans (single & multi-backtick) | Full    |
 | Thematic breaks (`---` `***` `___`)  | Full    | Emphasis & strong (`*` and `_`)      | Full    |
 | Indented code blocks (4-space)       | Full    | Inline links                         | Full    |
@@ -234,10 +234,10 @@ Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https:/
 | Blockquotes                          | Full    | Autolinks (`<https://…>`, `<email>`) | Full    |
 | Bullet lists (`-` `+` `*`)           | Full    | Images (rendered as styled link)     | Partial |
 | Ordered lists (`1.` and `1)`)        | Full    | Strikethrough (`~~text~~`)           | Full    |
-| Tables (GFM)                         | Full    | Raw inline HTML                      | Partial |
+| Tables (GFM)                         | Full    | Raw inline HTML                      | Full    |
 | Task list items (GFM)                | Full    | Hard / soft line breaks              | Full    |
 | Reference link definitions           | Full    |                                      |         |
-| HTML blocks (types 1–7)              | None    |                                      |         |
+| HTML blocks (7 kinds)                | Full    |                                      |         |
 
 ## Contributing
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.
