@@ -3546,6 +3546,19 @@ impl Lexer {
             return Some(Token::HtmlBlock(content));
         }
 
+        // Type 3: `<?…?>` processing instructions (e.g. PHP, XML PIs).
+        // Body terminates at `?>` (multi-line allowed). Opener is the
+        // 2-char sequence `<?`.
+        if self.position + 1 < self.input.len()
+            && self.input[self.position] == '<'
+            && self.input[self.position + 1] == '?'
+        {
+            let end = self.scan_html_block_to_terminator(self.position, "?>")?;
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
         None
     }
 

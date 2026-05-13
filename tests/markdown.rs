@@ -62,6 +62,9 @@ mod html_declaration_tests;
 #[path = "markdown/html_cdata_tests.rs"]
 mod html_cdata_tests;
 
+#[path = "markdown/html_processing_instruction_tests.rs"]
+mod html_processing_instruction_tests;
+
 #[path = "markdown/hard_line_break_tests.rs"]
 mod hard_line_break_tests;
 
