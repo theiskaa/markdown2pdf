@@ -45,8 +45,11 @@ fn open_tag_self_closing() {
 
 #[test]
 fn html_comment_still_works() {
+    // At line start, `<!--…-->` is now a block-level HtmlBlock per
+    // CommonMark §4.6 type 2. The inline HtmlComment variant is
+    // covered separately when the comment sits mid-paragraph.
     let tokens = parse("<!-- comment -->");
-    assert!(matches!(tokens[0], Token::HtmlComment(_)));
+    assert!(matches!(tokens[0], Token::HtmlBlock(_)));
 }
 
 #[test]

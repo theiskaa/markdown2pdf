@@ -92,8 +92,12 @@ fn invalid_autolink_falls_through_as_text() {
 
 #[test]
 fn html_comment_still_parsed() {
+    // `<!--` at line start is now a block-level HtmlBlock (CommonMark
+    // §4.6 type 2). The inline HtmlComment variant fires only when the
+    // comment is preceded by other content on the same line — that's
+    // tested in parse_html_comment_tests.rs.
     let tokens = parse("<!-- comment -->");
-    assert!(matches!(tokens[0], Token::HtmlComment(_)));
+    assert!(matches!(tokens[0], Token::HtmlBlock(_)));
 }
 
 #[test]

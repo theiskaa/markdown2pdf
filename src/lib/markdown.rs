@@ -3511,6 +3511,22 @@ impl Lexer {
             p
         };
 
+        // Type 2: `<!--…-->` block comments. Opener `<!--` at line start;
+        // body terminates at `-->` (multi-line allowed). Same `<!`
+        // prefix as Type 4 / Type 5 but disambiguated by the third char
+        // (`-` vs ASCII-letter vs `[`).
+        if self.position + 3 < self.input.len()
+            && self.input[self.position] == '<'
+            && self.input[self.position + 1] == '!'
+            && self.input[self.position + 2] == '-'
+            && self.input[self.position + 3] == '-'
+        {
+            let end = self.scan_html_block_to_terminator(self.position, "-->")?;
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
         // Type 4: `<!LETTER…>` declarations (DOCTYPE, ELEMENT, etc.).
         // Body terminates at the first `>` on this or a subsequent
         // line. Opener pattern: `<!` followed by ASCII alphabetic char.
