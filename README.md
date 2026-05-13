@@ -221,7 +221,7 @@ For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the e
 
 ## Markdown Coverage
 
-Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). Around 85% of the spec is covered with 323 unit tests; the gaps are HTML block types 1–7, image embedding, and loose vs tight list distinction.
+Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). CommonMark spec pass rate: **92.9% (606/652)**. All 46 remaining failures are HTML-block / raw-HTML cases (intentionally out of scope) — every non-HTML section passes at 100%. Backed by ~680 inline unit tests organized in `src/lib/markdown_tests/`, the full spec runner in `tests/commonmark_spec.rs`, and a 36-test robustness suite in `tests/stress.rs`.
 
 | Block-level                          | Status  | Inline                               | Status  |
 |--------------------------------------|---------|--------------------------------------|---------|

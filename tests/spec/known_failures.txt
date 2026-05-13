@@ -1,27 +1,27 @@
 # CommonMark spec examples we don't yet pass. One example number per
 # line, optional trailing `# comment`. Lines starting with `#` ignored.
 # Categories: R=lexer bug, H=renderer bug, N=normalization, O=out-of-scope (HTML)
-# Seeded from initial measurement: 395/652 passing (60.6%).
+# Last measured: 606/652 passing (92.9%). All remaining gaps are HTML / Raw-HTML (marked O).
 
-# --- ATX headings (3 failing) ---
+# --- ATX headings (0 failing) ---
 
-# --- Autolinks (3 failing) ---
+# --- Autolinks (0 failing) ---
 
-# --- Backslash escapes (6 failing) ---
+# --- Backslash escapes (1 failing, all O) ---
 21  # O
 
-# --- Block quotes (4 failing) ---
+# --- Block quotes (0 failing) ---
 
-# --- Code spans (2 failing) ---
+# --- Code spans (0 failing) ---
 
-# --- Emphasis and strong emphasis (22 failing) ---
+# --- Emphasis and strong emphasis (0 failing) ---
 
-# --- Entity and numeric character references (7 failing) ---
+# --- Entity and numeric character references (1 failing, all O) ---
 31  # O
 
-# --- Fenced code blocks (16 failing) ---
+# --- Fenced code blocks (0 failing) ---
 
-# --- HTML blocks (40 failing) ---
+# --- HTML blocks (39 failing, all O) ---
 148  # O
 149  # O
 150  # O
@@ -62,36 +62,36 @@
 190  # O
 191  # O
 
-# --- Hard line breaks (3 failing) ---
+# --- Hard line breaks (0 failing) ---
 
-# --- Images (6 failing) ---
+# --- Images (0 failing) ---
 
-# --- Indented code blocks (6 failing) ---
+# --- Indented code blocks (0 failing) ---
 
-# --- Link reference definitions (15 failing) ---
+# --- Link reference definitions (0 failing) ---
 
-# --- Links (46 failing) ---
+# --- Links (0 failing) ---
 
-# --- List items (34 failing) ---
+# --- List items (0 failing) ---
 
-# --- Lists (16 failing) ---
+# --- Lists (0 failing) ---
 
-# --- Paragraphs (1 failing) ---
+# --- Paragraphs (0 failing) ---
 
-# --- Precedence (1 failing) ---
+# --- Precedence (0 failing) ---
 
-# --- Raw HTML (5 failing) ---
+# --- Raw HTML (5 failing, all O) ---
 620  # O
 626  # O
 627  # O
 628  # O
 629  # O
 
-# --- Setext headings (7 failing) ---
+# --- Setext headings (0 failing) ---
 
-# --- Soft line breaks (1 failing) ---
+# --- Soft line breaks (0 failing) ---
 
-# --- Tabs (7 failing) ---
+# --- Tabs (0 failing) ---
 
-# --- Thematic breaks (6 failing) ---
+# --- Thematic breaks (0 failing) ---
 

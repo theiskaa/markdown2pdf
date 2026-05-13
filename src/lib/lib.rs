@@ -510,7 +510,7 @@ mod tests {
             fontfamily = "helvetica"
 
             [heading.1]
-            size = 18
+            size = 18   
             textcolor = { r = 100, g = 100, b = 100 }
         "#;
 

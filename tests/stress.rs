@@ -226,3 +226,157 @@ fn nested_links_do_not_infinite_recurse() {
     let input = "[a [b [c [d [e](u5)](u4)](u3)](u2)](u1)\n";
     run_within_budget("nested_links", input.to_string());
 }
+
+#[test]
+fn tab_only_long_line() {
+    // A line of pure tabs — exercises the tab-expansion paths in
+    // strip_leading_cols / indented-code detection.
+    let n = 64_000;
+    let input = "\t".repeat(n) + "\n";
+    run_within_budget("tab_only_long_line", input);
+}
+
+#[test]
+fn alternating_emphasis_and_code() {
+    // `*` ` * ` … must not provoke quadratic emphasis matching.
+    let n = 10_000;
+    let mut s = String::new();
+    for _ in 0..n {
+        s.push_str("*`*`");
+    }
+    s.push('\n');
+    run_within_budget("alternating_emphasis_and_code", s);
+}
+
+#[test]
+fn mass_reference_definitions_unused() {
+    // Defs with no usage — extract_definitions must scale.
+    let n = 10_000;
+    let mut s = String::new();
+    for i in 0..n {
+        s.push_str(&format!("[d{}]: /u{}\n", i, i));
+    }
+    run_within_budget("mass_reference_definitions_unused", s);
+}
+
+#[test]
+fn mass_image_references_unresolved() {
+    let n = 5_000;
+    let mut s = String::new();
+    for i in 0..n {
+        s.push_str(&format!("![alt{}] ", i));
+    }
+    s.push('\n');
+    run_within_budget("mass_image_references_unresolved", s);
+}
+
+#[test]
+fn mass_links_with_titles() {
+    let n = 2_000;
+    let mut s = String::new();
+    for i in 0..n {
+        s.push_str(&format!(r#"[t{}](/u{} "title{}") "#, i, i, i));
+    }
+    s.push('\n');
+    run_within_budget("mass_links_with_titles", s);
+}
+
+#[test]
+fn mass_tables_back_to_back() {
+    let n = 500;
+    let mut s = String::new();
+    for _ in 0..n {
+        s.push_str("| a | b |\n| --- | --- |\n| 1 | 2 |\n\n");
+    }
+    run_within_budget("mass_tables_back_to_back", s);
+}
+
+#[test]
+fn mixed_cr_in_code_block() {
+    // CR-only line endings inside a fenced block. The lexer normalizes
+    // before lexing; the block body must still come out non-empty.
+    let input = "```\r\nbody one\rbody two\rend\r\n```\r\n";
+    run_within_budget("mixed_cr_in_code_block", input.to_string());
+}
+
+#[test]
+fn mass_html_comment_open_no_close() {
+    // Each `<!--` opens a comment scan; without a closer the lexer must
+    // fall back without looping.
+    let n = 10_000;
+    let input = "<!--".repeat(n) + "\n";
+    run_within_budget("mass_html_comment_open_no_close", input);
+}
+
+#[test]
+fn deeply_nested_image_in_link() {
+    // `[![a](u)](u2)` chained 30 levels — nesting depth bounded by the
+    // 8 MiB test stack.
+    let mut s = String::new();
+    let depth = 30;
+    for i in 0..depth {
+        s.push_str(&format!("[![a{}](u{})]", i, i));
+    }
+    s.push_str("(outer)\n");
+    run_within_budget("deeply_nested_image_in_link", s);
+}
+
+#[test]
+fn unicode_combining_marks_in_emphasis() {
+    // Combining marks should not break flanking-run classification or
+    // panic on grapheme boundaries.
+    let cases = [
+        "*á*",
+        "*a\u{0301}*",
+        "*a\u{200D}b*",     // ZWJ
+        "*\u{FE0F}*",        // variation selector only
+        "*test\u{0301}\u{0302}*",
+    ];
+    for c in &cases {
+        run_within_budget(c, format!("{}\n", c));
+    }
+}
+
+#[test]
+fn mass_entity_references_unknown() {
+    // Unknown entities short-circuit out of the table; loop must not
+    // become quadratic.
+    let n = 10_000;
+    let input = "&xyzzy;".repeat(n) + "\n";
+    run_within_budget("mass_entity_references_unknown", input);
+}
+
+#[test]
+fn mass_setext_underlines() {
+    // Alternating paragraph + underline must not overflow.
+    let n = 5_000;
+    let mut s = String::new();
+    for i in 0..n {
+        s.push_str(&format!("para {}\n=\n\n", i));
+    }
+    run_within_budget("mass_setext_underlines", s);
+}
+
+#[test]
+fn mass_thematic_breaks() {
+    let n = 10_000;
+    let mut s = String::new();
+    for _ in 0..n {
+        s.push_str("---\n");
+    }
+    run_within_budget("mass_thematic_breaks", s);
+}
+
+#[test]
+fn pathological_table_unbalanced_pipes() {
+    // Variable pipe counts per row — parse_table's row scanner must
+    // tolerate every shape without panicking.
+    let n = 1_000;
+    let mut s = String::from("| a | b | c |\n| --- | --- | --- |\n");
+    for i in 0..n {
+        let pipes = (i % 7) + 1;
+        let row: Vec<String> = (0..pipes).map(|j| format!("{}.{}", i, j)).collect();
+        s.push_str(&format!("| {} |\n", row.join(" | ")));
+    }
+    run_within_budget("pathological_table_unbalanced_pipes", s);
+}
