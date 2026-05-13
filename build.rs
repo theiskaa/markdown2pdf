@@ -46,7 +46,7 @@ fn main() {
 
     let mut builder = phf_codegen::Map::new();
     for (name, chars) in &entries {
-        builder.entry(name.as_str(), &format!("{chars:?}"));
+        builder.entry(name.as_str(), format!("{chars:?}"));
     }
     writeln!(out, "{};", builder.build()).unwrap();
 }

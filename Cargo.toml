@@ -1,7 +1,8 @@
 [package]
 name = "markdown2pdf"
 version = "0.4.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 authors = ["Ismael Sh <me@theiskaa.com>"]
 description = "Create PDF with Markdown files (a md to pdf transpiler)"
 readme = "README.md"
@@ -21,24 +22,22 @@ path = "src/bin/main.rs"
 [features]
 default = []
 fetch = ["dep:reqwest"]
-rustls-tls = ["fetch", "reqwest/rustls-tls"]
+rustls-tls = ["fetch", "reqwest/rustls"]
 native-tls = ["fetch", "reqwest/native-tls"]
 
 [dependencies]
 log = "0.4"
 genpdfi = "0.2.7"
-dirs = "4.0.0"
-toml = "0.8.19"
-rust-embed = "8.5.0"
-clap = { version = "4.0", features = ["derive"] }
-reqwest = { version = "0.12.9", features = [
+toml = "1.1"
+clap = { version = "4.6", features = ["derive"] }
+reqwest = { version = "0.13", features = [
     "blocking",
 ], default-features = false, optional = true }
 printpdf = "0.7.0"
-phf = "0.11"
+phf = "0.13"
 
 [build-dependencies]
-phf_codegen = "0.11"
+phf_codegen = "0.13"
 serde_json = "1"
 
 [profile.release]
