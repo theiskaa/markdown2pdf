@@ -43,8 +43,19 @@
 //!         ├── url: String
 //!         └── title: Option<String>
 
-use genpdfi::Alignment;
 use std::collections::HashMap;
+
+/// Column alignment for a GFM table.
+///
+/// Owned by the lexer so the parser has no dependency on the PDF backend.
+/// Renderers translate this to whatever alignment type their layout
+/// engine uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableAlignment {
+    Left,
+    Center,
+    Right,
+}
 
 include!(concat!(env!("OUT_DIR"), "/entities_table.rs"));
 
@@ -156,11 +167,11 @@ pub enum Token {
     /// Table with header, alignment info, and rows
     Table {
         headers: Vec<Vec<Token>>,
-        aligns: Vec<Alignment>,
+        aligns: Vec<TableAlignment>,
         rows: Vec<Vec<Vec<Token>>>,
     },
     /// Text alignment for table columns
-    TableAlignment(Alignment),
+    TableAlignment(TableAlignment),
     /// HTML comment content
     HtmlComment(String),
     /// Raw inline HTML (`<span>`, `</span>`, `<br/>`, etc.)
@@ -5264,16 +5275,16 @@ impl Lexer {
 
         // Parse alignment row
         let align_line = self.read_until_newline();
-        let aligns: Vec<Alignment> = align_line
+        let aligns: Vec<TableAlignment> = align_line
             .trim_matches('|')
             .split('|')
             .map(|s| {
                 let s = s.trim();
                 match (s.starts_with(':'), s.ends_with(':')) {
-                    (true, true) => Alignment::Center,
-                    (true, false) => Alignment::Left,
-                    (false, true) => Alignment::Right,
-                    _ => Alignment::Left,
+                    (true, true) => TableAlignment::Center,
+                    (true, false) => TableAlignment::Left,
+                    (false, true) => TableAlignment::Right,
+                    _ => TableAlignment::Left,
                 }
             })
             .collect();
@@ -5326,7 +5337,7 @@ impl Lexer {
         let mut aligns = aligns;
         match aligns.len().cmp(&headers.len()) {
             std::cmp::Ordering::Less => {
-                aligns.resize(headers.len(), Alignment::Left);
+                aligns.resize(headers.len(), TableAlignment::Left);
             }
             std::cmp::Ordering::Greater => {
                 aligns.truncate(headers.len());

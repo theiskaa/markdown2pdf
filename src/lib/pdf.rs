@@ -16,12 +16,21 @@
 //! The module is designed to be both robust for production use and flexible enough to accommodate various document structures
 //! and styling needs.
 
+use crate::markdown::TableAlignment;
 use crate::{styling::StyleMatch, Token};
 use genpdfi::{
     fonts::{FontData, FontFamily},
     Alignment, Document,
 };
 use log::warn;
+
+fn to_genpdfi_alignment(a: TableAlignment) -> Alignment {
+    match a {
+        TableAlignment::Left => Alignment::Left,
+        TableAlignment::Center => Alignment::Center,
+        TableAlignment::Right => Alignment::Right,
+    }
+}
 
 /// The main PDF document generator that orchestrates the conversion process from markdown to PDF.
 /// This struct serves as the central coordinator for document generation, managing the overall
@@ -795,7 +804,7 @@ impl Pdf {
         &self,
         doc: &mut Document,
         headers: &Vec<Vec<Token>>,
-        aligns: &Vec<Alignment>,
+        aligns: &Vec<TableAlignment>,
         rows: &Vec<Vec<Vec<Token>>>,
     ) {
         doc.push(genpdfi::elements::Break::new(
@@ -817,7 +826,7 @@ impl Pdf {
             let style = genpdfi::style::Style::new().with_font_size(self.style.table_header.size);
 
             if let Some(align) = aligns.get(i) {
-                para.set_alignment(*align);
+                para.set_alignment(to_genpdfi_alignment(*align));
             }
 
             self.render_inline_content_with_style(&mut para, header_cell, style);
@@ -838,7 +847,7 @@ impl Pdf {
                 let style = genpdfi::style::Style::new().with_font_size(self.style.table_cell.size);
 
                 if let Some(align) = aligns.get(i) {
-                    para.set_alignment(*align);
+                    para.set_alignment(to_genpdfi_alignment(*align));
                 }
 
                 self.render_inline_content_with_style(&mut para, cell_tokens, style);

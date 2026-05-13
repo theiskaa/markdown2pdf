@@ -461,17 +461,17 @@ fn render_inline_token(t: &Token, out: &mut String) {
 
 fn render_table(
     headers: &[Vec<Token>],
-    aligns: &[genpdfi::Alignment],
+    aligns: &[markdown2pdf::markdown::TableAlignment],
     rows: &[Vec<Vec<Token>>],
     out: &mut String,
 ) {
     out.push_str("<table>\n<thead>\n<tr>\n");
     for (i, cell) in headers.iter().enumerate() {
-        let align = aligns.get(i).copied().unwrap_or(genpdfi::Alignment::Left);
+        let align = aligns.get(i).copied().unwrap_or(markdown2pdf::markdown::TableAlignment::Left);
         let style = match align {
-            genpdfi::Alignment::Left => "",
-            genpdfi::Alignment::Center => " style=\"text-align: center\"",
-            genpdfi::Alignment::Right => " style=\"text-align: right\"",
+            markdown2pdf::markdown::TableAlignment::Left => "",
+            markdown2pdf::markdown::TableAlignment::Center => " style=\"text-align: center\"",
+            markdown2pdf::markdown::TableAlignment::Right => " style=\"text-align: right\"",
         };
         out.push_str(&format!("<th{}>", style));
         render_inlines(cell, out);
@@ -483,11 +483,11 @@ fn render_table(
         for row in rows {
             out.push_str("<tr>\n");
             for (i, cell) in row.iter().enumerate() {
-                let align = aligns.get(i).copied().unwrap_or(genpdfi::Alignment::Left);
+                let align = aligns.get(i).copied().unwrap_or(markdown2pdf::markdown::TableAlignment::Left);
                 let style = match align {
-                    genpdfi::Alignment::Left => "",
-                    genpdfi::Alignment::Center => " style=\"text-align: center\"",
-                    genpdfi::Alignment::Right => " style=\"text-align: right\"",
+                    markdown2pdf::markdown::TableAlignment::Left => "",
+                    markdown2pdf::markdown::TableAlignment::Center => " style=\"text-align: center\"",
+                    markdown2pdf::markdown::TableAlignment::Right => " style=\"text-align: right\"",
                 };
                 out.push_str(&format!("<td{}>", style));
                 render_inlines(cell, out);

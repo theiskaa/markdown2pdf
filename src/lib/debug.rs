@@ -1,3 +1,4 @@
+use crate::markdown;
 use crate::markdown::Token;
 
 impl Token {
@@ -264,9 +265,9 @@ impl Token {
                 result.push_str(&format!("{}\"aligns\": [\n", inner_indent));
                 for (i, align) in aligns.iter().enumerate() {
                     let align_str = match align {
-                        genpdfi::Alignment::Left => "Left",
-                        genpdfi::Alignment::Center => "Center",
-                        genpdfi::Alignment::Right => "Right",
+                        markdown::TableAlignment::Left => "Left",
+                        markdown::TableAlignment::Center => "Center",
+                        markdown::TableAlignment::Right => "Right",
                     };
                     result.push_str(&format!(
                         "{}\"{}\"",
@@ -312,9 +313,9 @@ impl Token {
 
             Token::TableAlignment(align) => {
                 let align_str = match align {
-                    genpdfi::Alignment::Left => "Left",
-                    genpdfi::Alignment::Center => "Center",
-                    genpdfi::Alignment::Right => "Right",
+                    markdown::TableAlignment::Left => "Left",
+                    markdown::TableAlignment::Center => "Center",
+                    markdown::TableAlignment::Right => "Right",
                 };
                 format!(
                     "{}{{\n{}\"type\": \"TableAlignment\",\n{}\"alignment\": \"{}\"\n{}}}",
@@ -493,9 +494,9 @@ impl Token {
                 let aligns_s: Vec<&str> = aligns
                     .iter()
                     .map(|a| match a {
-                        genpdfi::Alignment::Left => "L",
-                        genpdfi::Alignment::Center => "C",
-                        genpdfi::Alignment::Right => "R",
+                        markdown::TableAlignment::Left => "L",
+                        markdown::TableAlignment::Center => "C",
+                        markdown::TableAlignment::Right => "R",
                     })
                     .collect();
                 let rs: Vec<String> = rows
@@ -514,9 +515,9 @@ impl Token {
             }
             Token::TableAlignment(a) => {
                 let s = match a {
-                    genpdfi::Alignment::Left => "L",
-                    genpdfi::Alignment::Center => "C",
-                    genpdfi::Alignment::Right => "R",
+                    markdown::TableAlignment::Left => "L",
+                    markdown::TableAlignment::Center => "C",
+                    markdown::TableAlignment::Right => "R",
                 };
                 format!("TableAlignment({})", s)
             }

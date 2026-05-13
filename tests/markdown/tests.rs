@@ -1,4 +1,4 @@
-use genpdfi::Alignment;
+use markdown2pdf::markdown::TableAlignment as Alignment;
 use markdown2pdf::markdown::*;
 
 use super::common::parse;

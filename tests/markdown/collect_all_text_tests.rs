@@ -76,7 +76,7 @@ fn structural_tokens_yield_empty() {
         Token::Newline,
         Token::HardBreak,
         Token::HorizontalRule,
-        Token::TableAlignment(genpdfi::Alignment::Left),
+        Token::TableAlignment(markdown2pdf::markdown::TableAlignment::Left),
     ];
     assert_eq!(Token::collect_all_text(&tokens), "");
 }
