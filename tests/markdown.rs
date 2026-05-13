@@ -56,8 +56,11 @@ mod gfm_trio_tests;
 #[path = "markdown/hard_break_extended_tests.rs"]
 mod hard_break_extended_tests;
 
-#[path = "markdown/html_block_type_4_declaration_tests.rs"]
-mod html_block_type_4_declaration_tests;
+#[path = "markdown/html_declaration_tests.rs"]
+mod html_declaration_tests;
+
+#[path = "markdown/html_cdata_tests.rs"]
+mod html_cdata_tests;
 
 #[path = "markdown/hard_line_break_tests.rs"]
 mod hard_line_break_tests;

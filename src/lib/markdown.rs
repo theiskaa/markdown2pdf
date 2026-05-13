@@ -3525,6 +3525,27 @@ impl Lexer {
             return Some(Token::HtmlBlock(content));
         }
 
+        // Type 5: `<![CDATA[…]]>` blocks.
+        // Body terminates at `]]>` (multi-line allowed). Opener pattern
+        // is the literal 9-char sequence `<![CDATA[`. Doesn't overlap
+        // with Type 4 because `<!` is followed by `[`, not a letter.
+        if self.position + 8 < self.input.len()
+            && self.input[self.position] == '<'
+            && self.input[self.position + 1] == '!'
+            && self.input[self.position + 2] == '['
+            && self.input[self.position + 3] == 'C'
+            && self.input[self.position + 4] == 'D'
+            && self.input[self.position + 5] == 'A'
+            && self.input[self.position + 6] == 'T'
+            && self.input[self.position + 7] == 'A'
+            && self.input[self.position + 8] == '['
+        {
+            let end = self.scan_html_block_to_terminator(self.position, "]]>")?;
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
         None
     }
 

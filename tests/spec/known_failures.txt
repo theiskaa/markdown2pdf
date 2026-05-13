@@ -1,7 +1,7 @@
 # CommonMark spec examples we don't yet pass. One example number per
 # line, optional trailing `# comment`. Lines starting with `#` ignored.
 # Categories: R=lexer bug, H=renderer bug, N=normalization, O=out-of-scope (HTML)
-# Last measured: 607/652 passing (93.1%). All remaining gaps are HTML / Raw-HTML (marked O).
+# Last measured: 608/652 passing (93.3%). All remaining gaps are HTML / Raw-HTML (marked O).
 
 # --- ATX headings (0 failing) ---
 
@@ -21,7 +21,7 @@
 
 # --- Fenced code blocks (0 failing) ---
 
-# --- HTML blocks (38 failing, all O) ---
+# --- HTML blocks (37 failing, all O) ---
 148  # O
 149  # O
 150  # O
@@ -52,7 +52,6 @@
 177  # O
 178  # O
 180  # O
-182  # O
 184  # O
 185  # O
 186  # O
