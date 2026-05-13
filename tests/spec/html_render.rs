@@ -319,6 +319,7 @@ fn is_block_level(tok: &Token) -> bool {
             | Token::ListItem { .. }
             | Token::HorizontalRule
             | Token::Table { .. }
+            | Token::HtmlBlock(_)
     ) || is_code_block_tok(tok)
 }
 

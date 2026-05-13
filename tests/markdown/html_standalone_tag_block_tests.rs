@@ -115,12 +115,17 @@ fn multi_line_tag_does_not_open_block() {
 }
 
 #[test]
-fn block_element_tag_name_does_not_open_block_here() {
-    // `<a>` is fine for standalone-tag; `<div>` is NOT — it's reserved
-    // for the block-element arm (different precedence + opener rules).
-    // Until that arm lands `<div>` falls through to inline HTML.
+fn block_element_tag_name_goes_to_block_element_arm() {
+    // `<a>` is fine for standalone-tag; `<div>` is NOT — it's claimed
+    // by the block-element arm instead. Both arms produce HtmlBlock,
+    // but their precedence + opener rules differ (block-element can
+    // interrupt a paragraph; opener can be incomplete).
     let tokens = parse("<div>\n*foo*\n</div>\n");
-    assert!(first_html_block(&tokens).is_none());
+    // Block IS produced (by the block-element arm).
+    let block = first_html_block(&tokens).expect("expected HtmlBlock");
+    assert!(block.contains("<div>"));
+    // Markdown chars inside stay literal — no emphasis emitted.
+    assert!(!tokens.iter().any(|t| matches!(t, Token::Emphasis { .. })));
 }
 
 #[test]

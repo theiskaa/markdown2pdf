@@ -3623,6 +3623,32 @@ impl Lexer {
             return Some(Token::HtmlBlock(content));
         }
 
+        // Block-element HTML blocks: opener is `<NAME` or `</NAME`
+        // where NAME (case-insensitive) is in BLOCK_ELEMENT_TAG_NAMES,
+        // followed by space, tab, end-of-line, `>`, or `/>`. The opener
+        // does NOT have to be syntactically complete — a line like
+        // `<div id="foo"` with no closing `>` is still a valid block
+        // start. Body runs to the next blank line or EOF; content is
+        // verbatim. This kind CAN interrupt an open paragraph (no
+        // previous_line_is_blank_or_bof check).
+        if self.input[self.position] == '<'
+            && self.is_block_element_opener_at(self.position)
+        {
+            let mut after_opener_line = self.position;
+            while after_opener_line < self.input.len()
+                && self.input[after_opener_line] != '\n'
+            {
+                after_opener_line += 1;
+            }
+            if after_opener_line < self.input.len() {
+                after_opener_line += 1;
+            }
+            let end = self.scan_to_blank_line(after_opener_line);
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
         // Standalone HTML tag blocks: any complete open or close tag,
         // followed by ONLY spaces or tabs to the end of the line, whose
         // tag name is not in the raw-content list (handled above) and
@@ -3770,6 +3796,44 @@ impl Lexer {
         }
         let name: String = self.input[name_start..p].iter().collect();
         Some(name.to_ascii_lowercase())
+    }
+
+    /// Returns true if `chars[pos..]` matches the opener of a
+    /// block-element HTML block — `<NAME` or `</NAME` where NAME (case-
+    /// insensitive) is in BLOCK_ELEMENT_TAG_NAMES, followed by space,
+    /// tab, end-of-line, `>`, or `/>`. The opener does NOT need to be
+    /// syntactically complete; this check stops right after the tag
+    /// name and validates the trailing delimiter.
+    fn is_block_element_opener_at(&self, pos: usize) -> bool {
+        if pos >= self.input.len() || self.input[pos] != '<' {
+            return false;
+        }
+        let mut p = pos + 1;
+        if p < self.input.len() && self.input[p] == '/' {
+            p += 1;
+        }
+        if p >= self.input.len() || !self.input[p].is_ascii_alphabetic() {
+            return false;
+        }
+        let name_start = p;
+        while p < self.input.len()
+            && (self.input[p].is_ascii_alphanumeric() || self.input[p] == '-')
+        {
+            p += 1;
+        }
+        let name: String = self.input[name_start..p].iter().collect();
+        let name_lower = name.to_ascii_lowercase();
+        if !BLOCK_ELEMENT_TAG_NAMES
+            .iter()
+            .any(|t| *t == name_lower.as_str())
+        {
+            return false;
+        }
+        match self.input.get(p).copied() {
+            None | Some(' ') | Some('\t') | Some('\n') | Some('>') => true,
+            Some('/') => self.input.get(p + 1).copied() == Some('>'),
+            _ => false,
+        }
     }
 
     /// True if every character from `pos` until the next `\n` (or EOF)
