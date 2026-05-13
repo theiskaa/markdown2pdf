@@ -142,6 +142,11 @@ pub enum Token {
     /// Raw inline HTML (`<span>`, `</span>`, `<br/>`, etc.)
     /// Stored verbatim including the angle brackets.
     HtmlInline(String),
+    /// Block-level raw HTML (CommonMark §4.6). Content is the verbatim
+    /// block text including all original whitespace and line endings.
+    /// Renderers should pass it through unmodified or skip it — no
+    /// markdown parsing happens inside.
+    HtmlBlock(String),
     /// Soft line break (single `\n`).
     Newline,
     /// Hard line break: two-or-more trailing spaces or a
@@ -229,6 +234,7 @@ impl Token {
             }
             Token::HtmlComment(comment) => result.push_str(comment),
             Token::HtmlInline(html) => result.push_str(html),
+            Token::HtmlBlock(html) => result.push_str(html),
             Token::Unknown(text) => result.push_str(text),
             Token::Newline | Token::HardBreak | Token::HorizontalRule => {
                 // These don't contain text
@@ -1792,6 +1798,26 @@ impl Lexer {
                 // Check if this is a valid image start (! followed by [)
                 if self.position + 1 < self.input.len() && self.input[self.position + 1] == '[' {
                     self.parse_image()?
+                } else {
+                    self.parse_text(ctx)?
+                }
+            }
+            '<' if is_block_start && allow_block_tokens(ctx) => {
+                // HTML block detection runs first at line start; falls
+                // through to inline-comment / autolink / inline-tag /
+                // text if no block construct fits.
+                if let Some(block) = self.try_parse_html_block() {
+                    block
+                } else if self.is_html_comment_start() {
+                    self.parse_html_comment()?
+                } else if let Some(autolink) = self.try_parse_autolink() {
+                    autolink
+                } else if let Some(len) = self.try_match_html_tag_len() {
+                    let html: String = self.input[self.position..self.position + len]
+                        .iter()
+                        .collect();
+                    self.position += len;
+                    Token::HtmlInline(html)
                 } else {
                     self.parse_text(ctx)?
                 }
@@ -3442,6 +3468,98 @@ impl Lexer {
             self.position = self.input.len();
             Ok(Token::Text(raw))
         }
+    }
+
+    /// Tries to consume an HTML block (CommonMark §4.6) starting at the
+    /// current position. Returns `Some(Token::HtmlBlock(content))` on a
+    /// successful match — content is the verbatim block text including
+    /// the opening line and any trailing newline — or `None` if no HTML
+    /// block fits, in which case the caller can fall through to inline
+    /// HTML handling (comment / autolink / inline tag / text).
+    ///
+    /// Caller is responsible for verifying line-start and 0-3-space
+    /// indent before calling.
+    ///
+    /// This is the dispatcher across the seven CommonMark HTML block
+    /// types. Each type is recognized by its OPENER, then its body runs
+    /// per the type-specific termination rule:
+    ///   Type 1: until matching `</script|pre|style|textarea>` (any line)
+    ///   Type 2: until `-->`
+    ///   Type 3: until `?>`
+    ///   Type 4: until `>`
+    ///   Type 5: until `]]>`
+    ///   Type 6: until blank line or EOF
+    ///   Type 7: until blank line or EOF
+    ///
+    /// Types are checked in spec order — that's required because Type 4
+    /// would otherwise mis-claim Type 2 / Type 5 openers (`<!--` and
+    /// `<![CDATA[` both start with `<!`).
+    fn try_parse_html_block(&mut self) -> Option<Token> {
+        // We're called from `next_token` at the current `<`. The caller
+        // has already verified `is_block_marker_start()` (line start +
+        // 0-3 space indent), but `self.position` itself sits at the `<`
+        // because `skip_whitespace` ran first. We need to capture the
+        // ORIGINAL line start (including the up-to-3 spaces of indent)
+        // so the block body preserves that indent verbatim per spec
+        // (example 184: `  <div>\n…` keeps the 2-space indent in the
+        // emitted HtmlBlock content).
+        let block_start = {
+            let mut p = self.position;
+            while p > 0 && self.input[p - 1] == ' ' {
+                p -= 1;
+            }
+            p
+        };
+
+        // Type 4: `<!LETTER…>` declarations (DOCTYPE, ELEMENT, etc.).
+        // Body terminates at the first `>` on this or a subsequent
+        // line. Opener pattern: `<!` followed by ASCII alphabetic char.
+        if self.position + 2 < self.input.len()
+            && self.input[self.position] == '<'
+            && self.input[self.position + 1] == '!'
+            && self.input[self.position + 2].is_ascii_alphabetic()
+        {
+            let end = self.scan_html_block_to_terminator(self.position, ">")?;
+            let content: String = self.input[block_start..end].iter().collect();
+            self.position = end;
+            return Some(Token::HtmlBlock(content));
+        }
+
+        None
+    }
+
+    /// Scans forward from `start` looking for `terminator` (e.g. `>` for
+    /// Type 4 decl, `?>` for Type 3 PI, `]]>` for Type 5 CDATA, `-->`
+    /// for Type 2 comment) and returns the byte index AFTER the
+    /// terminator + the trailing newline (if any) — so the caller can
+    /// slice `[block_start..returned]` as the verbatim block content
+    /// and set `self.position = returned` to move past the block.
+    ///
+    /// Returns `None` if the terminator is never reached before EOF —
+    /// the caller falls through to inline HTML handling so an
+    /// unterminated declaration / PI / CDATA / comment doesn't consume
+    /// the rest of the document as a block.
+    fn scan_html_block_to_terminator(&self, start: usize, terminator: &str) -> Option<usize> {
+        let term: Vec<char> = terminator.chars().collect();
+        let mut p = start;
+        while p + term.len() <= self.input.len() {
+            if self.input[p..p + term.len()] == term[..] {
+                let after = p + term.len();
+                // Consume the rest of the line (terminator may be
+                // followed by whitespace + newline, all of which is
+                // part of the block per spec).
+                let mut tail = after;
+                while tail < self.input.len() && self.input[tail] != '\n' {
+                    tail += 1;
+                }
+                if tail < self.input.len() {
+                    tail += 1; // include the `\n`
+                }
+                return Some(tail);
+            }
+            p += 1;
+        }
+        None
     }
 
     /// Checks if current position is at the start of a line

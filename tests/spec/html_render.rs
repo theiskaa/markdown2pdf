@@ -70,6 +70,16 @@ fn render_blocks(tokens: &[Token], out: &mut String, in_loose_list_item: bool) {
                 out.push_str("-->\n");
                 i += 1;
             }
+            Token::HtmlBlock(content) => {
+                // HTML block content is verbatim per CommonMark §4.6.
+                // The trailing newline mirrors the spec runner's expected
+                // output for block-level constructs.
+                out.push_str(content);
+                if !content.ends_with('\n') {
+                    out.push('\n');
+                }
+                i += 1;
+            }
             // Inline tokens at this level form a paragraph (or, inside a
             // tight-list item, a bare inline run).
             _ => {
@@ -424,7 +434,8 @@ fn render_inline_token(t: &Token, out: &mut String) {
         | Token::BlockQuote(_)
         | Token::ListItem { .. }
         | Token::Table { .. }
-        | Token::TableAlignment(_) => {
+        | Token::TableAlignment(_)
+        | Token::HtmlBlock(_) => {
             // Block tokens shouldn't appear at inline position. If they do,
             // emit them as a block escape hatch.
             render_blocks(std::slice::from_ref(t), out, false);
