@@ -13,7 +13,7 @@ use printpdf::{
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::styling::{
-    BorderStyle, Orientation, PageSize, ResolvedBlock, ResolvedBorder, ResolvedList,
+    BorderStyle, ImageAlign, Orientation, PageSize, ResolvedBlock, ResolvedBorder, ResolvedList,
     ResolvedPage, ResolvedPageFurniture, ResolvedStyle, ResolvedToc,
 };
 
@@ -912,7 +912,9 @@ impl<'a> Engine<'a> {
                 aligns,
                 rows,
             } => self.render_table(headers, aligns, rows),
-            Block::Image { path, alt } => self.render_image(path, alt),
+            Block::Image { path, alt, caption } => {
+                self.render_image(path, alt, caption.as_deref())
+            }
             Block::HtmlBlock { content } => self.render_html_block(content),
             Block::PageBreak => self.start_new_page(),
             Block::FootnoteDefinitions { entries } => {
@@ -1037,7 +1039,7 @@ impl<'a> Engine<'a> {
         self.render_code_block(&lines);
     }
 
-    fn render_image(&mut self, path: &std::path::Path, alt: &str) {
+    fn render_image(&mut self, path: &std::path::Path, alt: &str, caption: Option<&str>) {
         // Decode via the `image` crate. If anything fails, gracefully
         // degrade to an italic alt-text paragraph so the document
         // doesn't lose content.
@@ -1077,7 +1079,12 @@ impl<'a> Engine<'a> {
         let natural_w_pt = px_w / dpi * 72.0;
         let natural_h_pt = px_h / dpi * 72.0;
 
-        let max_w_pt = self.content_width_pt();
+        // `image.max_width_pct` is a hard cap as a percentage of the
+        // content column. 100 = full column; smaller values shrink the
+        // image regardless of its natural size.
+        let column_w_pt = self.content_width_pt();
+        let cap_pct = self.style.image.max_width_pct.clamp(1.0, 100.0) / 100.0;
+        let max_w_pt = column_w_pt * cap_pct;
         let scale = if natural_w_pt > max_w_pt {
             max_w_pt / natural_w_pt
         } else {
@@ -1095,8 +1102,13 @@ impl<'a> Engine<'a> {
         self.close_text_section();
 
         let page_h_pt = self.page_height_pt();
-        // Center horizontally inside the current content box.
-        let x_pt = self.indent_left_pt + (self.content_width_pt() - rendered_w_pt) / 2.0;
+        let x_pt = match self.style.image.align {
+            ImageAlign::Left => self.indent_left_pt,
+            ImageAlign::Right => self.indent_left_pt + (column_w_pt - rendered_w_pt).max(0.0),
+            ImageAlign::Center => {
+                self.indent_left_pt + ((column_w_pt - rendered_w_pt) / 2.0).max(0.0)
+            }
+        };
         // printpdf places the image at translate_x/translate_y from
         // the page's bottom-left.
         let y_bot_pt = page_h_pt - self.y_from_top_pt - rendered_h_pt;
@@ -1113,6 +1125,38 @@ impl<'a> Engine<'a> {
             },
         });
         self.y_from_top_pt += rendered_h_pt;
+
+        if let Some(text) = caption.filter(|s| !s.trim().is_empty()) {
+            // Small gap, then a caption line styled as italic body text
+            // centered horizontally inside the image's content column.
+            self.advance_y(4.0);
+            let base = self.style.paragraph.clone();
+            let caption_size = base.font_size_pt * 0.88;
+            let saved_left = self.indent_left_pt;
+            let saved_right = self.indent_right_pt;
+            // Constrain the caption's wrap width to the image width
+            // when the image is narrower than the column.
+            if rendered_w_pt < self.content_width_pt() {
+                self.indent_left_pt = x_pt;
+                self.indent_right_pt = x_pt + rendered_w_pt;
+            }
+            let runs = vec![InlineRun {
+                text: text.to_string(),
+                flags: RunFlags::default().with_italic(),
+                link: None,
+            }];
+            let color = Some(rgb_color(base.text_color_rgb()));
+            self.write_wrapped_runs(
+                &runs,
+                caption_size,
+                base.line_height,
+                RunFlags::default().with_italic(),
+                color,
+            );
+            self.indent_left_pt = saved_left;
+            self.indent_right_pt = saved_right;
+        }
+
         self.advance_y(self.style.image.margin_after_pt);
     }
 

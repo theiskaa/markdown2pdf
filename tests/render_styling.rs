@@ -751,6 +751,62 @@ fn baseline_renders_without_any_styling_overrides() {
 }
 
 #[test]
+fn image_caption_renders_when_title_attribute_present() {
+    let img = "examples/showcase_image.jpg";
+    let md = format!("![alt]({} \"This is a caption\")\n", img);
+    let bytes = render(&md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("(This is a caption)"),
+        "caption text should appear in PDF stream"
+    );
+}
+
+#[test]
+fn image_with_no_title_renders_without_caption() {
+    let img = "examples/showcase_image.jpg";
+    let md = format!("![alt]({})\n", img);
+    let bytes = render(&md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    // Caption text is the title; alt text is "alt". Neither should
+    // appear as a caption — title is None so no caption emission.
+    assert!(!s.contains("(alt)"), "alt text should not render as caption");
+}
+
+#[test]
+fn image_right_align_changes_xobject_translation() {
+    let img = "examples/showcase_image.jpg";
+    let md = format!("![alt]({})\n", img);
+    let cfg_left = "[image]\nalign = \"left\"\n";
+    let cfg_right = "[image]\nalign = \"right\"\n";
+    let bytes_left = render(&md, cfg_left);
+    let bytes_right = render(&md, cfg_right);
+    // Left-aligned image lives at x = left margin; right-aligned at
+    // (column_w - image_w) + left margin. The XObject translate Td
+    // values must differ between the two renders.
+    assert_ne!(
+        bytes_left, bytes_right,
+        "left vs right alignment should produce different PDFs"
+    );
+}
+
+#[test]
+fn image_max_width_pct_shrinks_image() {
+    let img = "examples/showcase_image.jpg";
+    let md = format!("![alt]({})\n", img);
+    let cfg_full = "[image]\nmax_width_pct = 100.0\n";
+    let cfg_half = "[image]\nmax_width_pct = 50.0\n";
+    let bytes_full = render(&md, cfg_full);
+    let bytes_half = render(&md, cfg_half);
+    // Different max_width_pct → different rendered width → different
+    // XObject transform serialization.
+    assert_ne!(
+        bytes_full, bytes_half,
+        "max_width_pct 100 vs 50 should produce different PDFs"
+    );
+}
+
+#[test]
 fn very_long_word_does_not_overflow_horizontally() {
     // A single 200-char word with no whitespace would otherwise
     // overflow the right margin. The split_long_words pre-pass should

@@ -31,10 +31,13 @@ pub enum Block {
     },
     /// A block-level image. The lowering pass promotes a paragraph
     /// containing only an image to this variant; inline images keep
-    /// their alt text in flow.
+    /// their alt text in flow. The optional `caption` carries the
+    /// markdown title attribute (`![alt](url "caption text")`) and is
+    /// rendered as a small line beneath the image.
     Image {
         path: std::path::PathBuf,
         alt: String,
+        caption: Option<String>,
     },
     /// Verbatim block-level raw HTML. Rendered as a monospace block
     /// so the source stays visible. CommonMark §4.6 lets us choose

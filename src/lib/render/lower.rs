@@ -202,7 +202,7 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             // image. We require the buffered paragraph to be empty
             // and the next non-newline token to be either EOF or
             // another block boundary.
-            Token::Image { alt, url, .. }
+            Token::Image { alt, url, title }
                 if buffered_inline.is_empty() && image_is_standalone(tokens, i) =>
             {
                 let path = std::path::PathBuf::from(url);
@@ -211,6 +211,7 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                     out.push(Block::Image {
                         path,
                         alt: alt_text,
+                        caption: title.clone(),
                     });
                     i += 1;
                     continue;
