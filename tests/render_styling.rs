@@ -352,6 +352,106 @@ fn html_pagebreak_comment_yields_two_pages() {
     let _ = page_count;
 }
 
+/// Force a multi-page document by repeating a paragraph enough times
+/// to overflow A4's content area. Each line is ~14 lines deep at the
+/// default body size, so 100 paragraphs reliably produces 3+ pages.
+fn multi_page_markdown(n_paragraphs: usize) -> String {
+    let mut md = String::new();
+    for i in 0..n_paragraphs {
+        md.push_str(&format!(
+            "Paragraph {} content. Some filler to make the line meaningful enough that pages do fill up.\n\n",
+            i
+        ));
+    }
+    md
+}
+
+#[test]
+fn header_page_number_substitutes() {
+    let md = multi_page_markdown(80);
+    let bytes = render(
+        &md,
+        r##"
+        [header]
+        center = "{page} / {total_pages}"
+        "##,
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    // The header is plain ASCII printed via the built-in font path
+    // (no --default-font here), so `(1 / N) Tj` appears literally
+    // in the content stream.
+    assert!(
+        s.contains("(1 / "),
+        "expected `(1 / N)` page-number string in content stream"
+    );
+}
+
+#[test]
+fn footer_renders_on_every_page() {
+    let md = multi_page_markdown(120);
+    let bytes = render(
+        &md,
+        r##"
+        [footer]
+        center = "page {page}"
+        "##,
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("(page 1)"), "footer missing on page 1");
+    assert!(s.contains("(page 2)"), "footer missing on page 2");
+    assert!(s.contains("(page 3)"), "footer missing on page 3");
+}
+
+#[test]
+fn show_on_first_page_false_skips_first() {
+    let md = multi_page_markdown(80);
+    let with_skip = render(
+        &md,
+        r##"
+        [header]
+        center = "HEAD"
+        show_on_first_page = false
+        "##,
+    );
+    let without_skip = render(
+        &md,
+        r##"
+        [header]
+        center = "HEAD"
+        "##,
+    );
+    let count = |bytes: &[u8]| -> usize {
+        let needle = b"(HEAD)";
+        bytes
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
+    };
+    let with_count = count(&with_skip);
+    let without_count = count(&without_skip);
+    assert!(without_count > with_count);
+    assert_eq!(without_count - with_count, 1, "should skip exactly 1 page");
+}
+
+#[test]
+fn title_var_pulls_from_metadata() {
+    let md = "Just one paragraph.";
+    let bytes = render(
+        md,
+        r##"
+        [metadata]
+        title = "SmokeTitle"
+        [header]
+        center = "{title}"
+        "##,
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("(SmokeTitle)"),
+        "header didn't substitute {{title}} from metadata"
+    );
+}
+
 #[test]
 fn baseline_renders_without_any_styling_overrides() {
     // Sanity: with zero config, the renderer still produces a PDF.
