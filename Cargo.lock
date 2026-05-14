@@ -1160,6 +1160,7 @@ dependencies = [
  "hyphenation",
  "image",
  "log",
+ "lopdf",
  "phf",
  "phf_codegen",
  "printpdf",

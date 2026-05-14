@@ -47,6 +47,7 @@ unicode-linebreak = "0.1"
 subsetter = { version = "0.2", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 hyphenation = { version = "0.8", default-features = false, features = ["embed_en-us"] }
+lopdf = { version = "0.39", default-features = false }
 
 [build-dependencies]
 phf_codegen = "0.13"

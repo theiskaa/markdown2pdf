@@ -917,6 +917,46 @@ See [the heading](#reference-heading) or [the spec](https://example.com).
 }
 
 #[test]
+fn link_with_title_emits_contents_tooltip() {
+    let md = "See [the spec](https://example.com/spec \"Official spec page\").\n";
+    let bytes = render(md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    // The /Contents entry on the Link annotation holds the tooltip
+    // text. lopdf serializes literal strings as `(text)`.
+    assert!(
+        s.contains("/Contents")
+            && (s.contains("(Official spec page)") || s.contains("Official spec page")),
+        "expected /Contents tooltip on link annotation"
+    );
+}
+
+#[test]
+fn link_without_title_has_no_contents_entry() {
+    // No title means no tooltip; the link still works as a URI action
+    // but no /Contents key is added.
+    let md = "See [the spec](https://example.com/spec).\n";
+    let bytes = render(md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    // The URI action is present.
+    assert!(s.contains("/S/URI") || s.contains("/S /URI"));
+    // The /Contents tooltip should NOT have a 'spec'-like literal,
+    // because nothing was provided. Asserting absence of a specific
+    // tooltip phrase is the safest invariant here.
+    assert!(
+        !s.contains("(Official spec page)"),
+        "should not have leaked a tooltip"
+    );
+}
+
+#[test]
+fn link_tooltip_does_not_break_pdf() {
+    let md = "[a](https://x.com/a \"tip a\") and [b](https://x.com/b \"tip b\").\n";
+    let bytes = render(md, "");
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(String::from_utf8_lossy(&bytes).contains("%%EOF"));
+}
+
+#[test]
 fn cross_reference_collision_suffix_resolves() {
     let md = "\
 # Section

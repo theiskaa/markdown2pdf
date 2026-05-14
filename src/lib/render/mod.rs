@@ -55,6 +55,7 @@ mod hyphenate;
 mod ir;
 mod layout;
 mod lower;
+mod postprocess;
 
 use crate::markdown::Token;
 use crate::styling::ResolvedStyle;
@@ -141,6 +142,13 @@ pub fn render_to_bytes(
     for w in &warnings {
         log::warn!("printpdf: {:?}", w);
     }
+
+    // Inject `/Contents` (tooltip) entries on link annotations using
+    // titles from `[text](url "title")`. printpdf 0.9 doesn't expose
+    // `/Contents` on its `LinkAnnotation` struct, so we parse the
+    // serialized bytes back with lopdf and patch them in.
+    let tooltips = postprocess::collect_link_tooltips(&tokens);
+    let bytes = postprocess::inject_link_tooltips(bytes, &tooltips);
 
     Ok(bytes)
 }
