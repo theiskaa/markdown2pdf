@@ -10,7 +10,9 @@ use printpdf::{
     PdfDocument, PdfPage, Point, Pt, RawImage, Rect, Rgb, TextItem, XObjectId, XObjectTransform,
 };
 
-use crate::styling::ResolvedStyle;
+use crate::styling::{
+    BorderStyle, ResolvedBlock, ResolvedBorder, ResolvedList, ResolvedStyle,
+};
 
 use super::font::FontSet;
 use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
@@ -53,10 +55,6 @@ struct Engine<'a> {
     indent_left_pt: f32,
     /// Right content edge for the *current* block.
     indent_right_pt: f32,
-    /// Stack of (y_pt, indent_left_pt) markers — one per active
-    /// blockquote frame — used to draw the left rule on
-    /// [`pop_blockquote`].
-    blockquote_stack: Vec<BlockQuoteFrame>,
     /// Page-local Op stream we're currently appending to.
     page_ops: Vec<Op>,
     /// Pending text decorations (underline / strikethrough lines and
@@ -68,16 +66,6 @@ struct Engine<'a> {
     pages: Vec<PdfPage>,
     /// Whether a text section is currently open.
     in_text_section: bool,
-}
-
-struct BlockQuoteFrame {
-    /// Point at which the blockquote started on the *current* page.
-    /// Reset to `y_from_top_pt` whenever a page break happens inside
-    /// the blockquote so we can draw the rule per page.
-    page_start_y_pt: f32,
-    /// x position (from the page's left edge) at which to draw the
-    /// vertical rule.
-    rule_x_pt: f32,
 }
 
 impl<'a> Engine<'a> {
@@ -92,7 +80,6 @@ impl<'a> Engine<'a> {
             y_from_top_pt: top,
             indent_left_pt: left,
             indent_right_pt: right,
-            blockquote_stack: Vec::new(),
             page_ops: Vec::new(),
             pending_decorations: Vec::new(),
             pages: Vec::new(),
@@ -102,7 +89,6 @@ impl<'a> Engine<'a> {
 
     fn finish(mut self) -> Vec<PdfPage> {
         self.close_text_section();
-        self.flush_blockquote_rules();
         self.push_current_page();
         self.pages
     }
@@ -151,28 +137,8 @@ impl<'a> Engine<'a> {
 
     fn start_new_page(&mut self) {
         self.close_text_section();
-        self.flush_blockquote_rules();
         self.push_current_page();
         self.y_from_top_pt = self.top_margin_pt();
-        // Restart any active blockquote frames at the new top margin
-        // so the left rule continues on the new page.
-        for frame in &mut self.blockquote_stack {
-            frame.page_start_y_pt = self.y_from_top_pt;
-        }
-    }
-
-    fn flush_blockquote_rules(&mut self) {
-        let page_h = self.page_height_pt();
-        let y = self.y_from_top_pt;
-        // Snapshot the frames so we can borrow page_ops mutably below.
-        let frames: Vec<(f32, f32)> = self
-            .blockquote_stack
-            .iter()
-            .map(|f| (f.rule_x_pt, f.page_start_y_pt))
-            .collect();
-        for (rule_x, y_top) in frames {
-            draw_vertical_line(&mut self.page_ops, rule_x, y_top, y, page_h);
-        }
     }
 
     fn ensure_text_section(&mut self) {
@@ -199,6 +165,87 @@ impl<'a> Engine<'a> {
         self.page_ops.push(Op::SetTextCursor {
             pos: Point::new(Mm(x_mm), Mm(y_mm)),
         });
+    }
+
+    /// Enter a block: advance the margin-before, reserve top padding,
+    /// shrink the content edges by horizontal padding, and remember
+    /// the bounding box so [`end_block`] can paint background + border.
+    ///
+    /// Caller must hold the returned ctx unmodified and pass it to
+    /// `end_block` after the block's content has been emitted.
+    fn begin_block(&mut self, style: &ResolvedBlock) -> BlockPaintCtx {
+        self.advance_y(style.margin_before_pt);
+        let outer_y_top = self.y_from_top_pt;
+        let outer_x_left = self.indent_left_pt;
+        let outer_x_right = self.indent_right_pt;
+
+        self.indent_left_pt += style.padding.left;
+        self.indent_right_pt -= style.padding.right;
+        if self.indent_right_pt < self.indent_left_pt + 10.0 {
+            self.indent_right_pt = self.indent_left_pt + 10.0;
+        }
+        self.advance_y(style.padding.top);
+
+        self.close_text_section();
+        let marker = self.page_ops.len();
+
+        BlockPaintCtx {
+            saved_left: outer_x_left,
+            saved_right: outer_x_right,
+            outer_x_left,
+            outer_x_right,
+            outer_y_top,
+            marker,
+            background_color: style.background_color,
+            border: style.border.clone(),
+            padding_bottom: style.padding.bottom,
+            margin_after_pt: style.margin_after_pt,
+        }
+    }
+
+    /// Close a block opened by [`begin_block`]. Paints the background
+    /// at the captured marker (so text draws on top) and the border at
+    /// the end (so it doesn't get covered by the fill). If the block
+    /// spilled across a page break the paint is skipped — cross-page
+    /// fragments are a Theme B+ follow-up.
+    fn end_block(&mut self, ctx: BlockPaintCtx) {
+        self.close_text_section();
+        self.advance_y(ctx.padding_bottom);
+        let outer_y_bottom = self.y_from_top_pt;
+
+        let stayed_on_page = outer_y_bottom >= ctx.outer_y_top;
+        if stayed_on_page {
+            let page_h = self.page_height_pt();
+            if let Some(bg) = ctx.background_color {
+                let mut bg_ops: Vec<Op> = Vec::new();
+                draw_filled_rect(
+                    &mut bg_ops,
+                    ctx.outer_x_left,
+                    ctx.outer_y_top,
+                    ctx.outer_x_right,
+                    outer_y_bottom,
+                    rgb_color((bg.r, bg.g, bg.b)),
+                    page_h,
+                );
+                let insert_at = ctx.marker.min(self.page_ops.len());
+                self.page_ops.splice(insert_at..insert_at, bg_ops);
+            }
+            if has_any_border(&ctx.border) {
+                draw_outlined_rect(
+                    &mut self.page_ops,
+                    ctx.outer_x_left,
+                    ctx.outer_y_top,
+                    ctx.outer_x_right,
+                    outer_y_bottom,
+                    &ctx.border,
+                    page_h,
+                );
+            }
+        }
+
+        self.indent_left_pt = ctx.saved_left;
+        self.indent_right_pt = ctx.saved_right;
+        self.advance_y(ctx.margin_after_pt);
     }
 
     fn render_block(&mut self, block: &Block) {
@@ -330,7 +377,13 @@ impl<'a> Engine<'a> {
         let col_width = total_width / col_count as f32;
 
         // Header row.
-        let header_height = self.measure_row_height(headers, s_header.font_size_pt, col_width, true);
+        let header_height = self.measure_row_height(
+            headers,
+            s_header.font_size_pt,
+            s_header.line_height,
+            col_width,
+            true,
+        );
         if self.y_from_top_pt + header_height + self.bottom_margin_pt() > self.page_height_pt() {
             self.start_new_page();
         }
@@ -339,6 +392,7 @@ impl<'a> Engine<'a> {
             headers,
             aligns,
             s_header.font_size_pt,
+            s_header.line_height,
             col_width,
             true,
             s_header.text_color_rgb(),
@@ -353,7 +407,13 @@ impl<'a> Engine<'a> {
             // Pad / truncate to header column count.
             let mut padded: Vec<Vec<InlineRun>> = row.clone();
             padded.resize(col_count, Vec::new());
-            let row_height = self.measure_row_height(&padded, s_cell.font_size_pt, col_width, false);
+            let row_height = self.measure_row_height(
+                &padded,
+                s_cell.font_size_pt,
+                s_cell.line_height,
+                col_width,
+                false,
+            );
             if self.y_from_top_pt + row_height + self.bottom_margin_pt() > self.page_height_pt() {
                 self.start_new_page();
                 // Reprint headers on the new page.
@@ -362,6 +422,7 @@ impl<'a> Engine<'a> {
                     headers,
                     aligns,
                     s_header.font_size_pt,
+                    s_header.line_height,
                     col_width,
                     true,
                     s_header.text_color_rgb(),
@@ -376,6 +437,7 @@ impl<'a> Engine<'a> {
                 &padded,
                 aligns,
                 s_cell.font_size_pt,
+                s_cell.line_height,
                 col_width,
                 false,
                 s_cell.text_color_rgb(),
@@ -394,18 +456,39 @@ impl<'a> Engine<'a> {
         &self,
         cells: &[Vec<InlineRun>],
         font_size: f32,
+        line_height_mult: f32,
         col_width: f32,
         bold: bool,
     ) -> f32 {
-        let size_pt = f32::from(font_size);
-        let line_h = size_pt * 1.4;
+        let line_h = font_size * line_height_mult.max(0.5);
         let mut max_lines = 1usize;
         for cell in cells {
-            let n_lines =
-                count_wrapped_lines(cell, font_size, col_width - 8.0, self.font_set, bold);
+            let n_lines = count_wrapped_lines(
+                cell,
+                font_size,
+                line_height_mult,
+                col_width - 8.0,
+                self.font_set,
+                bold,
+            );
             max_lines = max_lines.max(n_lines);
         }
         max_lines as f32 * line_h + 6.0
+    }
+
+    /// Sum the rendered widths of a cell's inline runs (no wrapping).
+    /// Used for table column alignment — we shift the per-cell text
+    /// cursor by `(col_width - measured) / 2` for center, etc.
+    fn measure_runs_width(&self, runs: &[InlineRun], font_size: f32, bold: bool) -> f32 {
+        let mut total = 0.0f32;
+        for run in runs {
+            let mut flags = run.flags;
+            if bold {
+                flags = flags.with_bold();
+            }
+            total += self.font_set.measure(flags, &run.text, font_size);
+        }
+        total
     }
 
     fn draw_row(
@@ -413,33 +496,53 @@ impl<'a> Engine<'a> {
         cells: &[Vec<InlineRun>],
         aligns: &[crate::markdown::TableAlignment],
         font_size: f32,
+        line_height_mult: f32,
         col_width: f32,
         bold: bool,
         color: (u8, u8, u8),
     ) {
+        const CELL_PAD: f32 = 4.0;
         let saved_left = self.indent_left_pt;
         let saved_right = self.indent_right_pt;
         let row_top = self.y_from_top_pt;
         let mut max_bottom = row_top;
         let col_count = cells.len();
         for (i, cell) in cells.iter().enumerate() {
-            let cell_left = saved_left + col_width * i as f32 + 4.0;
-            let cell_right = saved_left + col_width * (i + 1) as f32 - 4.0;
-            self.indent_left_pt = cell_left;
-            self.indent_right_pt = cell_right;
-            self.y_from_top_pt = row_top + 3.0;
+            let cell_left = saved_left + col_width * i as f32 + CELL_PAD;
+            let cell_right = saved_left + col_width * (i + 1) as f32 - CELL_PAD;
+            let inner_width = cell_right - cell_left;
             let mut runs = cell.clone();
             if bold {
                 for r in &mut runs {
                     r.flags = r.flags.with_bold();
                 }
             }
-            // Alignment is hinted via the lexer but printpdf's
-            // Op::ShowText doesn't support per-line alignment — phase 3
-            // keeps everything left-aligned. Aligns are accepted as
-            // input but ignored for now; phase 5 adds real alignment.
-            let _ = aligns.get(i);
-            self.write_wrapped_runs(&runs, font_size, RunFlags::default(), Some(rgb_color(color)));
+            // Single-line column alignment. Multi-line cells wrap from
+            // the shifted left edge — full per-line alignment is a
+            // Knuth-Plass-adjacent follow-up; the schema field works
+            // for the single-line case that 99% of tables use.
+            let measured = self.measure_runs_width(&runs, font_size, false);
+            let align = aligns
+                .get(i)
+                .copied()
+                .unwrap_or(crate::markdown::TableAlignment::Left);
+            let shift = match align {
+                crate::markdown::TableAlignment::Left => 0.0,
+                crate::markdown::TableAlignment::Center => {
+                    ((inner_width - measured) / 2.0).max(0.0)
+                }
+                crate::markdown::TableAlignment::Right => (inner_width - measured).max(0.0),
+            };
+            self.indent_left_pt = cell_left + shift;
+            self.indent_right_pt = cell_right;
+            self.y_from_top_pt = row_top + 3.0;
+            self.write_wrapped_runs(
+                &runs,
+                font_size,
+                line_height_mult,
+                RunFlags::default(),
+                Some(rgb_color(color)),
+            );
             if self.y_from_top_pt > max_bottom {
                 max_bottom = self.y_from_top_pt;
             }
@@ -488,29 +591,29 @@ impl<'a> Engine<'a> {
     }
 
     fn render_list(&mut self, entries: &[ListEntry]) {
-        // Per-item indent. Honors block-quote / outer list indent by
-        // adding to the current `indent_left_pt`.
         const BULLET_GAP_MM: f32 = 2.0;
         let bullet_gap_pt = mm_to_pt(BULLET_GAP_MM);
-
         let saved_left = self.indent_left_pt;
-        let s = &self.style.list_unordered.block;
-        let size_pt = s.font_size_pt;
 
         for entry in entries {
-            let bullet_text = format_bullet(&entry.bullet);
+            let list_style: ResolvedList = match entry.bullet {
+                ListBullet::Unordered(_) => self.style.list_unordered.clone(),
+                ListBullet::Ordered(_) => self.style.list_ordered.clone(),
+                ListBullet::TaskChecked | ListBullet::TaskUnchecked => {
+                    self.style.list_task.clone()
+                }
+            };
+            let s = &list_style.block;
+            let size_pt = s.font_size_pt;
+            let line_height = s.line_height;
+
+            let bullet_text = format_bullet(&entry.bullet, &list_style);
             let bullet_flags = RunFlags::default();
             let bullet_width = self.font_set.measure(bullet_flags, &bullet_text, size_pt);
 
-            // Reserve bullet column at the *current* left edge.
-            // Then indent inline content past it.
             self.advance_y(s.margin_before_pt.max(0.5));
             let bullet_x = saved_left;
             let bullet_y = self.y_from_top_pt + size_pt;
-            // Force a fresh BT before the bullet's Td so absolute
-            // placement works — otherwise the previous item's text
-            // section is still open and `Td` compounds against the
-            // current text matrix.
             self.close_text_section();
             self.ensure_text_section();
             self.move_cursor_to(bullet_x, bullet_y);
@@ -519,7 +622,7 @@ impl<'a> Engine<'a> {
                 size: Pt(size_pt),
             });
             self.page_ops.push(Op::SetLineHeight {
-                lh: Pt(size_pt * 1.4),
+                lh: Pt(size_pt * line_height.max(0.5)),
             });
             self.page_ops.push(Op::SetFillColor {
                 col: rgb_color(s.text_color_rgb()),
@@ -533,14 +636,17 @@ impl<'a> Engine<'a> {
                 items: vec![TextItem::Text(bullet_emit)],
             });
 
-            // Indent inline content past the bullet column.
             self.indent_left_pt = (saved_left + bullet_width + bullet_gap_pt)
                 .min(self.indent_right_pt - 10.0);
 
-            self.write_wrapped_runs(&entry.runs, s.font_size_pt, RunFlags::default(), Some(rgb_color(s.text_color_rgb())));
+            self.write_wrapped_runs(
+                &entry.runs,
+                size_pt,
+                line_height,
+                RunFlags::default(),
+                Some(rgb_color(s.text_color_rgb())),
+            );
 
-            // Render any nested children (sub-lists, paragraphs from
-            // a loose list item) at this same indent.
             for child in &entry.children {
                 self.render_block(child);
             }
@@ -551,56 +657,22 @@ impl<'a> Engine<'a> {
     }
 
     fn render_blockquote(&mut self, body: &[Block]) {
-        const INDENT_MM: f32 = 6.0;
-        const RULE_OFFSET_MM: f32 = 1.5;
-        let indent_pt = mm_to_pt(INDENT_MM);
-        let rule_x_pt = self.indent_left_pt + mm_to_pt(RULE_OFFSET_MM);
-
-        let saved_left = self.indent_left_pt;
-        let s = &self.style.blockquote;
-        let before_pt = s.margin_before_pt.max(0.5);
-        let after_pt = s.margin_after_pt.max(0.5);
-
-        self.advance_y(before_pt);
-
-        let frame = BlockQuoteFrame {
-            page_start_y_pt: self.y_from_top_pt,
-            rule_x_pt,
-        };
-        self.blockquote_stack.push(frame);
-        self.indent_left_pt = saved_left + indent_pt;
-
+        // padding.left in [blockquote.padding] is the single knob for
+        // how far the text sits past the left border. `indent_pt` is
+        // still available on the schema for callers who want an extra
+        // first-line indent on paragraphs, but blockquotes don't apply
+        // it implicitly anymore.
+        let s = self.style.blockquote.clone();
+        let ctx = self.begin_block(&s);
         for child in body {
             self.render_block(child);
         }
-
-        // Draw the rule on the current page, then pop.
-        let frame = self.blockquote_stack.pop().unwrap();
-        self.close_text_section();
-        let page_h = self.page_height_pt();
-        let y = self.y_from_top_pt;
-        draw_vertical_line(
-            &mut self.page_ops,
-            frame.rule_x_pt,
-            frame.page_start_y_pt,
-            y,
-            page_h,
-        );
-
-        self.indent_left_pt = saved_left;
-        self.advance_y(after_pt);
+        self.end_block(ctx);
     }
 
     fn render_heading(&mut self, level: u8, runs: &[InlineRun]) {
-        let s = match level {
-            1 => &self.style.headings[0],
-            2 => &self.style.headings[1],
-            3 => &self.style.headings[2],
-            4 => &self.style.headings[3],
-            5 => &self.style.headings[4],
-            _ => &self.style.headings[5],
-        };
-
+        let idx = level.clamp(1, 6) as usize - 1;
+        let s = self.style.headings[idx].clone();
         let color = Some(rgb_color(s.text_color_rgb()));
         let base_flags = RunFlags {
             bold: s.is_bold(),
@@ -609,90 +681,78 @@ impl<'a> Engine<'a> {
             strikethrough: false,
             underline: false,
         };
-        let before_pt = s.margin_before_pt;
-        let after_pt = s.margin_after_pt;
-
-        self.advance_y(before_pt);
-        self.write_wrapped_runs(runs, s.font_size_pt, base_flags, color);
-        self.advance_y(after_pt);
+        let ctx = self.begin_block(&s);
+        self.write_wrapped_runs(runs, s.font_size_pt, s.line_height, base_flags, color);
+        self.end_block(ctx);
     }
 
     fn render_paragraph(&mut self, runs: &[InlineRun]) {
-        let s = &self.style.paragraph;
+        let s = self.style.paragraph.clone();
         let color = Some(rgb_color(s.text_color_rgb()));
         let base = RunFlags::default();
-        let before_pt = s.margin_before_pt;
-        let after_pt = s.margin_after_pt;
-
-        self.advance_y(before_pt);
-        self.write_wrapped_runs(runs, s.font_size_pt, base, color);
-        self.advance_y(after_pt);
+        let ctx = self.begin_block(&s);
+        self.write_wrapped_runs(runs, s.font_size_pt, s.line_height, base, color);
+        self.end_block(ctx);
     }
 
     fn render_code_block(&mut self, lines: &[String]) {
-        let s = &self.style.code_block;
+        let s = self.style.code_block.clone();
         let color = Some(rgb_color(s.text_color_rgb()));
         let base = RunFlags::default().with_monospace();
-        let before_pt = s.margin_before_pt;
-        let after_pt = s.margin_after_pt;
-        let size_pt = s.font_size_pt;
-
-        self.advance_y(before_pt);
+        let ctx = self.begin_block(&s);
         for line in lines {
             let run = InlineRun {
                 text: line.clone(),
                 flags: base,
                 link: None,
             };
-            self.write_wrapped_runs(std::slice::from_ref(&run), size_pt, base, color.clone());
+            self.write_wrapped_runs(
+                std::slice::from_ref(&run),
+                s.font_size_pt,
+                s.line_height,
+                base,
+                color.clone(),
+            );
         }
-        self.advance_y(after_pt);
+        self.end_block(ctx);
     }
 
     fn render_horizontal_rule(&mut self) {
         self.close_text_section();
 
         let s = &self.style.horizontal_rule;
-        let before_pt = s.margin_before_pt;
-        let after_pt = s.margin_after_pt;
-        let line_color = s.color_rgb();
         let thickness = s.thickness_pt.max(0.1);
+        let color = rgb_color(s.color_rgb());
+        let dash = dash_pattern_for(s.style);
 
-        self.advance_y(before_pt + thickness * 0.5);
+        self.advance_y(s.margin_before_pt + thickness * 0.5);
 
-        let x_left_pt = self.left_margin_pt();
-        let x_right_pt = PAGE_WIDTH_MM * MM_TO_PT - self.right_margin_pt();
+        let mut x_left_pt = self.left_margin_pt();
+        let mut x_right_pt = PAGE_WIDTH_MM * MM_TO_PT - self.right_margin_pt();
+        let pct = (s.width_pct / 100.0).clamp(0.05, 1.0);
+        if pct < 1.0 {
+            let full = x_right_pt - x_left_pt;
+            let span = full * pct;
+            let pad = (full - span) / 2.0;
+            x_left_pt += pad;
+            x_right_pt -= pad;
+        }
+
         let y_pt = self.y_from_top_pt;
-        let y_mm = pt_to_mm(self.page_height_pt() - y_pt);
+        let page_h = self.page_height_pt();
+        draw_styled_line(
+            &mut self.page_ops,
+            x_left_pt,
+            y_pt,
+            x_right_pt,
+            y_pt,
+            color,
+            thickness,
+            dash,
+            page_h,
+        );
 
-        self.page_ops.push(Op::SaveGraphicsState);
-        self.page_ops.push(Op::SetOutlineColor {
-            col: rgb_color(line_color),
-        });
-        self.page_ops.push(Op::SetOutlineThickness {
-            pt: Pt(0.5),
-        });
-        self.page_ops.push(Op::SetLineDashPattern {
-            dash: LineDashPattern::default(),
-        });
-        self.page_ops.push(Op::DrawLine {
-            line: printpdf::Line {
-                points: vec![
-                    LinePoint {
-                        p: Point::new(Mm(pt_to_mm(x_left_pt)), Mm(y_mm)),
-                        bezier: false,
-                    },
-                    LinePoint {
-                        p: Point::new(Mm(pt_to_mm(x_right_pt)), Mm(y_mm)),
-                        bezier: false,
-                    },
-                ],
-                is_closed: false,
-            },
-        });
-        self.page_ops.push(Op::RestoreGraphicsState);
-
-        self.advance_y(after_pt);
+        self.advance_y(s.margin_after_pt);
     }
 
     /// Wrap `runs` to the page width and emit one ShowText per line.
@@ -703,14 +763,15 @@ impl<'a> Engine<'a> {
         &mut self,
         runs: &[InlineRun],
         font_size: f32,
+        line_height_mult: f32,
         _base_flags: RunFlags,
         color: Option<Color>,
     ) {
         if runs.is_empty() {
             return;
         }
-        let size_pt = f32::from(font_size);
-        let line_height_pt = size_pt * 1.4;
+        let size_pt = font_size;
+        let line_height_pt = size_pt * line_height_mult.max(0.5);
 
         // Split runs into a flat sequence of (word, flags) pairs.
         // Whitespace is the only break opportunity in this phase.
@@ -921,6 +982,19 @@ impl<'a> Engine<'a> {
     }
 }
 
+struct BlockPaintCtx {
+    saved_left: f32,
+    saved_right: f32,
+    outer_x_left: f32,
+    outer_x_right: f32,
+    outer_y_top: f32,
+    marker: usize,
+    background_color: Option<crate::styling::Color>,
+    border: ResolvedBorder,
+    padding_bottom: f32,
+    margin_after_pt: f32,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum DecorationKind {
     None,
@@ -987,6 +1061,7 @@ fn to_win1252(s: &str) -> String {
 fn count_wrapped_lines(
     runs: &[InlineRun],
     font_size: f32,
+    _line_height_mult: f32,
     max_width: f32,
     font_set: &FontSet,
     bold: bool,
@@ -994,7 +1069,7 @@ fn count_wrapped_lines(
     if runs.is_empty() {
         return 1;
     }
-    let size_pt = f32::from(font_size);
+    let size_pt = font_size;
     let mut current = 0.0f32;
     let mut lines = 1usize;
     for run in runs {
@@ -1016,13 +1091,27 @@ fn count_wrapped_lines(
     lines
 }
 
-fn format_bullet(b: &ListBullet) -> String {
-    // External (Unicode) fonts render '•' directly. Built-in
-    // Helvetica falls back through `to_win1252`, which maps '•' to
-    // '*' so the bullet still appears.
+fn format_bullet(b: &ListBullet, style: &ResolvedList) -> String {
+    // External (Unicode) fonts render `•` directly. Built-in
+    // Helvetica falls back through `to_win1252`, which maps `•` to
+    // `*` so the bullet still appears.
     match b {
-        ListBullet::Unordered(_) => "\u{2022}  ".to_string(),
-        ListBullet::Ordered(n) => format!("{}.  ", n),
+        ListBullet::Unordered(_) => {
+            let g = style.bullet.trim();
+            let g = if g.is_empty() { "\u{2022}" } else { g };
+            format!("{}  ", g)
+        }
+        ListBullet::Ordered(n) => {
+            let template = style.bullet.trim();
+            if template.contains('1') {
+                let rendered = template.replacen("1", &n.to_string(), 1);
+                format!("{}  ", rendered)
+            } else if template.is_empty() {
+                format!("{}.  ", n)
+            } else {
+                format!("{}{}  ", n, template)
+            }
+        }
         ListBullet::TaskChecked => "[x] ".to_string(),
         ListBullet::TaskUnchecked => "[ ] ".to_string(),
     }
@@ -1061,6 +1150,178 @@ fn draw_vertical_line(
         },
     });
     ops.push(Op::RestoreGraphicsState);
+}
+
+/// Draw a filled rectangle from (x0, y_top) to (x1, y_bot) in
+/// top-down points. Used for block backgrounds.
+fn draw_filled_rect(
+    ops: &mut Vec<Op>,
+    x0_pt: f32,
+    y_top_pt: f32,
+    x1_pt: f32,
+    y_bot_pt: f32,
+    fill: Color,
+    page_height_pt: f32,
+) {
+    let width_pt = (x1_pt - x0_pt).max(0.0);
+    let height_pt = (y_bot_pt - y_top_pt).max(0.0);
+    if width_pt <= 0.0 || height_pt <= 0.0 {
+        return;
+    }
+    // PDF y origin is bottom-left; our y is top-down.
+    let y_pdf = page_height_pt - y_bot_pt;
+    let rect = Rect {
+        x: Pt(x0_pt),
+        y: Pt(y_pdf),
+        width: Pt(width_pt),
+        height: Pt(height_pt),
+        mode: Some(printpdf::PaintMode::Fill),
+        winding_order: None,
+    };
+    ops.push(Op::SaveGraphicsState);
+    ops.push(Op::SetFillColor { col: fill });
+    ops.push(Op::DrawRectangle { rectangle: rect });
+    ops.push(Op::RestoreGraphicsState);
+}
+
+/// Draw the per-side borders of a rect. Sides that are `None` on
+/// `ResolvedBorder` are skipped so a user can request a single
+/// `border-left` without painting the other three.
+fn draw_outlined_rect(
+    ops: &mut Vec<Op>,
+    x0_pt: f32,
+    y_top_pt: f32,
+    x1_pt: f32,
+    y_bot_pt: f32,
+    border: &ResolvedBorder,
+    page_height_pt: f32,
+) {
+    if let Some(side) = border.top {
+        draw_styled_line(
+            ops,
+            x0_pt,
+            y_top_pt,
+            x1_pt,
+            y_top_pt,
+            rgb_color((side.color.r, side.color.g, side.color.b)),
+            side.width_pt,
+            dash_pattern_for(side.style),
+            page_height_pt,
+        );
+    }
+    if let Some(side) = border.bottom {
+        draw_styled_line(
+            ops,
+            x0_pt,
+            y_bot_pt,
+            x1_pt,
+            y_bot_pt,
+            rgb_color((side.color.r, side.color.g, side.color.b)),
+            side.width_pt,
+            dash_pattern_for(side.style),
+            page_height_pt,
+        );
+    }
+    if let Some(side) = border.left {
+        draw_styled_line(
+            ops,
+            x0_pt,
+            y_top_pt,
+            x0_pt,
+            y_bot_pt,
+            rgb_color((side.color.r, side.color.g, side.color.b)),
+            side.width_pt,
+            dash_pattern_for(side.style),
+            page_height_pt,
+        );
+    }
+    if let Some(side) = border.right {
+        draw_styled_line(
+            ops,
+            x1_pt,
+            y_top_pt,
+            x1_pt,
+            y_bot_pt,
+            rgb_color((side.color.r, side.color.g, side.color.b)),
+            side.width_pt,
+            dash_pattern_for(side.style),
+            page_height_pt,
+        );
+    }
+}
+
+/// Translate a schema `BorderStyle` into a printpdf dash pattern.
+/// The integer dash/gap values are in points; viewers scale them by
+/// the current stroke thickness — these defaults read as ~2pt dashes
+/// at a 0.5pt stroke, which is what users intuitively expect from
+/// "dashed".
+fn dash_pattern_for(style: BorderStyle) -> LineDashPattern {
+    match style {
+        BorderStyle::Solid => LineDashPattern::default(),
+        BorderStyle::Dashed => LineDashPattern {
+            offset: 0,
+            dash_1: Some(4),
+            gap_1: Some(2),
+            dash_2: None,
+            gap_2: None,
+            dash_3: None,
+            gap_3: None,
+        },
+        BorderStyle::Dotted => LineDashPattern {
+            offset: 0,
+            dash_1: Some(1),
+            gap_1: Some(1),
+            dash_2: None,
+            gap_2: None,
+            dash_3: None,
+            gap_3: None,
+        },
+    }
+}
+
+/// Generalized line draw with explicit color / thickness / dash.
+/// `draw_horizontal_line` is now a thin wrapper around this for the
+/// solid-line case kept for backward compatibility with table borders
+/// and text decorations.
+fn draw_styled_line(
+    ops: &mut Vec<Op>,
+    x0_pt: f32,
+    y0_pt: f32,
+    x1_pt: f32,
+    y1_pt: f32,
+    col: Color,
+    thickness_pt: f32,
+    dash: LineDashPattern,
+    page_height_pt: f32,
+) {
+    let y0_mm = pt_to_mm(page_height_pt - y0_pt);
+    let y1_mm = pt_to_mm(page_height_pt - y1_pt);
+    ops.push(Op::SaveGraphicsState);
+    ops.push(Op::SetOutlineColor { col });
+    ops.push(Op::SetOutlineThickness {
+        pt: Pt(thickness_pt.max(0.1)),
+    });
+    ops.push(Op::SetLineDashPattern { dash });
+    ops.push(Op::DrawLine {
+        line: printpdf::Line {
+            points: vec![
+                LinePoint {
+                    p: Point::new(Mm(pt_to_mm(x0_pt)), Mm(y0_mm)),
+                    bezier: false,
+                },
+                LinePoint {
+                    p: Point::new(Mm(pt_to_mm(x1_pt)), Mm(y1_mm)),
+                    bezier: false,
+                },
+            ],
+            is_closed: false,
+        },
+    });
+    ops.push(Op::RestoreGraphicsState);
+}
+
+fn has_any_border(b: &ResolvedBorder) -> bool {
+    b.top.is_some() || b.right.is_some() || b.bottom.is_some() || b.left.is_some()
 }
 
 fn draw_horizontal_line(

@@ -84,10 +84,9 @@ font_family = "Courier"
 text_color = "#808080"
 background_color = "#F5F5F5"
 font_style = "italic"
-indent_pt = 17.0  # ~6 mm
 margin_before_pt = 1.5
 margin_after_pt = 1.5
-padding = { top = 2.0, right = 6.0, bottom = 2.0, left = 6.0 }
+padding = { top = 2.0, right = 6.0, bottom = 2.0, left = 10.0 }
 
 [blockquote.border]
 left = { width_pt = 1.2, color = "#B4B4B4", style = "solid" }
