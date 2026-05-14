@@ -231,6 +231,26 @@ fn blockquote_left_border_emits_a_stroke() {
 }
 
 #[test]
+fn bold_inline_code_switches_to_bold_mono_font() {
+    // Inline code inside a `**bold ... **` span should select the
+    // Courier-Bold variant (built-in path), not plain Courier. The
+    // content stream sets fonts by short alias `/F<n>` and the
+    // BaseFont of the bold variant in the font dictionary is the
+    // give-away. Any of the four built-in Courier-Bold names that
+    // printpdf might emit counts as a pass.
+    let bytes = render("A **bold `mono` text** sample.", "");
+    let s = String::from_utf8_lossy(&bytes);
+    let bold_courier = s.contains("Courier-Bold")
+        || s.contains("CourierBold")
+        || s.contains("Courier-BoldOblique")
+        || s.contains("CourierBoldOblique");
+    assert!(
+        bold_courier,
+        "bold inline code didn't pick a Courier-Bold variant"
+    );
+}
+
+#[test]
 fn baseline_renders_without_any_styling_overrides() {
     // Sanity: with zero config, the renderer still produces a PDF.
     let bytes = render("# Hi\n\nHello.", "");
