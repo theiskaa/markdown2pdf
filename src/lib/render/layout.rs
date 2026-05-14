@@ -7,13 +7,12 @@
 
 use printpdf::{
     Actions, BorderArray, ColorArray, LineDashPattern, LinePoint, LinkAnnotation, Mm, Op,
-    PdfDocument, PdfFontHandle, PdfPage, Point, Pt, RawImage, Rect, Rgb, TextItem, XObjectId,
-    XObjectTransform,
+    PdfDocument, PdfPage, Point, Pt, RawImage, Rect, Rgb, TextItem, XObjectId, XObjectTransform,
 };
 
 use crate::styling::StyleMatch;
 
-use super::font::{FontMetricsCache, FontVariant};
+use super::font::FontSet;
 use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
 
 type Color = printpdf::Color;
@@ -25,15 +24,15 @@ const PAGE_HEIGHT_MM: f32 = 297.0;
 /// [`printpdf::PdfDocument::with_pages`].
 ///
 /// Takes a mutable reference to the [`PdfDocument`] so that the
-/// engine can register XObjects (images) and get back IDs for use in
-/// page operation streams.
+/// engine can register XObjects (images, external fonts) and get
+/// back IDs for use in page operation streams.
 pub fn lay_out_pages(
     blocks: &[Block],
     style: &StyleMatch,
-    cache: &FontMetricsCache,
+    font_set: &FontSet,
     doc: &mut PdfDocument,
 ) -> Vec<PdfPage> {
-    let mut engine = Engine::new(style, cache, doc);
+    let mut engine = Engine::new(style, font_set, doc);
     for block in blocks {
         engine.render_block(block);
     }
@@ -42,7 +41,7 @@ pub fn lay_out_pages(
 
 struct Engine<'a> {
     style: &'a StyleMatch,
-    cache: &'a FontMetricsCache,
+    font_set: &'a FontSet,
     /// Used to register XObjects (images) and get back their IDs.
     doc: &'a mut PdfDocument,
     /// Distance from the top of the page to the current text baseline
@@ -82,13 +81,13 @@ struct BlockQuoteFrame {
 }
 
 impl<'a> Engine<'a> {
-    fn new(style: &'a StyleMatch, cache: &'a FontMetricsCache, doc: &'a mut PdfDocument) -> Self {
+    fn new(style: &'a StyleMatch, font_set: &'a FontSet, doc: &'a mut PdfDocument) -> Self {
         let left = mm_to_pt(style.margins.left.max(1.0));
         let right = PAGE_WIDTH_MM * MM_TO_PT - mm_to_pt(style.margins.right.max(1.0));
         let top = mm_to_pt(style.margins.top.max(1.0));
         Self {
             style,
-            cache,
+            font_set,
             doc,
             y_from_top_pt: top,
             indent_left_pt: left,
@@ -404,7 +403,8 @@ impl<'a> Engine<'a> {
         let line_h = size_pt * 1.4;
         let mut max_lines = 1usize;
         for cell in cells {
-            let n_lines = count_wrapped_lines(cell, font_size, col_width - 8.0, self.cache, bold);
+            let n_lines =
+                count_wrapped_lines(cell, font_size, col_width - 8.0, self.font_set, bold);
             max_lines = max_lines.max(n_lines);
         }
         max_lines as f32 * line_h + 6.0
@@ -501,9 +501,8 @@ impl<'a> Engine<'a> {
 
         for entry in entries {
             let bullet_text = format_bullet(&entry.bullet);
-            let bullet_variant = FontVariant::HelveticaRegular;
-            let bullet_width =
-                self.cache.for_variant(bullet_variant).measure(&bullet_text, size_pt);
+            let bullet_flags = RunFlags::default();
+            let bullet_width = self.font_set.measure(bullet_flags, &bullet_text, size_pt);
 
             // Reserve bullet column at the *current* left edge.
             // Then indent inline content past it.
@@ -513,7 +512,7 @@ impl<'a> Engine<'a> {
             self.ensure_text_section();
             self.move_cursor_to(bullet_x, bullet_y);
             self.page_ops.push(Op::SetFont {
-                font: PdfFontHandle::Builtin(bullet_variant.builtin()),
+                font: self.font_set.handle(bullet_flags),
                 size: Pt(size_pt),
             });
             self.page_ops.push(Op::SetLineHeight {
@@ -522,8 +521,13 @@ impl<'a> Engine<'a> {
             self.page_ops.push(Op::SetFillColor {
                 col: rgb_color(s.text_color.unwrap_or((0, 0, 0))),
             });
+            let bullet_emit = if self.font_set.needs_transliteration(bullet_flags) {
+                to_win1252(&bullet_text)
+            } else {
+                bullet_text.clone()
+            };
             self.page_ops.push(Op::ShowText {
-                items: vec![TextItem::Text(bullet_text.clone())],
+                items: vec![TextItem::Text(bullet_emit)],
             });
 
             // Indent inline content past the bullet column.
@@ -726,9 +730,7 @@ impl<'a> Engine<'a> {
         let mut current_width = 0.0f32;
 
         for word in &words {
-            let variant = FontVariant::for_flags(word.flags);
-            let metrics = self.cache.for_variant(variant);
-            let word_width = metrics.measure(&word.text, size_pt);
+            let word_width = self.font_set.measure(word.flags, &word.text, size_pt);
 
             // If the very first piece of a line is wider than the
             // page, push it anyway — we don't break inside a word in
@@ -753,23 +755,30 @@ impl<'a> Engine<'a> {
             lines.push(current);
         }
 
-        if let Some(c) = color.clone() {
-            self.ensure_text_section();
-            self.page_ops.push(Op::SetFillColor { col: c });
-        }
-
         let link_color = self.style.link.text_color.map(rgb_color);
 
         for line in lines {
+            // Bug fix: Op::SetTextCursor emits PDF's `Td` operator,
+            // which is RELATIVE to the previous text cursor position
+            // within the same BT...ET section. If we keep one text
+            // section open across multiple SetTextCursor calls, each
+            // line compounds the offset and lines 2+ go off-page.
+            // Force a fresh text section per line so SetTextCursor
+            // acts on an identity text matrix (= effectively
+            // absolute placement for the first Td of each section).
+            self.close_text_section();
             self.ensure_text_section();
+            if let Some(c) = color.clone() {
+                self.page_ops.push(Op::SetFillColor { col: c });
+            }
             let baseline_y_pt = self.y_from_top_pt + size_pt;
             self.move_cursor_to(self.indent_left_pt, baseline_y_pt);
 
             let mut x_cursor_pt = self.indent_left_pt;
             for seg in &line {
-                let variant = FontVariant::for_flags(seg.flags);
-                let metrics = self.cache.for_variant(variant);
-                let seg_width = metrics.measure(&seg.text, size_pt);
+                let seg_width = self.font_set.measure(seg.flags, &seg.text, size_pt);
+                let font_handle = self.font_set.handle(seg.flags);
+                let needs_trans = self.font_set.needs_transliteration(seg.flags);
 
                 // Restore the text fill colour if this is a link
                 // (link colour) vs body (block colour).
@@ -782,14 +791,19 @@ impl<'a> Engine<'a> {
                 }
 
                 self.page_ops.push(Op::SetFont {
-                    font: PdfFontHandle::Builtin(variant.builtin()),
+                    font: font_handle,
                     size: Pt(size_pt),
                 });
                 self.page_ops.push(Op::SetLineHeight {
                     lh: Pt(line_height_pt),
                 });
+                let emit_text = if needs_trans {
+                    to_win1252(&seg.text)
+                } else {
+                    seg.text.clone()
+                };
                 self.page_ops.push(Op::ShowText {
-                    items: vec![TextItem::Text(seg.text.clone())],
+                    items: vec![TextItem::Text(emit_text)],
                 });
 
                 // Buffer decorations and link rects until the line is
@@ -824,6 +838,10 @@ impl<'a> Engine<'a> {
         }
 
         self.flush_decorations();
+        // Ensure the text section closes at the end of the block so
+        // the next block's first SetTextCursor lands on a fresh
+        // text matrix.
+        self.close_text_section();
     }
 
     fn flush_decorations(&mut self) {
@@ -862,10 +880,14 @@ impl<'a> Engine<'a> {
                     Pt((d.x1_pt - d.x0_pt).max(1.0)),
                     Pt(d.size_pt),
                 );
+                // Border [0.0, 0.0, 0.0] = no visible border. The
+                // default `BorderArray::Solid([0.0, 0.0, 1.0])`
+                // draws a 1pt outline that shows up as a stray
+                // rectangle around link rects in some viewers.
                 let annotation = LinkAnnotation::new(
                     rect,
                     Actions::uri(url),
-                    Some(BorderArray::default()),
+                    Some(BorderArray::Solid([0.0, 0.0, 0.0])),
                     Some(ColorArray::Transparent),
                     None,
                 );
@@ -894,13 +916,56 @@ struct PendingDecoration {
     baseline_y_pt: f32,
 }
 
+/// Convert a UTF-8 string to ASCII for safe rendering with
+/// printpdf's built-in font path.
+///
+/// Why ASCII and not Win-1252? printpdf 0.9 nominally writes text
+/// for built-in fonts via `lopdf::Encoding::SimpleEncoding(
+/// b"WinAnsiEncoding")`, but `SimpleEncoding` with an arbitrary
+/// name falls through to a UTF-8 byte passthrough in lopdf 0.39 —
+/// it never consults the actual Win-1252 mapping table. There is no
+/// way through the public TextItem API to inject raw bytes 0x80..0xFF,
+/// so non-ASCII characters round-trip as UTF-8 byte sequences and
+/// then get *interpreted* as Win-1252 by the viewer, producing
+/// mojibake like `â€"` for `—`.
+///
+/// Until the renderer can switch to an external (Unicode) TTF via
+/// printpdf's `ParsedFont` path, we transliterate the common
+/// punctuation Unicode points to their ASCII equivalents and replace
+/// the rest with `?` — visibly imperfect but at least readable, and
+/// it does not silently scramble the document.
+fn to_win1252(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c as u32 {
+            // ASCII passes through untouched.
+            0x00..=0x7F => out.push(c),
+            // Common Win-1252 punctuation -> ASCII equivalents.
+            0x2014 => out.push_str("--"),  // — em-dash
+            0x2013 => out.push('-'),       // – en-dash
+            0x2022 => out.push('*'),       // • bullet
+            0x2018 | 0x2019 => out.push('\''), // ' '
+            0x201C | 0x201D => out.push('"'),  // " "
+            0x2026 => out.push_str("..."), // …
+            0x00A0 => out.push(' '),       // non-breaking space
+            0x00A9 => out.push_str("(c)"),
+            0x00AE => out.push_str("(R)"),
+            0x2122 => out.push_str("(TM)"),
+            // Everything else is mapped to '?' so the loss is visible
+            // and not silently scrambled.
+            _ => out.push('?'),
+        }
+    }
+    out
+}
+
 /// Approximate the number of wrapped lines a run sequence would
 /// occupy in a column of `max_width` points.
 fn count_wrapped_lines(
     runs: &[InlineRun],
     font_size: u8,
     max_width: f32,
-    cache: &FontMetricsCache,
+    font_set: &FontSet,
     bold: bool,
 ) -> usize {
     if runs.is_empty() {
@@ -914,11 +979,9 @@ fn count_wrapped_lines(
         if bold {
             flags = flags.with_bold();
         }
-        let variant = FontVariant::for_flags(flags);
-        let metrics = cache.for_variant(variant);
         for word in run.text.split_whitespace() {
-            let w = metrics.measure(word, size_pt);
-            let space = metrics.measure(" ", size_pt);
+            let w = font_set.measure(flags, word, size_pt);
+            let space = font_set.measure(flags, " ", size_pt);
             if current + w > max_width {
                 lines += 1;
                 current = w + space;
@@ -931,8 +994,11 @@ fn count_wrapped_lines(
 }
 
 fn format_bullet(b: &ListBullet) -> String {
+    // External (Unicode) fonts render '•' directly. Built-in
+    // Helvetica falls back through `to_win1252`, which maps '•' to
+    // '*' so the bullet still appears.
     match b {
-        ListBullet::Unordered(_) => "•  ".to_string(),
+        ListBullet::Unordered(_) => "\u{2022}  ".to_string(),
         ListBullet::Ordered(n) => format!("{}.  ", n),
         ListBullet::TaskChecked => "[x] ".to_string(),
         ListBullet::TaskUnchecked => "[ ] ".to_string(),
@@ -1078,45 +1144,45 @@ mod tests {
 
     #[test]
     fn empty_block_list_produces_no_pages() {
-        let cache = FontMetricsCache::new();
+        let font_set = FontSet::load(None, &[], &mut PdfDocument::new("test"));
         let style = StyleMatch::default();
-        let pages = lay_out_pages(&[], &style, &cache, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&[], &style, &font_set, &mut PdfDocument::new("test"));
         assert!(pages.is_empty());
     }
 
     #[test]
     fn one_paragraph_produces_one_page() {
-        let cache = FontMetricsCache::new();
+        let font_set = FontSet::load(None, &[], &mut PdfDocument::new("test"));
         let style = StyleMatch::default();
         let blocks = vec![Block::Paragraph {
             runs: vec![InlineRun::new("hello world")],
         }];
-        let pages = lay_out_pages(&blocks, &style, &cache, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&blocks, &style, &font_set, &mut PdfDocument::new("test"));
         assert_eq!(pages.len(), 1);
     }
 
     #[test]
     fn many_paragraphs_split_across_pages() {
-        let cache = FontMetricsCache::new();
+        let font_set = FontSet::load(None, &[], &mut PdfDocument::new("test"));
         let style = StyleMatch::default();
         let blocks: Vec<_> = (0..200)
             .map(|i| Block::Paragraph {
                 runs: vec![InlineRun::new(format!("paragraph {}", i))],
             })
             .collect();
-        let pages = lay_out_pages(&blocks, &style, &cache, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&blocks, &style, &font_set, &mut PdfDocument::new("test"));
         assert!(pages.len() >= 2, "expected page split, got {}", pages.len());
     }
 
     #[test]
     fn very_long_paragraph_wraps_to_multiple_lines() {
-        let cache = FontMetricsCache::new();
+        let font_set = FontSet::load(None, &[], &mut PdfDocument::new("test"));
         let style = StyleMatch::default();
         let long_text = "word ".repeat(200);
         let blocks = vec![Block::Paragraph {
             runs: vec![InlineRun::new(long_text)],
         }];
-        let pages = lay_out_pages(&blocks, &style, &cache, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&blocks, &style, &font_set, &mut PdfDocument::new("test"));
         assert!(!pages.is_empty());
     }
 }

@@ -76,13 +76,25 @@ pub fn render_to_file(
 pub fn render_to_bytes(
     tokens: Vec<Token>,
     style: StyleMatch,
-    _font_config: Option<&FontConfig>,
+    font_config: Option<&FontConfig>,
 ) -> Result<Vec<u8>, MdpError> {
     let mut doc = PdfDocument::new("markdown2pdf");
-    let cache = font::FontMetricsCache::new();
+
+    // Collect every distinct character in the document so the font
+    // loader can pre-populate its codepoint -> glyph table without
+    // walking the font's full cmap.
+    let body_text = Token::collect_all_text(&tokens);
+    let used_codepoints: Vec<char> = {
+        let mut chars: Vec<char> = body_text.chars().collect();
+        chars.sort();
+        chars.dedup();
+        chars
+    };
+
+    let font_set = font::FontSet::load(font_config, &used_codepoints, &mut doc);
 
     let blocks = lower::lower(&tokens);
-    let pages = layout::lay_out_pages(&blocks, &style, &cache, &mut doc);
+    let pages = layout::lay_out_pages(&blocks, &style, &font_set, &mut doc);
 
     // Always include at least one page so the resulting PDF is valid
     // even for an empty token stream.
