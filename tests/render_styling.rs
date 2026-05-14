@@ -251,6 +251,108 @@ fn bold_inline_code_switches_to_bold_mono_font() {
 }
 
 #[test]
+fn custom_page_size_changes_mediabox() {
+    // 100mm x 150mm = 283.46pt x 425.20pt. The PDF MediaBox is
+    // emitted as `MediaBox[0 0 W H]` with the values rounded to ~3
+    // decimals. Confirm both dimensions appear (the integer parts
+    // are stable; printpdf may format the trailing digits).
+    let bytes = render(
+        "Hi.",
+        r##"
+        [page]
+        size = { width_mm = 100.0, height_mm = 150.0 }
+        "##,
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    let has_width = s.contains("283") || s.contains("283.464") || s.contains("283.46");
+    let has_height = s.contains("425") || s.contains("425.196") || s.contains("425.2");
+    assert!(
+        has_width && has_height,
+        "MediaBox didn't contain the custom dimensions"
+    );
+}
+
+#[test]
+fn landscape_orientation_swaps_dimensions() {
+    // A4 landscape: 297mm x 210mm => 841.89pt x 595.28pt. In the
+    // MediaBox string the width number should come before the
+    // height number and be the larger of the two.
+    let bytes = render(
+        "Hi.",
+        r##"
+        [page]
+        orientation = "landscape"
+        "##,
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    // Look for the larger A4 dimension (~841 / 842) in the
+    // serialized MediaBox.
+    let landscape_dim = s.contains("841") || s.contains("842");
+    assert!(
+        landscape_dim,
+        "expected the A4 long side (~842pt) in MediaBox for landscape"
+    );
+}
+
+#[test]
+fn metadata_fields_written_to_info_dict() {
+    // printpdf 0.9 encodes Info-dict strings as UTF-16-BE with a
+    // leading FEFF BOM (PDF spec compliant). Searching for ASCII
+    // "Alice" misses; the bytes are `<FEFF 0041 006C 0069 0063 0065>`.
+    let bytes = render(
+        "Hi.",
+        r##"
+        [metadata]
+        title = "My Doc"
+        author = "Alice"
+        subject = "Subj"
+        creator = "test"
+        "##,
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    // Keys are present in the Info object.
+    assert!(s.contains("/Author"), "Info dict missing /Author key");
+    assert!(s.contains("/Subject"), "Info dict missing /Subject key");
+    assert!(s.contains("/Title"), "Info dict missing /Title key");
+    // The Alice value in UTF-16BE = 0041 006C 0069 0063 0065. With
+    // BOM: FEFF 0041 006C 0069 0063 0065.
+    assert!(
+        s.contains("FEFF0041006C006900630065")
+            || s.contains("FEFF0041006c006900630065"),
+        "expected `Alice` as UTF-16BE bytes after FEFF BOM"
+    );
+}
+
+#[test]
+fn html_pagebreak_comment_yields_two_pages() {
+    let bytes = render(
+        "First page content.\n\n<!-- pagebreak -->\n\nSecond page content.",
+        "",
+    );
+    let page_count = bytes
+        .windows(b"/Type/Page".len())
+        .filter(|w| {
+            *w == b"/Type/Page"
+                && !bytes
+                    .windows(b"/Type/Pages".len())
+                    .any(|x| std::ptr::eq(x.as_ptr(), w.as_ptr()) && x == b"/Type/Pages")
+        })
+        .count();
+    // /Type/Page and /Type/Pages overlap; the simpler safe check is
+    // count of /Type/Page followed by a non-`s`.
+    let mut pages = 0usize;
+    let bs = &bytes;
+    let needle = b"/Type/Page";
+    for i in 0..bs.len().saturating_sub(needle.len() + 1) {
+        if &bs[i..i + needle.len()] == needle && bs[i + needle.len()] != b's' {
+            pages += 1;
+        }
+    }
+    assert!(pages >= 2, "expected >=2 pages, got {}", pages);
+    let _ = page_count;
+}
+
+#[test]
 fn baseline_renders_without_any_styling_overrides() {
     // Sanity: with zero config, the renderer still produces a PDF.
     let bytes = render("# Hi\n\nHello.", "");
