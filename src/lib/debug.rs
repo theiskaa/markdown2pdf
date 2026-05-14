@@ -420,6 +420,48 @@ impl Token {
                 result.push_str(&format!("{}}}", indent));
                 result
             }
+            Token::DefinitionList { entries } => {
+                let mut result = format!("{}{{\n", indent);
+                result.push_str(&format!("{}\"type\": \"DefinitionList\",\n", inner_indent));
+                result.push_str(&format!("{}\"entries\": [\n", inner_indent));
+                for (i, entry) in entries.iter().enumerate() {
+                    result.push_str(&format!("{}  {{\n", inner_indent));
+                    result.push_str(&format!("{}    \"term\": [\n", inner_indent));
+                    for (j, token) in entry.term.iter().enumerate() {
+                        result.push_str(&token.to_readable_json(indent_level + 3));
+                        if j < entry.term.len() - 1 {
+                            result.push(',');
+                        }
+                        result.push('\n');
+                    }
+                    result.push_str(&format!("{}    ],\n", inner_indent));
+                    result.push_str(&format!("{}    \"definitions\": [\n", inner_indent));
+                    for (j, def) in entry.definitions.iter().enumerate() {
+                        result.push_str(&format!("{}      [\n", inner_indent));
+                        for (k, token) in def.iter().enumerate() {
+                            result.push_str(&token.to_readable_json(indent_level + 4));
+                            if k < def.len() - 1 {
+                                result.push(',');
+                            }
+                            result.push('\n');
+                        }
+                        result.push_str(&format!("{}      ]", inner_indent));
+                        if j < entry.definitions.len() - 1 {
+                            result.push(',');
+                        }
+                        result.push('\n');
+                    }
+                    result.push_str(&format!("{}    ]\n", inner_indent));
+                    result.push_str(&format!("{}  }}", inner_indent));
+                    if i < entries.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}]\n", inner_indent));
+                result.push_str(&format!("{}}}", indent));
+                result
+            }
             Token::Unknown(content) => {
                 format!(
                     "{}{{\n{}\"type\": \"Unknown\",\n{}\"content\": \"{}\"\n{}}}",
@@ -563,6 +605,16 @@ impl Token {
             Token::HardBreak => "HardBreak".to_string(),
             Token::HorizontalRule => "HorizontalRule".to_string(),
             Token::Strikethrough(body) => format!("Strikethrough({})", list(body)),
+            Token::DefinitionList { entries } => {
+                let es: Vec<String> = entries
+                    .iter()
+                    .map(|e| {
+                        let defs: Vec<String> = e.definitions.iter().map(|d| list(d)).collect();
+                        format!("({} -> [{}])", list(&e.term), defs.join(", "))
+                    })
+                    .collect();
+                format!("DefinitionList([{}])", es.join(", "))
+            }
             Token::Unknown(s) => format!("Unknown({})", quote(s)),
         }
     }

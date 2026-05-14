@@ -11,7 +11,7 @@
 
 use crate::markdown::Token;
 
-use super::ir::{Block, FootnoteEntry, InlineRun, ListBullet, ListEntry, RunFlags};
+use super::ir::{Block, DefinitionEntry, FootnoteEntry, InlineRun, ListBullet, ListEntry, RunFlags};
 use std::collections::HashMap;
 
 /// Lower a slice of top-level tokens into the block IR.
@@ -96,6 +96,22 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 let nested = lower(body);
                 out.push(Block::BlockQuote { body: nested });
+                i += 1;
+            }
+            Token::DefinitionList { entries } => {
+                flush_paragraph(&mut out, &mut buffered_inline);
+                let ir_entries: Vec<DefinitionEntry> = entries
+                    .iter()
+                    .map(|e| DefinitionEntry {
+                        term: flatten_inline(&e.term, RunFlags::default(), None, &footnote_numbers),
+                        definitions: e
+                            .definitions
+                            .iter()
+                            .map(|d| flatten_inline(d, RunFlags::default(), None, &footnote_numbers))
+                            .collect(),
+                    })
+                    .collect();
+                out.push(Block::DefinitionList { entries: ir_entries });
                 i += 1;
             }
             Token::FootnoteDefinition { label, content } => {
@@ -316,6 +332,18 @@ fn collect_footnote_numbering(tokens: &[Token]) -> HashMap<String, usize> {
             Token::FootnoteDefinition { content, .. } => {
                 for c in content {
                     walk(c, map);
+                }
+            }
+            Token::DefinitionList { entries } => {
+                for entry in entries {
+                    for c in &entry.term {
+                        walk(c, map);
+                    }
+                    for def in &entry.definitions {
+                        for c in def {
+                            walk(c, map);
+                        }
+                    }
                 }
             }
             Token::Table { headers, rows, .. } => {

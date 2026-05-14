@@ -855,7 +855,51 @@ impl<'a> Engine<'a> {
             Block::FootnoteDefinitions { entries } => {
                 self.render_footnote_definitions(entries)
             }
+            Block::DefinitionList { entries } => self.render_definition_list(entries),
         }
+    }
+
+    fn render_definition_list(&mut self, entries: &[crate::render::ir::DefinitionEntry]) {
+        if entries.is_empty() {
+            return;
+        }
+        let body_style = self.style.paragraph.clone();
+        let color = Some(rgb_color(body_style.text_color_rgb()));
+        let saved_left = self.indent_left_pt;
+        let def_indent_pt = mm_to_pt(6.0);
+
+        for (idx, entry) in entries.iter().enumerate() {
+            let mut term_runs: Vec<InlineRun> = Vec::with_capacity(entry.term.len());
+            for r in &entry.term {
+                let mut bolded = r.clone();
+                bolded.flags = bolded.flags.with_bold();
+                term_runs.push(bolded);
+            }
+            if idx == 0 {
+                self.advance_y(body_style.margin_before_pt);
+            } else {
+                self.advance_y(body_style.margin_before_pt * 0.5);
+            }
+            self.write_wrapped_runs(
+                &term_runs,
+                body_style.font_size_pt,
+                body_style.line_height,
+                RunFlags::default().with_bold(),
+                color.clone(),
+            );
+            self.indent_left_pt = (saved_left + def_indent_pt).min(self.indent_right_pt - 10.0);
+            for def in &entry.definitions {
+                self.write_wrapped_runs(
+                    def,
+                    body_style.font_size_pt,
+                    body_style.line_height,
+                    RunFlags::default(),
+                    color.clone(),
+                );
+            }
+            self.indent_left_pt = saved_left;
+        }
+        self.advance_y(body_style.margin_after_pt);
     }
 
     fn render_footnote_definitions(&mut self, entries: &[crate::render::ir::FootnoteEntry]) {

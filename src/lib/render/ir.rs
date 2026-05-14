@@ -49,6 +49,15 @@ pub enum Block {
     /// section at the end of the document. Numbers are assigned in
     /// first-reference order by the lower pass.
     FootnoteDefinitions { entries: Vec<FootnoteEntry> },
+    /// PHP Markdown Extra-style definition list. Each entry pairs a
+    /// term with one or more definitions.
+    DefinitionList { entries: Vec<DefinitionEntry> },
+}
+
+#[derive(Debug, Clone)]
+pub struct DefinitionEntry {
+    pub term: Vec<InlineRun>,
+    pub definitions: Vec<Vec<InlineRun>>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +198,23 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
             for entry in entries {
                 for r in &entry.runs {
                     walk_run(r, u);
+                }
+            }
+        }
+        Block::DefinitionList { entries } => {
+            // Term is rendered bold, so any list contributes a
+            // body-bold requirement.
+            if !entries.is_empty() {
+                u.body_bold = true;
+            }
+            for entry in entries {
+                for r in &entry.term {
+                    walk_run(r, u);
+                }
+                for def in &entry.definitions {
+                    for r in def {
+                        walk_run(r, u);
+                    }
                 }
             }
         }

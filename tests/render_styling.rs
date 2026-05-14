@@ -749,3 +749,31 @@ fn baseline_renders_without_any_styling_overrides() {
     let bytes = render("# Hi\n\nHello.", "");
     assert!(bytes.starts_with(b"%PDF-"));
 }
+
+#[test]
+fn definition_list_emits_term_and_definition() {
+    let bytes = render("Apple\n: A red fruit.\n", "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("(Apple)"), "term missing from PDF");
+    assert!(s.contains("(A red fruit.)"), "definition missing from PDF");
+}
+
+#[test]
+fn definition_list_handles_multiple_entries() {
+    let bytes = render(
+        "Apple\n: A red fruit.\nBanana\n: A yellow fruit.\n",
+        "",
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("(Apple)"));
+    assert!(s.contains("(Banana)"));
+    assert!(s.contains("(A red fruit.)"));
+    assert!(s.contains("(A yellow fruit.)"));
+}
+
+#[test]
+fn definition_list_does_not_break_pdf() {
+    let bytes = render("Term\n: First.\n: Second.\n", "");
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(String::from_utf8_lossy(&bytes).contains("%%EOF"));
+}
