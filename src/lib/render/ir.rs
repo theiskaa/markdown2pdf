@@ -93,6 +93,92 @@ impl InlineRun {
     }
 }
 
+/// Which font variants the document actually uses. Built by walking
+/// the lowered IR once before font loading, so we can skip loading
+/// (and embedding) weights that no run in the document references.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct VariantUsage {
+    pub body_bold: bool,
+    pub body_italic: bool,
+    pub body_bold_italic: bool,
+    pub mono_regular: bool,
+    pub mono_bold: bool,
+    pub mono_italic: bool,
+    pub mono_bold_italic: bool,
+}
+
+impl VariantUsage {
+    pub fn analyze(blocks: &[Block]) -> Self {
+        let mut u = Self::default();
+        for b in blocks {
+            walk_block(b, &mut u);
+        }
+        u
+    }
+}
+
+fn walk_block(block: &Block, u: &mut VariantUsage) {
+    match block {
+        Block::Heading { runs, .. } | Block::Paragraph { runs } => {
+            for r in runs {
+                walk_run(r, u);
+            }
+        }
+        Block::List { entries } => {
+            for entry in entries {
+                for r in &entry.runs {
+                    walk_run(r, u);
+                }
+                for child in &entry.children {
+                    walk_block(child, u);
+                }
+            }
+        }
+        Block::BlockQuote { body } => {
+            for child in body {
+                walk_block(child, u);
+            }
+        }
+        Block::Table { headers, rows, .. } => {
+            // The renderer ships the header cells through with_bold(),
+            // so any table contributes a body-bold requirement.
+            if !headers.is_empty() {
+                u.body_bold = true;
+            }
+            for header in headers {
+                for r in header {
+                    walk_run(r, u);
+                }
+            }
+            for row in rows {
+                for cell in row {
+                    for r in cell {
+                        walk_run(r, u);
+                    }
+                }
+            }
+        }
+        Block::CodeBlock { .. } | Block::HtmlBlock { .. } => {
+            u.mono_regular = true;
+        }
+        Block::HorizontalRule | Block::Image { .. } => {}
+    }
+}
+
+fn walk_run(run: &InlineRun, u: &mut VariantUsage) {
+    let f = run.flags;
+    match (f.monospace, f.bold, f.italic) {
+        (false, false, false) => {}
+        (false, true, false) => u.body_bold = true,
+        (false, false, true) => u.body_italic = true,
+        (false, true, true) => u.body_bold_italic = true,
+        (true, false, false) => u.mono_regular = true,
+        (true, true, false) => u.mono_bold = true,
+        (true, false, true) => u.mono_italic = true,
+        (true, true, true) => u.mono_bold_italic = true,
+    }
+}
+
 /// Per-run style flags. Combined orthogonally — e.g. `bold + italic`
 /// resolves to a bold-italic font variant; `monospace` overrides the
 /// family. `strikethrough`/`underline` are decorations drawn after

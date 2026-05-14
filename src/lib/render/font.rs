@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use printpdf::{BuiltinFont, FontId, PdfDocument, PdfFontHandle};
 use ttf_parser::Face;
 
-use super::ir::RunFlags;
+use super::ir::{RunFlags, VariantUsage};
 use crate::fonts::{FontConfig, FontSource, find_system_font};
 
 /// The family of built-in fonts the renderer uses for everything.
@@ -308,21 +308,45 @@ impl FontSet {
     /// Build the font set for a render call.
     ///
     /// `used_codepoints` should be every distinct character that
-    /// appears in the document — we walk the font's cmap once per
-    /// codepoint to populate the glyph-index table. Missing
-    /// codepoints fall back to glyph 0 (typically `.notdef`, a small
-    /// box) which is the standard PDF behavior.
+    /// appears in the document. `usage` tells us which weight
+    /// variants are actually referenced so we don't embed
+    /// bold/italic/bold-italic faces that the document never asks
+    /// for. Regular is always loaded; the optional weights are
+    /// loaded only when `usage` flags them.
     pub fn load(
         font_config: Option<&FontConfig>,
         used_codepoints: &[char],
+        usage: VariantUsage,
         doc: &mut PdfDocument,
     ) -> Self {
         let builtin = FontMetricsCache::new();
+        let body_variants = BodyVariantNeed {
+            bold: usage.body_bold || usage.body_bold_italic,
+            italic: usage.body_italic || usage.body_bold_italic,
+            bold_italic: usage.body_bold_italic,
+        };
+        let code_variants = BodyVariantNeed {
+            bold: usage.mono_bold || usage.mono_bold_italic,
+            italic: usage.mono_italic || usage.mono_bold_italic,
+            bold_italic: usage.mono_bold_italic,
+        };
         let external_body = font_config
-            .and_then(|c| load_external_family(default_source(c), used_codepoints, doc))
+            .and_then(|c| load_external_family(default_source(c), used_codepoints, body_variants, doc))
             .unwrap_or_default();
-        let external_code = font_config
-            .and_then(|c| load_external_family(code_source(c), used_codepoints, doc))
+        // If the user picked an external body font but didn't specify
+        // a code font, try a sensible system monospace fallback. Mixing
+        // an external Unicode body font with the built-in Type 1 Courier
+        // for inline code makes the inline-code space glyph ~2× wider
+        // than the surrounding body spaces (Courier 600/1000 em vs e.g.
+        // Georgia ~280/1000 em), which shows up as a visible gap and a
+        // jumpy baseline at every font transition.
+        let user_code_src = font_config.and_then(code_source);
+        let code_src = match user_code_src {
+            Some(src) => Some(src),
+            None if external_body.is_loaded() => default_monospace_source(),
+            None => None,
+        };
+        let external_code = load_external_family(code_src, used_codepoints, code_variants, doc)
             .unwrap_or_default();
         Self {
             builtin,
@@ -390,6 +414,31 @@ fn code_source(c: &FontConfig) -> Option<FontSource> {
     c.code_font.as_deref().map(name_to_external_source)
 }
 
+/// Walk a per-OS list of likely-installed system monospace fonts and
+/// return the first one we can locate. Used when an external body font
+/// is configured but the user didn't specify a code font — keeps both
+/// paths on the same external Unicode renderer so inline code shares a
+/// baseline with surrounding body text.
+fn default_monospace_source() -> Option<FontSource> {
+    #[cfg(target_os = "macos")]
+    const CANDIDATES: &[&str] = &["Menlo", "Monaco", "Courier New"];
+    #[cfg(target_os = "windows")]
+    const CANDIDATES: &[&str] = &["Consolas", "Cascadia Code", "Courier New", "Lucida Console"];
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    const CANDIDATES: &[&str] = &[
+        "DejaVu Sans Mono",
+        "Liberation Mono",
+        "Noto Sans Mono",
+        "Ubuntu Mono",
+    ];
+    for name in CANDIDATES {
+        if find_system_font(name).is_some() {
+            return Some(FontSource::System((*name).to_string()));
+        }
+    }
+    None
+}
+
 /// Resolve a user-supplied font name to a source the external
 /// loader can consume.
 ///
@@ -432,13 +481,25 @@ fn resolve_regular(source: FontSource) -> Option<(Option<PathBuf>, Vec<u8>)> {
     }
 }
 
-/// Load the regular weight plus any discoverable bold/italic/bold-italic
-/// variants from sibling files. Returns `None` only if even the
-/// regular weight failed to load — partial loads (regular + just
-/// bold, say) still produce a viable family.
+/// Which weight variants the family loader should bother searching
+/// for and embedding. Regular is always loaded if the family loads
+/// at all; the optional weights are gated by document usage so we
+/// don't embed (typically ~25 KB per variant after subsetting) for
+/// weights the document never references.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BodyVariantNeed {
+    pub bold: bool,
+    pub italic: bool,
+    pub bold_italic: bool,
+}
+
+/// Load the regular weight plus the discoverable variants that the
+/// document actually uses. Returns `None` only if even the regular
+/// weight failed to load.
 fn load_external_family(
     source: Option<FontSource>,
     used_codepoints: &[char],
+    need: BodyVariantNeed,
     doc: &mut PdfDocument,
 ) -> Option<ExternalFamily> {
     let source = source?;
@@ -451,14 +512,19 @@ fn load_external_family(
     };
 
     if let Some(path) = anchor_path {
-        for (kind, names) in [
-            (VariantKind::Bold, &["Bold"][..]),
-            (VariantKind::Italic, &["Italic", "Oblique"][..]),
+        let candidates: &[(VariantKind, &[&str], bool)] = &[
+            (VariantKind::Bold, &["Bold"], need.bold),
+            (VariantKind::Italic, &["Italic", "Oblique"], need.italic),
             (
                 VariantKind::BoldItalic,
-                &["Bold Italic", "BoldItalic", "Bold-Italic", "BoldOblique"][..],
+                &["Bold Italic", "BoldItalic", "Bold-Italic", "BoldOblique"],
+                need.bold_italic,
             ),
-        ] {
+        ];
+        for (kind, names, wanted) in candidates {
+            if !wanted {
+                continue;
+            }
             if let Some(variant_path) = find_variant_path(&path, names) {
                 if let Some(bytes) = read_font_file(&variant_path) {
                     if let Some(parsed) =
@@ -514,6 +580,18 @@ fn find_variant_path(anchor: &std::path::Path, variant_names: &[&str]) -> Option
     None
 }
 
+/// Code points the renderer might synthesize at layout time even if
+/// they never appear in the source document — bullet glyphs,
+/// task-list brackets, ordered-list digits, etc. Including them in
+/// the subset prevents `.notdef` boxes from showing where the layout
+/// pass inserts them.
+const RENDERER_INJECTED_CHARS: &[char] = &[
+    '\u{2022}', // bullet •
+    '[', ']', 'x', ' ', '.',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    '(', ')', ':', '-',
+];
+
 fn parse_and_register(
     bytes: Vec<u8>,
     label: &str,
@@ -528,36 +606,70 @@ fn parse_and_register(
         }
     };
     let units_per_em = face.units_per_em();
-    // Pre-populate from the document's codepoints first (cheap,
-    // covers everything the user typed), then sweep the BMP so the
-    // renderer's synthesized characters — bullet glyphs, task-list
-    // brackets, etc. — also resolve to real glyphs. Codepoints
-    // already present from the document path are skipped on the
-    // second pass.
+    // Union of document codepoints + renderer-injected glyphs.
+    // Deliberately *not* the whole BMP — keeping the keep-set small
+    // is what makes the subset small.
     let mut codepoints: Vec<char> = used_codepoints.to_vec();
-    for cp in 0x0020u32..=0xFFFDu32 {
-        if let Some(c) = char::from_u32(cp) {
-            codepoints.push(c);
-        }
-    }
+    codepoints.extend_from_slice(RENDERER_INJECTED_CHARS);
     codepoints.sort();
     codepoints.dedup();
     let used_codepoints = &codepoints[..];
+    // Collect the original (pre-subset) glyph IDs we need along with
+    // their advance widths in font units.
+    let mut codepoint_to_orig_gid: BTreeMap<u32, u16> = BTreeMap::new();
+    let mut orig_gid_advance: BTreeMap<u16, u16> = BTreeMap::new();
+    for &ch in used_codepoints {
+        let cp = ch as u32;
+        if let Some(gid) = face.glyph_index(ch) {
+            if let Some(w) = face.glyph_hor_advance(gid) {
+                codepoint_to_orig_gid.insert(cp, gid.0);
+                orig_gid_advance.insert(gid.0, w);
+            }
+        }
+    }
+
+    // Subset the font down to just those glyphs. `.notdef` (gid 0)
+    // is included implicitly by the remapper, plus whatever the
+    // subsetter pulls in for composite glyph dependencies and
+    // required tables. If subsetting fails for any reason (CFF2
+    // font, malformed font, etc.) we degrade gracefully to the full
+    // font with original GIDs.
+    let orig_gids: Vec<u16> = orig_gid_advance.keys().copied().collect();
+    let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(&orig_gids);
+    let (subset_bytes, gid_remap): (Vec<u8>, Box<dyn Fn(u16) -> u16>) =
+        match subsetter::subset(&bytes, 0, &remapper) {
+            Ok(b) => (
+                b,
+                Box::new(move |old| remapper.get(old).unwrap_or(0)),
+            ),
+            Err(e) => {
+                log::warn!(
+                    "could not subset {} font: {:?}; embedding full font instead",
+                    label,
+                    e
+                );
+                (bytes.clone(), Box::new(|old| old))
+            }
+        };
+
+    // Rebuild codepoint -> glyph and glyph -> width maps using the
+    // *new* (post-subset) GIDs. printpdf looks up codepoints in
+    // `codepoint_to_glyph` and emits those GIDs as the PDF byte
+    // stream — they have to match the subset font's glyph table.
     let mut advance_by_codepoint: BTreeMap<u32, u16> = BTreeMap::new();
     let mut codepoint_to_glyph: BTreeMap<u32, u16> = BTreeMap::new();
     let mut glyph_widths: BTreeMap<u16, u16> = BTreeMap::new();
     let mut sum: u64 = 0;
     let mut count: u64 = 0;
-    for &ch in used_codepoints {
-        let cp = ch as u32;
-        if let Some(gid) = face.glyph_index(ch) {
-            if let Some(w) = face.glyph_hor_advance(gid) {
-                advance_by_codepoint.insert(cp, w);
-                codepoint_to_glyph.insert(cp, gid.0);
-                glyph_widths.insert(gid.0, w);
-                sum += w as u64;
-                count += 1;
-            }
+    for (cp, orig_gid) in &codepoint_to_orig_gid {
+        let new_gid = gid_remap(*orig_gid);
+        let w = orig_gid_advance.get(orig_gid).copied().unwrap_or(0);
+        codepoint_to_glyph.insert(*cp, new_gid);
+        glyph_widths.insert(new_gid, w);
+        advance_by_codepoint.insert(*cp, w);
+        if w > 0 {
+            sum += w as u64;
+            count += 1;
         }
     }
     let fallback_advance = if count > 0 {
@@ -566,16 +678,18 @@ fn parse_and_register(
         units_per_em / 2
     };
 
-    // Pull ascent/descent from the font so PDF metadata is at least
-    // not nonsense.
-    let ascent = face.ascender();
-    let descent = face.descender();
+    // PDF spec (PDF 32000-1:2008 §9.8) requires /Ascent and /Descent
+    // in glyph space normalized to 1000 units per em. printpdf 0.9
+    // writes the FontMetrics values straight into the FontDescriptor,
+    // so we have to pre-normalize here. Passing raw font units (1878
+    // for Georgia at UPEM=2048) makes viewers compute selection
+    // bounding boxes ~2× too tall, causing adjacent-line selection
+    // rectangles to overlap.
+    let ascent = normalize_to_1000_em(face.ascender(), units_per_em);
+    let descent = normalize_to_1000_em(face.descender(), units_per_em);
 
-    // Hand printpdf the same data so its TextItem::Text emission
-    // can do codepoint -> glyph lookups without the text_layout
-    // feature.
     let parsed = printpdf::ParsedFont::with_glyph_data(
-        bytes,
+        subset_bytes,
         0,
         None,
         codepoint_to_glyph,
@@ -591,6 +705,16 @@ fn parse_and_register(
         advance_by_codepoint,
         fallback_advance,
     })
+}
+
+/// Rescale a metric expressed in font units into PDF's `/1000-em`
+/// glyph space. Font-agnostic: works for any `units_per_em` from
+/// 1 to 65535. The guard against zero avoids divide-by-zero on
+/// pathologically malformed fonts.
+fn normalize_to_1000_em(value: i16, units_per_em: u16) -> i16 {
+    let upem = i32::from(units_per_em).max(1);
+    let scaled = i32::from(value) * 1000 / upem;
+    scaled.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
 }
 
 fn read_font_file(path: &std::path::Path) -> Option<Vec<u8>> {
@@ -646,6 +770,43 @@ mod tests {
         let i = m.measure("i", 12.0);
         let w = m.measure("w", 12.0);
         assert!((i - w).abs() < 0.5, "courier should be monospace");
+    }
+
+    #[test]
+    fn normalize_to_1000_em_is_font_agnostic() {
+        // Georgia: UPEM 2048, ascender 1878 → 916.
+        assert_eq!(normalize_to_1000_em(1878, 2048), 916);
+        assert_eq!(normalize_to_1000_em(-449, 2048), -219);
+        // Many CFF / OTF fonts have UPEM 1000 — identity transform.
+        assert_eq!(normalize_to_1000_em(800, 1000), 800);
+        assert_eq!(normalize_to_1000_em(-200, 1000), -200);
+        // Common TTF UPEM 1024.
+        assert_eq!(normalize_to_1000_em(819, 1024), 799);
+        // Apple-style high-precision UPEM 4096.
+        assert_eq!(normalize_to_1000_em(3000, 4096), 732);
+        // Zero UPEM is malformed; guard prevents divide-by-zero.
+        assert_eq!(normalize_to_1000_em(1000, 0), i16::MAX);
+        // i16-overflow inputs saturate rather than wrap.
+        assert_eq!(normalize_to_1000_em(i16::MAX, 1), i16::MAX);
+        assert_eq!(normalize_to_1000_em(i16::MIN, 1), i16::MIN);
+    }
+
+    #[test]
+    fn default_monospace_source_resolves_on_supported_oses() {
+        // We don't assert *which* font wins — the per-OS candidate
+        // list is what guarantees Menlo/Monaco/Consolas/DejaVu Mono
+        // is found. The contract is just: at least one is locatable
+        // on a typical developer machine.
+        let src = default_monospace_source();
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
+            assert!(
+                src.is_some(),
+                "expected a system monospace fallback on macOS/Windows"
+            );
+        }
+        // On Linux containers without any monospace font installed,
+        // None is the correct answer (graceful degradation to the
+        // built-in Courier path).
     }
 
     #[test]

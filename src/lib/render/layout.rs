@@ -509,6 +509,11 @@ impl<'a> Engine<'a> {
             self.advance_y(s.before_spacing.max(0.5));
             let bullet_x = saved_left;
             let bullet_y = self.y_from_top_pt + size_pt;
+            // Force a fresh BT before the bullet's Td so absolute
+            // placement works — otherwise the previous item's text
+            // section is still open and `Td` compounds against the
+            // current text matrix.
+            self.close_text_section();
             self.ensure_text_section();
             self.move_cursor_to(bullet_x, bullet_y);
             self.page_ops.push(Op::SetFont {
@@ -755,27 +760,58 @@ impl<'a> Engine<'a> {
             lines.push(current);
         }
 
+        // Merge adjacent segments on each line that share identical
+        // flags + link. The wrap stage split text into per-word /
+        // per-whitespace pieces to make line-break decisions; once
+        // wrapping is settled, those pieces can collapse back into
+        // one `ShowText` per same-style run. Fewer Tj operators =
+        // tighter selection highlights with no visual gap between
+        // logically-contiguous text.
+        for line in &mut lines {
+            line.dedup_by(|next, prev| {
+                if prev.flags == next.flags && prev.link == next.link {
+                    prev.text.push_str(&next.text);
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+
         let link_color = self.style.link.text_color.map(rgb_color);
 
-        for line in lines {
-            // Bug fix: Op::SetTextCursor emits PDF's `Td` operator,
-            // which is RELATIVE to the previous text cursor position
-            // within the same BT...ET section. If we keep one text
-            // section open across multiple SetTextCursor calls, each
-            // line compounds the offset and lines 2+ go off-page.
-            // Force a fresh text section per line so SetTextCursor
-            // acts on an identity text matrix (= effectively
-            // absolute placement for the first Td of each section).
-            self.close_text_section();
+        // Close any open section so the first line of this block
+        // starts with a fresh BT (and absolute Td). Subsequent lines
+        // of this paragraph stay inside one BT and use T*.
+        self.close_text_section();
+        for line in &lines {
+            // One BT...ET block per paragraph, not per line — PDF
+            // viewers use text-block boundaries to determine
+            // selection flow, and per-line blocks make text selection
+            // jump between unrelated lines. Inside one block we use
+            // T* (Op::AddLineBreak) to step down by the leading,
+            // which is what every well-formed PDF (Word, LaTeX,
+            // pandoc) does. The first line of each section uses Td
+            // (Op::SetTextCursor) for absolute positioning — that's
+            // safe because the text line matrix is identity at BT
+            // start.
+            let opened_now = !self.in_text_section;
             self.ensure_text_section();
-            if let Some(c) = color.clone() {
-                self.page_ops.push(Op::SetFillColor { col: c });
-            }
             let baseline_y_pt = self.y_from_top_pt + size_pt;
-            self.move_cursor_to(self.indent_left_pt, baseline_y_pt);
+            if opened_now {
+                self.move_cursor_to(self.indent_left_pt, baseline_y_pt);
+                self.page_ops.push(Op::SetLineHeight {
+                    lh: Pt(line_height_pt),
+                });
+                if let Some(c) = color.clone() {
+                    self.page_ops.push(Op::SetFillColor { col: c });
+                }
+            } else {
+                self.page_ops.push(Op::AddLineBreak);
+            }
 
             let mut x_cursor_pt = self.indent_left_pt;
-            for seg in &line {
+            for seg in line {
                 let seg_width = self.font_set.measure(seg.flags, &seg.text, size_pt);
                 let font_handle = self.font_set.handle(seg.flags);
                 let needs_trans = self.font_set.needs_transliteration(seg.flags);
@@ -793,9 +829,6 @@ impl<'a> Engine<'a> {
                 self.page_ops.push(Op::SetFont {
                     font: font_handle,
                     size: Pt(size_pt),
-                });
-                self.page_ops.push(Op::SetLineHeight {
-                    lh: Pt(line_height_pt),
                 });
                 let emit_text = if needs_trans {
                     to_win1252(&seg.text)
@@ -1144,7 +1177,7 @@ mod tests {
 
     #[test]
     fn empty_block_list_produces_no_pages() {
-        let font_set = FontSet::load(None, &[], &mut PdfDocument::new("test"));
+        let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
         let style = StyleMatch::default();
         let pages = lay_out_pages(&[], &style, &font_set, &mut PdfDocument::new("test"));
         assert!(pages.is_empty());
@@ -1152,7 +1185,7 @@ mod tests {
 
     #[test]
     fn one_paragraph_produces_one_page() {
-        let font_set = FontSet::load(None, &[], &mut PdfDocument::new("test"));
+        let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
         let style = StyleMatch::default();
         let blocks = vec![Block::Paragraph {
             runs: vec![InlineRun::new("hello world")],
@@ -1163,7 +1196,7 @@ mod tests {
 
     #[test]
     fn many_paragraphs_split_across_pages() {
-        let font_set = FontSet::load(None, &[], &mut PdfDocument::new("test"));
+        let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
         let style = StyleMatch::default();
         let blocks: Vec<_> = (0..200)
             .map(|i| Block::Paragraph {
@@ -1176,7 +1209,7 @@ mod tests {
 
     #[test]
     fn very_long_paragraph_wraps_to_multiple_lines() {
-        let font_set = FontSet::load(None, &[], &mut PdfDocument::new("test"));
+        let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
         let style = StyleMatch::default();
         let long_text = "word ".repeat(200);
         let blocks = vec![Block::Paragraph {

@@ -91,9 +91,9 @@ pub fn render_to_bytes(
         chars
     };
 
-    let font_set = font::FontSet::load(font_config, &used_codepoints, &mut doc);
-
     let blocks = lower::lower(&tokens);
+    let usage = ir::VariantUsage::analyze(&blocks);
+    let font_set = font::FontSet::load(font_config, &used_codepoints, usage, &mut doc);
     let pages = layout::lay_out_pages(&blocks, &style, &font_set, &mut doc);
 
     // Always include at least one page so the resulting PDF is valid
