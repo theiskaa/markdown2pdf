@@ -1,0 +1,205 @@
+# markdown2pdf reference config.
+#
+# Point at this file (or any copy of it) with `-c path/to/config.toml`.
+#
+# Every field here is optional. Set `theme = "github"` (or any other
+# bundled preset) to inherit a known-good baseline, then override only
+# the fields you care about. Without `theme`, the bundled `default`
+# preset is used.
+#
+# Bundled themes: default | github | academic | minimal | compact | modern
+# Inspect the effective config for any combination with:
+#   markdown2pdf --theme github --print-effective-config
+
+theme = "default"
+
+
+# Page setup.
+[page]
+# Named size, or { width_mm = .., height_mm = .. } for custom paper.
+size = "A4"          # A4 | Letter | Legal | A3 | A5
+orientation = "portrait"   # portrait | landscape
+margins = { top = 22.6, right = 22.6, bottom = 22.6, left = 22.6 }  # mm
+columns = 1
+column_gap_mm = 6.0
+
+
+# Defaults cascade into every block that leaves a field unset. Useful
+# when you want one consistent body font across the whole doc.
+[defaults]
+font_family = "Helvetica"
+font_size_pt = 11.0
+font_weight = "normal"     # normal | bold | <100..=900>
+font_style = "normal"      # normal | italic
+text_color = "#1B1F23"     # #RRGGBB hex, #RGB short hex, { r, g, b }, or [r, g, b]
+line_height = 1.5          # multiplier of font_size_pt
+text_align = "left"        # left | center | right | justify
+padding = 0.0              # scalar (all sides), [v, h], [t, r, b, l], or { top, right, bottom, left }
+margin_before_pt = 0.0
+margin_after_pt = 0.0
+indent_pt = 0.0
+
+
+[paragraph]
+margin_after_pt = 4.0
+
+
+# Heading levels are fully independent. Drop any subsection to inherit
+# from `[defaults]` (and the active theme).
+[headings.h1]
+font_size_pt = 22.0
+font_weight = "bold"
+text_align = "left"
+margin_before_pt = 8.0
+margin_after_pt = 4.0
+
+[headings.h2]
+font_size_pt = 17.0
+font_weight = "bold"
+margin_before_pt = 6.0
+margin_after_pt = 3.0
+
+[headings.h3]
+font_size_pt = 14.0
+font_weight = "bold"
+
+[headings.h4]
+font_size_pt = 12.0
+font_weight = "bold"
+
+[headings.h5]
+font_size_pt = 11.0
+font_weight = "bold"
+
+[headings.h6]
+font_size_pt = 10.5
+font_weight = "bold"
+text_color = "#57606A"
+
+
+# Fenced code blocks (```).
+[code_block]
+font_family = "Courier"
+background_color = "#F6F8FA"
+text_color = "#1F2328"
+padding = { top = 8.0, right = 10.0, bottom = 8.0, left = 10.0 }
+margin_before_pt = 6.0
+margin_after_pt = 6.0
+# [code_block.border]
+# all = { width_pt = 0.5, color = "#E1E4E8", style = "solid" }
+
+
+# Inline code spans (`...`).
+[code_inline]
+font_family = "Courier"
+background_color = "#EFF1F3"
+text_color = "#1F2328"
+
+
+# Block quotes (>).
+[blockquote]
+font_style = "italic"
+text_color = "#57606A"
+indent_pt = 17.0
+padding = { top = 2.0, right = 6.0, bottom = 2.0, left = 8.0 }
+margin_before_pt = 4.0
+margin_after_pt = 4.0
+[blockquote.border]
+left = { width_pt = 3.0, color = "#D0D7DE", style = "solid" }
+
+
+# Lists (ordered / unordered / task).
+[list]
+[list.common]
+margin_after_pt = 0.5
+indent_per_level_pt = 17.0
+item_spacing_tight_pt = 0.5
+item_spacing_loose_pt = 2.0
+
+[list.unordered]
+bullet = "•"
+
+[list.ordered]
+bullet = "1."
+
+[list.task]
+
+
+[table]
+row_gap_pt = 2.0
+cell_padding = { top = 3.0, right = 4.0, bottom = 3.0, left = 4.0 }
+margin_before_pt = 4.0
+margin_after_pt = 4.0
+# alternating_row_background = "#FAFBFC"
+
+[table.header]
+font_weight = "bold"
+
+[table.cell]
+
+[table.border.all]
+width_pt = 0.5
+color = "#D0D7DE"
+style = "solid"   # solid | dashed | dotted
+
+
+[image]
+max_width_pct = 100.0
+align = "center"     # left | center | right
+margin_before_pt = 4.0
+margin_after_pt = 4.0
+# [image.caption]
+# font_size_pt = 9.0
+# font_style = "italic"
+# text_align = "center"
+
+
+[link]
+text_color = "#0969DA"
+underline = false
+
+
+# Horizontal rules (---).
+[horizontal_rule]
+color = "#D0D7DE"
+thickness_pt = 0.5
+style = "solid"     # solid | dashed | dotted
+width_pct = 100.0
+margin_before_pt = 6.0
+margin_after_pt = 6.0
+
+
+# Document metadata written to the PDF Info dict.
+[metadata]
+# title = "My Document"
+# author = "Author Name"
+# subject = "Subject line"
+# keywords = ["one", "two"]
+creator = "markdown2pdf"
+
+
+# Headers and footers. Three slots (left / center / right) with
+# template variables: {page}, {total_pages}, {title}, {date}, {author}.
+# [header]
+# left = "{title}"
+# right = "{page} / {total_pages}"
+# show_on_first_page = false
+#
+# [footer]
+# center = "{page}"
+
+
+# Title page (renders before the body when `title` is set).
+# [title_page]
+# title = "Document Title"
+# subtitle = "Optional subtitle"
+# author = "Author Name"
+# date = "2026-05-14"
+# cover_image_path = "cover.png"
+
+
+# Auto-generated table of contents.
+# [toc]
+# enabled = false
+# title = "Contents"
+# max_depth = 3
