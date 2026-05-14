@@ -42,8 +42,6 @@ fn defs_of(tokens: &[Token]) -> Vec<(String, String)> {
     out
 }
 
-// === Inline reference parsing ============================================
-
 #[test]
 fn reference_with_numeric_label() {
     let tokens = parse("Text[^1].");
@@ -114,8 +112,6 @@ fn reference_inside_strong_emphasis() {
     assert_eq!(refs_of(&tokens), vec!["1".to_string()]);
 }
 
-// === Invalid / malformed references fall back to plain text ===============
-
 #[test]
 fn empty_label_falls_back_to_text() {
     let tokens = parse("Text [^] more.");
@@ -155,8 +151,6 @@ fn reference_followed_by_punctuation() {
     assert_eq!(refs_of(&tokens), vec!["1".to_string()]);
 }
 
-// === Block-level definition parsing ======================================
-
 #[test]
 fn definition_with_simple_content() {
     let tokens = parse("[^1]: First definition");
@@ -175,13 +169,19 @@ fn definition_with_alphanumeric_label() {
 }
 
 #[test]
-fn definition_with_inline_emphasis_in_content_is_preserved_as_text() {
-    // v1 captures definition body as a single Text token (no
-    // recursive inline parsing); the literal markdown is preserved.
+fn definition_body_inline_emphasis_is_parsed() {
     let tokens = parse("[^1]: Definition with *emphasis* in it");
-    let defs = defs_of(&tokens);
-    assert_eq!(defs.len(), 1);
-    assert!(defs[0].1.contains("*emphasis*"));
+    for t in &tokens {
+        if let Token::FootnoteDefinition { label, content } = t {
+            assert_eq!(label, "1");
+            let has_emphasis = content
+                .iter()
+                .any(|c| matches!(c, Token::Emphasis { .. }));
+            assert!(has_emphasis, "expected parsed Emphasis token in definition body, got {:?}", content);
+            return;
+        }
+    }
+    panic!("no FootnoteDefinition emitted");
 }
 
 #[test]
@@ -202,17 +202,24 @@ fn multiple_definitions_each_become_a_token() {
 }
 
 #[test]
-fn definition_with_link_in_content_is_preserved_as_text() {
-    // v1 preserves the raw link markup as plain text in definition
-    // bodies. v2 will recursively lex.
+fn definition_body_link_is_parsed() {
     let tokens = parse("[^1]: See [example](https://example.com)");
-    let defs = defs_of(&tokens);
-    assert_eq!(defs.len(), 1);
-    assert!(defs[0].1.contains("[example]"));
-    assert!(defs[0].1.contains("https://example.com"));
+    for t in &tokens {
+        if let Token::FootnoteDefinition { label, content } = t {
+            assert_eq!(label, "1");
+            let link = content.iter().find_map(|c| {
+                if let Token::Link { url, .. } = c {
+                    Some(url.clone())
+                } else {
+                    None
+                }
+            });
+            assert_eq!(link.as_deref(), Some("https://example.com"));
+            return;
+        }
+    }
+    panic!("no FootnoteDefinition emitted");
 }
-
-// === Document-level interactions ==========================================
 
 #[test]
 fn reference_and_definition_in_same_document() {

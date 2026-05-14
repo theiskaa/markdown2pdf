@@ -292,8 +292,4 @@ impl RunFlags {
         self.subscript = true;
         self
     }
-    pub fn with_small_caps(mut self) -> Self {
-        self.small_caps = true;
-        self
-    }
 }

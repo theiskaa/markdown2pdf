@@ -2790,16 +2790,12 @@ impl Lexer {
             content_end += 1;
         }
 
-        // Emit the body as a single Text token. Inline markdown
-        // inside footnote definitions (emphasis, links, code spans)
-        // is a v2 follow-up; recursing into a sub-lexer is unsafe
-        // against pathological inputs (stress-tested) so the v1
-        // path captures the raw text.
         let body: String = self.input[content_start..content_end].iter().collect();
         let inner_tokens = if body.is_empty() {
             Vec::new()
         } else {
-            vec![Token::Text(body)]
+            let mut sub = Lexer::new(body);
+            sub.parse_with_context(ParseContext::Inline)?
         };
 
         self.position = content_end;
@@ -2864,7 +2860,8 @@ impl Lexer {
             let term_tokens = if term_trimmed.is_empty() {
                 Vec::new()
             } else {
-                vec![Token::Text(term_trimmed.to_string())]
+                let mut sub = Lexer::new(term_trimmed.to_string());
+                sub.parse_with_context(ParseContext::Inline)?
             };
 
             let mut definitions: Vec<Vec<Token>> = Vec::new();
@@ -2893,7 +2890,8 @@ impl Lexer {
                 let def_tokens = if def_trimmed.is_empty() {
                     Vec::new()
                 } else {
-                    vec![Token::Text(def_trimmed.to_string())]
+                    let mut sub = Lexer::new(def_trimmed.to_string());
+                    sub.parse_with_context(ParseContext::Inline)?
                 };
                 definitions.push(def_tokens);
                 self.position = d_end;

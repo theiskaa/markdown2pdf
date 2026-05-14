@@ -20,10 +20,11 @@ name = "markdown2pdf"
 path = "src/bin/main.rs"
 
 [features]
-default = []
+default = ["svg"]
 fetch = ["dep:reqwest"]
 rustls-tls = ["fetch", "reqwest/rustls"]
 native-tls = ["fetch", "reqwest/native-tls"]
+svg = ["dep:resvg"]
 
 [dependencies]
 log = "0.4"
@@ -48,6 +49,7 @@ subsetter = { version = "0.2", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 hyphenation = { version = "0.8", default-features = false, features = ["embed_en-us"] }
 lopdf = { version = "0.39", default-features = false }
+resvg = { version = "0.47", default-features = false, optional = true }
 
 [build-dependencies]
 phf_codegen = "0.13"

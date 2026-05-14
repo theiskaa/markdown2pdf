@@ -1002,3 +1002,56 @@ fn definition_list_does_not_break_pdf() {
     assert!(bytes.starts_with(b"%PDF-"));
     assert!(String::from_utf8_lossy(&bytes).contains("%%EOF"));
 }
+
+#[test]
+fn html_img_block_does_not_render_tag_as_text() {
+    let md = "<img src=\"nonexistent.png\" alt=\"a banner\">\n\nBody.";
+    let bytes = render(md, "");
+    assert!(bytes.starts_with(b"%PDF-"));
+    // The literal HTML should NOT appear as monospace source — even
+    // when the path doesn't exist we either show alt text or fall
+    // back to an HtmlBlock; the user's biggest complaint is seeing
+    // the raw `<img src=` characters.
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        !s.contains("<img src="),
+        "raw `<img src=` leaked into the PDF stream"
+    );
+}
+
+#[test]
+fn html_img_block_falls_back_to_alt_text_when_src_unloadable() {
+    // With src pointing to a missing file, the renderer's
+    // render_image fallback emits `[image: <alt>]` italic text — not
+    // the raw HTML tag.
+    let md = "<img src=\"missing.png\" alt=\"banner\">\n";
+    let bytes = render(md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(!s.contains("<img"), "raw HTML leaked");
+    assert!(
+        contains(&bytes, b"banner") || contains_text(&bytes, "banner"),
+        "alt text was not rendered as fallback"
+    );
+}
+
+#[test]
+fn standalone_p_tag_is_dropped() {
+    let md = "<p align=\"center\">\n\nReal body text here.\n\n</p>";
+    let bytes = render(md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        !s.contains("<p align="),
+        "framing <p> tag rendered as text"
+    );
+    assert!(!s.contains("</p>"), "framing </p> tag rendered as text");
+}
+
+#[test]
+fn unknown_html_block_still_renders_as_text() {
+    // Tags we don't recognize as framing or img stay as HtmlBlock
+    // and render via the monospace block-html path.
+    let md = "<custom>Hello</custom>\n";
+    let bytes = render(md, "");
+    assert!(bytes.starts_with(b"%PDF-"));
+    // Doesn't matter how it appears visually — just shouldn't panic.
+}

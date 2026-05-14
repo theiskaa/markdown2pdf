@@ -88,10 +88,18 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 if is_pagebreak_marker(content) {
                     out.push(Block::PageBreak);
+                } else if let Some(img) = parse_html_img_block(content) {
+                    out.push(Block::Image {
+                        path: std::path::PathBuf::from(&img.src),
+                        alt: img.alt,
+                        caption: img.title,
+                    });
+                } else if is_framing_only_html(content) {
+                    // Standalone <p>, </p>, <div>, </div>, <center>,
+                    // </center>: pure GFM wrappers around real
+                    // markdown. Rendering them verbatim noisy; dropping
+                    // them lets the wrapped content render normally.
                 } else if !is_only_html_comments(content) {
-                    // CommonMark §4.6: HTML comments are invisible.
-                    // Only emit a real HtmlBlock when the payload has
-                    // something beyond comments.
                     out.push(Block::HtmlBlock {
                         content: content.clone(),
                     });
@@ -320,6 +328,158 @@ fn is_pagebreak_marker(s: &str) -> bool {
         .and_then(|s| s.strip_suffix("-->"))
         .map(str::trim);
     matches!(inner, Some(word) if word.eq_ignore_ascii_case("pagebreak"))
+}
+
+struct HtmlImg {
+    src: String,
+    alt: String,
+    title: Option<String>,
+}
+
+/// True if `s` (after trimming and stripping HTML comments) is a
+/// single `<img ...>` tag. Returns the parsed attributes when so.
+fn parse_html_img_block(s: &str) -> Option<HtmlImg> {
+    let stripped = strip_html_comments(s);
+    let trimmed = stripped.trim();
+    if !trimmed.to_ascii_lowercase().starts_with("<img") {
+        return None;
+    }
+    let end = trimmed.find('>')?;
+    if trimmed[end + 1..].trim_end_matches('/').trim() != "" {
+        return None;
+    }
+    let inner = &trimmed[4..end].trim_end_matches('/').trim();
+    let attrs = parse_html_attrs(inner);
+    let src = attrs.iter().find_map(|(k, v)| {
+        if k.eq_ignore_ascii_case("src") {
+            Some(v.clone())
+        } else {
+            None
+        }
+    })?;
+    let alt = attrs
+        .iter()
+        .find_map(|(k, v)| {
+            if k.eq_ignore_ascii_case("alt") {
+                Some(v.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+    let title = attrs.iter().find_map(|(k, v)| {
+        if k.eq_ignore_ascii_case("title") {
+            Some(v.clone())
+        } else {
+            None
+        }
+    });
+    Some(HtmlImg { src, alt, title })
+}
+
+/// Parses HTML attributes inside an open tag (the bit between the
+/// tag name and the closing `>`). Returns `(name, value)` pairs.
+/// Tolerates double-quoted, single-quoted, and unquoted values, plus
+/// boolean attributes.
+fn parse_html_attrs(s: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let name_start = i;
+        while i < bytes.len()
+            && !bytes[i].is_ascii_whitespace()
+            && bytes[i] != b'='
+            && bytes[i] != b'/'
+        {
+            i += 1;
+        }
+        if i == name_start {
+            i += 1;
+            continue;
+        }
+        let name = s[name_start..i].to_string();
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b'=' {
+            out.push((name, String::new()));
+            continue;
+        }
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            out.push((name, String::new()));
+            break;
+        }
+        let quote = bytes[i];
+        let value = if quote == b'"' || quote == b'\'' {
+            i += 1;
+            let start = i;
+            while i < bytes.len() && bytes[i] != quote {
+                i += 1;
+            }
+            let v = s[start..i].to_string();
+            if i < bytes.len() {
+                i += 1;
+            }
+            v
+        } else {
+            let start = i;
+            while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' {
+                i += 1;
+            }
+            s[start..i].to_string()
+        };
+        out.push((name, value));
+    }
+    out
+}
+
+/// Strip every `<!-- ... -->` comment out of `s` and return the rest.
+fn strip_html_comments(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("-->") {
+            Some(end) => rest = &rest[start + end + 3..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// True if the HTML block is just a framing tag with no real content
+/// — `<p>`, `</p>`, `<div>`, `</div>`, `<center>`, `</center>`,
+/// optionally with attributes. These wrap content in GitHub-flavored
+/// markdown to apply alignment; we'd rather drop them than render
+/// them as literal monospace.
+fn is_framing_only_html(s: &str) -> bool {
+    let trimmed = strip_html_comments(s);
+    let trimmed = trimmed.trim();
+    if !trimmed.starts_with('<') || !trimmed.ends_with('>') {
+        return false;
+    }
+    let inner = &trimmed[1..trimmed.len() - 1];
+    let inner = inner.trim_start_matches('/').trim_end_matches('/').trim();
+    let tag_end = inner
+        .find(|c: char| c.is_ascii_whitespace())
+        .unwrap_or(inner.len());
+    let tag = inner[..tag_end].to_ascii_lowercase();
+    matches!(tag.as_str(), "p" | "div" | "center")
 }
 
 /// True if `s` (trimmed) consists of zero or more `<!-- ... -->`

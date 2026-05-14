@@ -1146,12 +1146,12 @@ impl<'a> Engine<'a> {
         self.render_code_block(&lines);
     }
 
-    /// Fetch a remote image into memory (caching by URL) and decode
-    /// it. Hard caps: 5 second read timeout, 10 MB max body. Gated
-    /// behind the `fetch` feature — without it, this returns an
-    /// error so the caller falls back to alt text.
+    /// Fetch a remote image into memory (caching by URL). Hard caps:
+    /// 5 second read timeout, 10 MB max body. Gated behind the
+    /// `fetch` feature — without it, this returns an error so the
+    /// caller falls back to alt text.
     #[cfg(feature = "fetch")]
-    fn decode_url_image(&mut self, url: &str) -> Result<image::DynamicImage, String> {
+    fn fetch_url_bytes(&mut self, url: &str) -> Result<Vec<u8>, String> {
         const MAX_BYTES: u64 = 10 * 1024 * 1024;
         const TIMEOUT_SECS: u64 = 5;
 
@@ -1183,21 +1183,29 @@ impl<'a> Engine<'a> {
             }
             self.url_image_cache.insert(url.to_string(), bytes.to_vec());
         }
-
-        let bytes = self.url_image_cache.get(url).expect("just inserted");
-        let cursor = std::io::Cursor::new(bytes.as_slice());
-        let reader = image::ImageReader::new(cursor)
-            .with_guessed_format()
-            .map_err(|e| e.to_string())?;
-        reader.decode().map_err(|e| e.to_string())
+        Ok(self.url_image_cache.get(url).expect("just inserted").clone())
     }
 
     #[cfg(not(feature = "fetch"))]
-    fn decode_url_image(&mut self, url: &str) -> Result<image::DynamicImage, String> {
+    fn fetch_url_bytes(&mut self, url: &str) -> Result<Vec<u8>, String> {
         Err(format!(
             "URL image {} requires the `fetch` feature (recompile with --features fetch)",
             url
         ))
+    }
+
+    fn render_image_fallback(&mut self, alt: &str) {
+        // Empty alt — render nothing visible. The image was decorative
+        // (or the author didn't provide text), and printing the literal
+        // `[image: ]` is uglier than skipping it.
+        if alt.trim().is_empty() {
+            return;
+        }
+        self.render_paragraph(&[InlineRun {
+            text: format!("[image: {}]", alt),
+            flags: RunFlags::default().with_italic(),
+            link: None,
+        }]);
     }
 
     fn render_image(&mut self, path: &std::path::Path, alt: &str, caption: Option<&str>) {
@@ -1206,26 +1214,31 @@ impl<'a> Engine<'a> {
         // doesn't lose content. URL paths take a separate fetch
         // pre-pass that downloads the bytes (gated under the `fetch`
         // feature); without the feature, URL images fall back to alt
-        // text.
+        // text. SVG content is rasterized via resvg (gated under
+        // `svg`).
         let path_str = path.to_string_lossy();
         let is_url = path_str.starts_with("http://") || path_str.starts_with("https://");
-        let decode_result: Result<image::DynamicImage, String> = if is_url {
-            self.decode_url_image(path_str.as_ref())
+        let bytes_result: Result<Vec<u8>, String> = if is_url {
+            self.fetch_url_bytes(path_str.as_ref())
         } else {
-            image::ImageReader::open(path)
-                .and_then(|r| r.with_guessed_format())
-                .map_err(|e| e.to_string())
-                .and_then(|r| r.decode().map_err(|e| e.to_string()))
+            std::fs::read(path).map_err(|e| e.to_string())
         };
+        let decode_result: Result<image::DynamicImage, String> = bytes_result.and_then(|bytes| {
+            if looks_like_svg(&bytes) {
+                decode_svg_bytes(&bytes)
+            } else {
+                let cursor = std::io::Cursor::new(bytes);
+                image::ImageReader::new(cursor)
+                    .with_guessed_format()
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r.decode().map_err(|e| e.to_string()))
+            }
+        });
         let img = match decode_result {
             Ok(d) => d,
             Err(e) => {
                 log::warn!("could not decode image {:?}: {}", path, e);
-                self.render_paragraph(&[InlineRun {
-                    text: format!("[image: {}]", alt),
-                    flags: RunFlags::default().with_italic(),
-                    link: None,
-                }]);
+                self.render_image_fallback(alt);
                 return;
             }
         };
@@ -1234,11 +1247,7 @@ impl<'a> Engine<'a> {
             Ok(r) => r,
             Err(e) => {
                 log::warn!("could not convert image {:?}: {}", path, e);
-                self.render_paragraph(&[InlineRun {
-                    text: format!("[image: {}]", alt),
-                    flags: RunFlags::default().with_italic(),
-                    link: None,
-                }]);
+                self.render_image_fallback(alt);
                 return;
             }
         };
@@ -2763,6 +2772,68 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
     (y as i32, m, d)
 }
 
+/// Cheap content sniff: does this buffer look like an SVG document?
+/// Skips a UTF-8 BOM and ASCII whitespace, accepts `<?xml`-prefixed
+/// SVGs and bare `<svg ...>` openings. Big enough to keep us from
+/// running resvg on random `<svg>`-mentioning text.
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    let mut s = bytes;
+    if s.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        s = &s[3..];
+    }
+    while let Some(&b) = s.first() {
+        if b.is_ascii_whitespace() {
+            s = &s[1..];
+        } else {
+            break;
+        }
+    }
+    let head: &[u8] = if s.len() > 512 { &s[..512] } else { s };
+    let lower: Vec<u8> = head.iter().map(|b| b.to_ascii_lowercase()).collect();
+    if lower.starts_with(b"<?xml") {
+        return lower.windows(4).any(|w| w == b"<svg");
+    }
+    lower.starts_with(b"<svg")
+}
+
+/// Rasterize an SVG byte buffer to an `image::DynamicImage`. Rendered
+/// at `2x` the SVG's intrinsic size for crisp output on print DPIs;
+/// hard upper cap of 4000px per dimension so an unbounded
+/// `width="999999"` doesn't blow up memory.
+#[cfg(feature = "svg")]
+fn decode_svg_bytes(bytes: &[u8]) -> Result<image::DynamicImage, String> {
+    const MAX_PX: u32 = 4000;
+    let opts = resvg::usvg::Options::default();
+    let tree = resvg::usvg::Tree::from_data(bytes, &opts).map_err(|e| e.to_string())?;
+    let size = tree.size();
+    let scale = 2.0_f32;
+    let mut w_px = (size.width() * scale).ceil() as u32;
+    let mut h_px = (size.height() * scale).ceil() as u32;
+    if w_px == 0 || h_px == 0 {
+        return Err("svg has zero intrinsic size".to_string());
+    }
+    if w_px > MAX_PX || h_px > MAX_PX {
+        let r = (MAX_PX as f32 / w_px.max(h_px) as f32).min(1.0);
+        w_px = ((w_px as f32) * r) as u32;
+        h_px = ((h_px as f32) * r) as u32;
+    }
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w_px, h_px)
+        .ok_or_else(|| "could not allocate svg pixmap".to_string())?;
+    let tx = resvg::tiny_skia::Transform::from_scale(
+        w_px as f32 / size.width(),
+        h_px as f32 / size.height(),
+    );
+    resvg::render(&tree, tx, &mut pixmap.as_mut());
+    let rgba = image::RgbaImage::from_raw(w_px, h_px, pixmap.data().to_vec())
+        .ok_or_else(|| "pixmap → RgbaImage conversion failed".to_string())?;
+    Ok(image::DynamicImage::ImageRgba8(rgba))
+}
+
+#[cfg(not(feature = "svg"))]
+fn decode_svg_bytes(_bytes: &[u8]) -> Result<image::DynamicImage, String> {
+    Err("SVG support requires the `svg` feature".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2799,6 +2870,10 @@ mod tests {
         let pages = lay_out_pages(&blocks, &style, &font_set, &mut PdfDocument::new("test"));
         assert!(pages.len() >= 2, "expected page split, got {}", pages.len());
     }
+
+    // SVG raster helpers live in a free `fn` outside `Engine` so the
+    // module-level helpers don't have to thread `self`. Tests exercise
+    // them indirectly via the showcase document.
 
     #[test]
     fn very_long_paragraph_wraps_to_multiple_lines() {
