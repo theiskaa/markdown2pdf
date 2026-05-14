@@ -41,7 +41,7 @@
 //!   invisible per CommonMark §4.6
 //! - Page splits with header repeat for tables
 //!
-//! Known gaps (tracked in `ROADMAP.md`):
+//! Known gaps:
 //!
 //! - Real justified text (Knuth-Plass) — `text_align = justify`
 //!   silently degrades to left

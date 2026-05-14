@@ -215,9 +215,32 @@ The library uses the [`log`](https://crates.io/crates/log) crate. No output by d
 
 ## Configuration
 
-TOML configuration customizes fonts, colors, spacing, and visual properties. Three loading methods: default styles, runtime files, or compile-time embedding.
+Every visual choice — fonts, colors, page setup, headers / footers,
+table of contents, title page, alignment, per-block typography — lives
+in a TOML configuration. Six bundled themes (`default`, `github`,
+`academic`, `minimal`, `compact`, `modern`) give one-line styling, and
+per-block overrides handle the long tail.
 
-For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the example configuration from `markdown2pdfrc.example.toml`. For library usage with embedded config, create your configuration file and embed it using `include_str!()`.
+Pick a theme:
+
+```sh
+markdown2pdf -p input.md --theme github -o out.pdf
+```
+
+Or pass your own config:
+
+```sh
+markdown2pdf -p input.md -c my-config.toml -o out.pdf
+```
+
+The full configuration guide with every field explained lives at
+**[`docs/configuration.md`](docs/configuration.md)**. The annotated
+reference config you can copy and tweak is at
+**[`docs/config.toml`](docs/config.toml)**.
+
+For library usage, pass a `ConfigSource::File(path)`,
+`ConfigSource::Embedded(toml_str)`, or `ConfigSource::Default` to
+`parse_into_bytes`.
 
 ## Markdown Coverage
 

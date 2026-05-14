@@ -14,7 +14,8 @@ use std::path::Path;
 pub enum ConfigSource<'a> {
     /// Use the bundled `default` theme preset, no user overrides.
     Default,
-    /// Load and parse `path` as a user `markdown2pdf/config.toml`.
+    /// Load and parse `path` as a user config file (see
+    /// `docs/config.toml` in the repo for the full schema reference).
     File(&'a str),
     /// Treat `s` as the body of a TOML config (no I/O).
     Embedded(&'a str),

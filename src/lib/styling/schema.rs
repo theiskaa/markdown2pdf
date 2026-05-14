@@ -1,4 +1,5 @@
-//! User-facing TOML schema for `markdown2pdf/config.toml`.
+//! User-facing TOML schema (the annotated reference lives at
+//! `docs/config.toml` in the repo).
 //!
 //! Every field is `Option<T>` so "the user didn't write this" is
 //! distinguishable from "the user wrote zero / empty". The merge step

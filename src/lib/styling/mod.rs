@@ -2,7 +2,8 @@
 //! pipeline, and the concrete `ResolvedStyle` consumed by the renderer.
 //!
 //! Public surface:
-//! - [`DocumentConfig`] — what users write in `markdown2pdf/config.toml`.
+//! - [`DocumentConfig`] — the user-facing TOML schema; see
+//!   `docs/config.toml` in the repo for the annotated reference.
 //! - [`ResolvedStyle`] — what the renderer reads.
 //! - [`resolve`] — produces a `ResolvedStyle` from a user
 //!   `DocumentConfig`, applying preset + defaults cascade.
