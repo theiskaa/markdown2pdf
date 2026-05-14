@@ -12,7 +12,7 @@ use printpdf::{
 
 use crate::styling::{
     BorderStyle, Orientation, PageSize, ResolvedBlock, ResolvedBorder, ResolvedList,
-    ResolvedPage, ResolvedStyle,
+    ResolvedPage, ResolvedPageFurniture, ResolvedStyle,
 };
 
 use super::font::FontSet;
@@ -83,8 +83,10 @@ struct Engine<'a> {
     /// Drawn together when the section closes so they don't fight the
     /// text section's graphics state.
     pending_decorations: Vec<PendingDecoration>,
-    /// Finished pages.
-    pages: Vec<PdfPage>,
+    /// Finished pages' raw op streams. Stored as `Vec<Op>` (not
+    /// `PdfPage`) so the second pass in [`finish`] can prepend
+    /// header / footer ops after the total page count is known.
+    raw_pages: Vec<Vec<Op>>,
     /// Whether a text section is currently open.
     in_text_section: bool,
 }
@@ -106,7 +108,7 @@ impl<'a> Engine<'a> {
             indent_right_pt: right,
             page_ops: Vec::new(),
             pending_decorations: Vec::new(),
-            pages: Vec::new(),
+            raw_pages: Vec::new(),
             in_text_section: false,
         }
     }
@@ -114,7 +116,35 @@ impl<'a> Engine<'a> {
     fn finish(mut self) -> Vec<PdfPage> {
         self.close_text_section();
         self.push_current_page();
-        self.pages
+
+        let total = self.raw_pages.len();
+        let base = TemplateBase {
+            total_pages: total,
+            title: self.style.metadata.title.clone().unwrap_or_default(),
+            author: self.style.metadata.author.clone().unwrap_or_default(),
+            date: today_iso_date(),
+        };
+
+        let mut pages = Vec::with_capacity(total);
+        let raw_pages = std::mem::take(&mut self.raw_pages);
+        for (idx, content_ops) in raw_pages.into_iter().enumerate() {
+            let ctx = base.with_page(idx + 1);
+            let header_ops =
+                self.render_furniture(self.style.header.as_ref(), &ctx, FurniturePosition::Top);
+            let footer_ops =
+                self.render_furniture(self.style.footer.as_ref(), &ctx, FurniturePosition::Bottom);
+            let mut all =
+                Vec::with_capacity(header_ops.len() + content_ops.len() + footer_ops.len());
+            all.extend(header_ops);
+            all.extend(content_ops);
+            all.extend(footer_ops);
+            pages.push(PdfPage::new(
+                Mm(self.page_width_mm),
+                Mm(self.page_height_mm),
+                all,
+            ));
+        }
+        pages
     }
 
     fn push_current_page(&mut self) {
@@ -122,8 +152,7 @@ impl<'a> Engine<'a> {
             return;
         }
         let ops = std::mem::take(&mut self.page_ops);
-        let page = PdfPage::new(Mm(self.page_width_mm), Mm(self.page_height_mm), ops);
-        self.pages.push(page);
+        self.raw_pages.push(ops);
     }
 
     fn top_margin_pt(&self) -> f32 {
@@ -274,6 +303,105 @@ impl<'a> Engine<'a> {
         self.indent_left_pt = ctx.saved_left;
         self.indent_right_pt = ctx.saved_right;
         self.advance_y(ctx.margin_after_pt);
+    }
+
+    /// Build the op sequence for a single header or footer, ready to
+    /// be prepended (header) or appended (footer) to a page's content
+    /// ops. Returns an empty `Vec` for missing or skipped furniture.
+    fn render_furniture(
+        &self,
+        furniture: Option<&ResolvedPageFurniture>,
+        ctx: &TemplateContext,
+        pos: FurniturePosition,
+    ) -> Vec<Op> {
+        let Some(f) = furniture else {
+            return Vec::new();
+        };
+        if !f.show_on_first_page && ctx.page == 1 {
+            return Vec::new();
+        }
+
+        let size_pt = f.style.font_size_pt;
+        let gap_pt = f.gap_pt.max(0.0);
+        let y_pt = match pos {
+            FurniturePosition::Top => {
+                let top_margin = mm_to_pt(self.style.page.margins_mm.top.max(1.0));
+                (top_margin - gap_pt).max(size_pt)
+            }
+            FurniturePosition::Bottom => {
+                let bottom_margin = mm_to_pt(self.style.page.margins_mm.bottom.max(1.0));
+                self.page_height_pt() - bottom_margin + gap_pt
+            }
+        };
+
+        let mut ops: Vec<Op> = Vec::new();
+        for (raw, anchor) in [
+            (f.left.as_ref(), FurnitureAnchor::Left),
+            (f.center.as_ref(), FurnitureAnchor::Center),
+            (f.right.as_ref(), FurnitureAnchor::Right),
+        ] {
+            let Some(template) = raw else { continue };
+            let text = ctx.expand(template);
+            if text.is_empty() {
+                continue;
+            }
+            self.emit_furniture_slot(&mut ops, &text, anchor, y_pt, &f.style);
+        }
+        ops
+    }
+
+    fn emit_furniture_slot(
+        &self,
+        ops: &mut Vec<Op>,
+        text: &str,
+        anchor: FurnitureAnchor,
+        y_pt: f32,
+        style: &ResolvedBlock,
+    ) {
+        let flags = RunFlags {
+            bold: style.is_bold(),
+            italic: style.is_italic(),
+            monospace: false,
+            strikethrough: false,
+            underline: false,
+        };
+        let size_pt = style.font_size_pt;
+        let measured = self.font_set.measure(flags, text, size_pt);
+        let x_pt = match anchor {
+            FurnitureAnchor::Left => mm_to_pt(self.style.page.margins_mm.left.max(1.0)),
+            FurnitureAnchor::Center => (self.page_width_pt() - measured) / 2.0,
+            FurnitureAnchor::Right => {
+                self.page_width_pt()
+                    - mm_to_pt(self.style.page.margins_mm.right.max(1.0))
+                    - measured
+            }
+        };
+
+        let x_mm = pt_to_mm(x_pt);
+        let y_mm = pt_to_mm(self.page_height_pt() - y_pt);
+        let emit = if self.font_set.needs_transliteration(flags) {
+            to_win1252(text)
+        } else {
+            text.to_string()
+        };
+
+        ops.push(Op::SaveGraphicsState);
+        ops.push(Op::StartTextSection);
+        ops.push(Op::SetTextCursor {
+            pos: Point::new(Mm(x_mm), Mm(y_mm)),
+        });
+        ops.push(Op::SetFont {
+            font: self.font_set.handle(flags),
+            size: Pt(size_pt),
+        });
+        ops.push(Op::SetFillColor {
+            col: rgb_color(style.text_color_rgb()),
+        });
+        ops.push(Op::ShowText {
+            items: vec![TextItem::Text(emit)],
+        });
+        ops.push(Op::EndTextSection);
+        ops.push(Op::RestoreGraphicsState);
     }
 
     fn render_block(&mut self, block: &Block) {
@@ -1468,6 +1596,89 @@ fn rgb_color((r, g, b): (u8, u8, u8)) -> Color {
         b: f32::from(b) / 255.0,
         icc_profile: None,
     })
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FurniturePosition {
+    Top,
+    Bottom,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FurnitureAnchor {
+    Left,
+    Center,
+    Right,
+}
+
+/// Per-document furniture context. The fields that don't vary by page
+/// (title / author / date / total) are computed once and reused for
+/// every page; `with_page` produces the per-page view.
+struct TemplateBase {
+    total_pages: usize,
+    title: String,
+    author: String,
+    date: String,
+}
+
+impl TemplateBase {
+    fn with_page(&self, page: usize) -> TemplateContext<'_> {
+        TemplateContext {
+            page,
+            total_pages: self.total_pages,
+            title: &self.title,
+            author: &self.author,
+            date: &self.date,
+        }
+    }
+}
+
+struct TemplateContext<'a> {
+    page: usize,
+    total_pages: usize,
+    title: &'a str,
+    author: &'a str,
+    date: &'a str,
+}
+
+impl TemplateContext<'_> {
+    fn expand(&self, template: &str) -> String {
+        template
+            .replace("{page}", &self.page.to_string())
+            .replace("{total_pages}", &self.total_pages.to_string())
+            .replace("{title}", self.title)
+            .replace("{author}", self.author)
+            .replace("{date}", self.date)
+    }
+}
+
+/// Today's date as `YYYY-MM-DD`, computed from system time using
+/// Howard Hinnant's `civil_from_days` algorithm. UTC; no time zone
+/// conversion (a configurable TZ is a follow-up).
+fn today_iso_date() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    let (y, m, d) = civil_from_days(days);
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+/// `days` = days since 1970-01-01 (UTC). Returns (year, month, day).
+/// Algorithm: Howard Hinnant, http://howardhinnant.github.io/date_algorithms.html.
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as i32, m, d)
 }
 
 #[cfg(test)]

@@ -177,6 +177,12 @@ pub struct PageFurnitureConfig {
     pub right: Option<String>,
     pub style: Option<BlockConfig>,
     pub show_on_first_page: Option<bool>,
+    /// Distance in points between the body's content edge and this
+    /// piece of furniture's baseline. For `[header]` it's the gap
+    /// above the body's first line; for `[footer]` it's the gap
+    /// below the body's last line. Larger value = more breathing
+    /// room. Default ≈ 14pt.
+    pub gap_pt: Option<f32>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]

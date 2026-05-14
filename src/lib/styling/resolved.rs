@@ -141,6 +141,9 @@ pub struct ResolvedPageFurniture {
     pub right: Option<String>,
     pub style: ResolvedBlock,
     pub show_on_first_page: bool,
+    /// Gap in points from the body's content edge to the furniture's
+    /// baseline (above for headers, below for footers).
+    pub gap_pt: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]

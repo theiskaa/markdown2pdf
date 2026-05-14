@@ -197,6 +197,7 @@ fn merge_furniture(base: PageFurnitureConfig, overlay: PageFurnitureConfig) -> P
         right: overlay.right.or(base.right),
         style: merge_optional(base.style, overlay.style, merge_block),
         show_on_first_page: overlay.show_on_first_page.or(base.show_on_first_page),
+        gap_pt: overlay.gap_pt.or(base.gap_pt),
     }
 }
 
@@ -461,6 +462,7 @@ fn lower_furniture(
         right: raw.right,
         style,
         show_on_first_page: raw.show_on_first_page.unwrap_or(true),
+        gap_pt: raw.gap_pt.unwrap_or(14.0),
     }))
 }
 
