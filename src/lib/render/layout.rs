@@ -99,6 +99,12 @@ struct Engine<'a> {
     /// Slugs already used in this document; new headings with the
     /// same base slug get `-2`, `-3`, ... suffixes.
     used_slugs: HashSet<String>,
+    /// Per-render URL → image-bytes cache so two `![](url)` blocks
+    /// pointing at the same remote asset only download once. Only
+    /// populated when the `fetch` feature is enabled; kept compiled-in
+    /// either way so the rest of the engine doesn't need cfg guards.
+    #[cfg_attr(not(feature = "fetch"), allow(dead_code))]
+    url_image_cache: HashMap<String, Vec<u8>>,
     /// Whether a text section is currently open.
     in_text_section: bool,
 }
@@ -124,6 +130,7 @@ impl<'a> Engine<'a> {
             heading_anchors: Vec::new(),
             pending_internal_links: Vec::new(),
             used_slugs: HashSet::new(),
+            url_image_cache: HashMap::new(),
             in_text_section: false,
         }
     }
@@ -1039,15 +1046,78 @@ impl<'a> Engine<'a> {
         self.render_code_block(&lines);
     }
 
+    /// Fetch a remote image into memory (caching by URL) and decode
+    /// it. Hard caps: 5 second read timeout, 10 MB max body. Gated
+    /// behind the `fetch` feature — without it, this returns an
+    /// error so the caller falls back to alt text.
+    #[cfg(feature = "fetch")]
+    fn decode_url_image(&mut self, url: &str) -> Result<image::DynamicImage, String> {
+        const MAX_BYTES: u64 = 10 * 1024 * 1024;
+        const TIMEOUT_SECS: u64 = 5;
+
+        if !self.url_image_cache.contains_key(url) {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
+                .build()
+                .map_err(|e| format!("http client init: {}", e))?;
+            let resp = client.get(url).send().map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("HTTP {}", resp.status()));
+            }
+            if let Some(len) = resp.content_length() {
+                if len > MAX_BYTES {
+                    return Err(format!(
+                        "image at {} is {} bytes; cap is {}",
+                        url, len, MAX_BYTES
+                    ));
+                }
+            }
+            let bytes = resp.bytes().map_err(|e| e.to_string())?;
+            if bytes.len() as u64 > MAX_BYTES {
+                return Err(format!(
+                    "image at {} is {} bytes; cap is {}",
+                    url,
+                    bytes.len(),
+                    MAX_BYTES
+                ));
+            }
+            self.url_image_cache.insert(url.to_string(), bytes.to_vec());
+        }
+
+        let bytes = self.url_image_cache.get(url).expect("just inserted");
+        let cursor = std::io::Cursor::new(bytes.as_slice());
+        let reader = image::ImageReader::new(cursor)
+            .with_guessed_format()
+            .map_err(|e| e.to_string())?;
+        reader.decode().map_err(|e| e.to_string())
+    }
+
+    #[cfg(not(feature = "fetch"))]
+    fn decode_url_image(&mut self, url: &str) -> Result<image::DynamicImage, String> {
+        Err(format!(
+            "URL image {} requires the `fetch` feature (recompile with --features fetch)",
+            url
+        ))
+    }
+
     fn render_image(&mut self, path: &std::path::Path, alt: &str, caption: Option<&str>) {
         // Decode via the `image` crate. If anything fails, gracefully
         // degrade to an italic alt-text paragraph so the document
-        // doesn't lose content.
-        let img = match image::ImageReader::open(path)
-            .and_then(|r| r.with_guessed_format())
-            .map_err(|e| e.to_string())
-            .and_then(|r| r.decode().map_err(|e| e.to_string()))
-        {
+        // doesn't lose content. URL paths take a separate fetch
+        // pre-pass that downloads the bytes (gated under the `fetch`
+        // feature); without the feature, URL images fall back to alt
+        // text.
+        let path_str = path.to_string_lossy();
+        let is_url = path_str.starts_with("http://") || path_str.starts_with("https://");
+        let decode_result: Result<image::DynamicImage, String> = if is_url {
+            self.decode_url_image(path_str.as_ref())
+        } else {
+            image::ImageReader::open(path)
+                .and_then(|r| r.with_guessed_format())
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.decode().map_err(|e| e.to_string()))
+        };
+        let img = match decode_result {
             Ok(d) => d,
             Err(e) => {
                 log::warn!("could not decode image {:?}: {}", path, e);

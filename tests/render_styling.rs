@@ -751,6 +751,32 @@ fn baseline_renders_without_any_styling_overrides() {
 }
 
 #[test]
+fn url_image_without_fetch_feature_renders_alt_text() {
+    // Without --features fetch (the default test build), an http(s)
+    // URL image should fall back to the italic alt-text fallback and
+    // not crash the render.
+    let md = "![remote-banner](https://example.com/banner.png)\n";
+    let bytes = render(md, "");
+    assert!(bytes.starts_with(b"%PDF-"));
+    let s = String::from_utf8_lossy(&bytes);
+    if !cfg!(feature = "fetch") {
+        assert!(
+            s.contains("[image: remote-banner]"),
+            "expected `[image: alt]` italic fallback when fetch feature is disabled"
+        );
+    }
+}
+
+#[test]
+fn url_image_with_invalid_url_does_not_crash() {
+    // Even if `fetch` is enabled, a malformed URL or unreachable host
+    // should degrade to the alt-text fallback rather than panic.
+    let md = "![alt-fallback](https://invalid.example.invalid/nope.png)\n";
+    let bytes = render(md, "");
+    assert!(bytes.starts_with(b"%PDF-"));
+}
+
+#[test]
 fn image_caption_renders_when_title_attribute_present() {
     let img = "examples/showcase_image.jpg";
     let md = format!("![alt]({} \"This is a caption\")\n", img);

@@ -205,8 +205,9 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             Token::Image { alt, url, title }
                 if buffered_inline.is_empty() && image_is_standalone(tokens, i) =>
             {
+                let is_url = url.starts_with("http://") || url.starts_with("https://");
                 let path = std::path::PathBuf::from(url);
-                if path.exists() {
+                if is_url || path.exists() {
                     let alt_text = crate::markdown::Token::collect_all_text(alt);
                     out.push(Block::Image {
                         path,
