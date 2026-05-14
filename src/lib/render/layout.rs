@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::styling::{
     BorderStyle, ImageAlign, Orientation, PageSize, ResolvedBlock, ResolvedBorder, ResolvedList,
-    ResolvedPage, ResolvedPageFurniture, ResolvedStyle, ResolvedToc,
+    ResolvedPage, ResolvedPageFurniture, ResolvedStyle, ResolvedToc, TextAlignment,
 };
 
 use super::font::FontSet;
@@ -99,6 +99,11 @@ struct Engine<'a> {
     /// Slugs already used in this document; new headings with the
     /// same base slug get `-2`, `-3`, ... suffixes.
     used_slugs: HashSet<String>,
+    /// Alignment used by the next call to [`write_wrapped_runs`]. Set
+    /// by `render_paragraph` / `render_heading` / etc. before the
+    /// call and reset back to `Left` afterwards (so other code paths
+    /// that don't touch it default to left).
+    current_text_align: TextAlignment,
     /// Per-render URL → image-bytes cache so two `![](url)` blocks
     /// pointing at the same remote asset only download once. Only
     /// populated when the `fetch` feature is enabled; kept compiled-in
@@ -130,6 +135,7 @@ impl<'a> Engine<'a> {
             heading_anchors: Vec::new(),
             pending_internal_links: Vec::new(),
             used_slugs: HashSet::new(),
+            current_text_align: TextAlignment::Left,
             url_image_cache: HashMap::new(),
             in_text_section: false,
         }
@@ -1665,7 +1671,9 @@ impl<'a> Engine<'a> {
         } else {
             runs
         };
+        self.current_text_align = s.text_align;
         self.write_wrapped_runs(runs_ref, s.font_size_pt, s.line_height, base_flags, color);
+        self.current_text_align = TextAlignment::Left;
         self.end_block(ctx);
     }
 
@@ -1681,7 +1689,9 @@ impl<'a> Engine<'a> {
         } else {
             runs
         };
+        self.current_text_align = s.text_align;
         self.write_wrapped_runs(runs_ref, s.font_size_pt, s.line_height, base, color);
+        self.current_text_align = TextAlignment::Left;
         self.end_block(ctx);
     }
 
@@ -1828,7 +1838,9 @@ impl<'a> Engine<'a> {
         // starts with a fresh BT (and absolute Td). Subsequent lines
         // of this paragraph stay inside one BT and use T*.
         self.close_text_section();
-        for line in &lines {
+        let align = self.current_text_align;
+        let last_line_idx = lines.len().saturating_sub(1);
+        for (line_idx, line) in lines.iter().enumerate() {
             // One BT...ET block per paragraph, not per line — PDF
             // viewers use text-block boundaries to determine
             // selection flow, and per-line blocks make text selection
@@ -1842,19 +1854,79 @@ impl<'a> Engine<'a> {
             let opened_now = !self.in_text_section;
             self.ensure_text_section();
             let baseline_y_pt = self.y_from_top_pt + size_pt;
+
+            // Pre-measure this line's natural width so alignment
+            // calculations have something to work with.
+            let mut natural_w_pt = 0.0f32;
+            let mut space_count = 0usize;
+            for seg in line {
+                let s_size = if seg.flags.superscript || seg.flags.subscript {
+                    size_pt * 0.70
+                } else if seg.flags.small_caps {
+                    size_pt * 0.78
+                } else {
+                    size_pt
+                };
+                natural_w_pt += self.font_set.measure(seg.flags, &seg.text, s_size);
+                if seg.text.chars().all(char::is_whitespace) && !seg.text.is_empty() {
+                    space_count += 1;
+                }
+            }
+            let slack_pt = (max_width - natural_w_pt).max(0.0);
+            let is_last_line = line_idx == last_line_idx;
+
+            let (line_x_start, word_spacing_pt) = match align {
+                TextAlignment::Left => (self.indent_left_pt, 0.0),
+                TextAlignment::Center => {
+                    (self.indent_left_pt + slack_pt * 0.5, 0.0)
+                }
+                TextAlignment::Right => (self.indent_left_pt + slack_pt, 0.0),
+                TextAlignment::Justify => {
+                    // Don't justify the last line of a paragraph, lines
+                    // with no break opportunities, or lines whose slack
+                    // would stretch spaces beyond ~30% of the column
+                    // (a sign the wrap had no good fit, like an isolated
+                    // short word).
+                    let stretch_ok = space_count > 0
+                        && slack_pt > 0.0
+                        && slack_pt < max_width * 0.30;
+                    let tw = if !is_last_line && stretch_ok {
+                        (slack_pt / space_count as f32).min(size_pt * 0.5)
+                    } else {
+                        0.0
+                    };
+                    (self.indent_left_pt, tw)
+                }
+            };
+            let needs_absolute_td = !matches!(
+                align,
+                TextAlignment::Left | TextAlignment::Justify
+            );
+
             if opened_now {
-                self.move_cursor_to(self.indent_left_pt, baseline_y_pt);
+                self.move_cursor_to(line_x_start, baseline_y_pt);
                 self.page_ops.push(Op::SetLineHeight {
                     lh: Pt(line_height_pt),
                 });
                 if let Some(c) = color.clone() {
                     self.page_ops.push(Op::SetFillColor { col: c });
                 }
+            } else if needs_absolute_td {
+                self.move_cursor_to(line_x_start, baseline_y_pt);
             } else {
                 self.page_ops.push(Op::AddLineBreak);
             }
 
-            let mut x_cursor_pt = self.indent_left_pt;
+            // Justify uses the PDF Tw operator (set word spacing) so
+            // every space char picks up the extra slack. Set it before
+            // this line's segments emit and reset to 0 afterwards.
+            if matches!(align, TextAlignment::Justify) {
+                self.page_ops.push(Op::SetWordSpacing {
+                    pt: Pt(word_spacing_pt),
+                });
+            }
+
+            let mut x_cursor_pt = line_x_start;
             let mut cursor_needs_reset = false;
             let mut line_was_broken = false;
             for seg in line {
@@ -1984,6 +2056,13 @@ impl<'a> Engine<'a> {
             // intended left edge.
             if line_was_broken {
                 self.close_text_section();
+            }
+
+            // Reset word spacing after a justified line so subsequent
+            // sections (or the last line below) don't inherit the
+            // stretch.
+            if matches!(align, TextAlignment::Justify) && word_spacing_pt > 0.0 {
+                self.page_ops.push(Op::SetWordSpacing { pt: Pt(0.0) });
             }
 
             self.advance_y(line_height_pt);

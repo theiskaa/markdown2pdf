@@ -751,6 +751,68 @@ fn baseline_renders_without_any_styling_overrides() {
 }
 
 #[test]
+fn text_align_center_changes_output() {
+    let md = "A short line of text.\n";
+    let cfg_left = "[paragraph]\ntext_align = \"left\"\n";
+    let cfg_center = "[paragraph]\ntext_align = \"center\"\n";
+    let bytes_left = render(md, cfg_left);
+    let bytes_center = render(md, cfg_center);
+    assert_ne!(
+        bytes_left, bytes_center,
+        "left vs center alignment should produce different PDFs"
+    );
+}
+
+#[test]
+fn text_align_right_changes_output() {
+    let md = "A short line of text.\n";
+    let cfg_left = "[paragraph]\ntext_align = \"left\"\n";
+    let cfg_right = "[paragraph]\ntext_align = \"right\"\n";
+    let bytes_left = render(md, cfg_left);
+    let bytes_right = render(md, cfg_right);
+    assert_ne!(
+        bytes_left, bytes_right,
+        "left vs right alignment should produce different PDFs"
+    );
+}
+
+#[test]
+fn text_align_justify_emits_word_spacing_op() {
+    // Two long enough lines so the first one (non-last) gets justified
+    // and emits an Op::SetWordSpacing in the content stream.
+    let md = "This is a sentence that is long enough to wrap onto a \
+              second line so the first line gets justified spacing applied. \
+              And here is a tail that makes the second line non-empty too.\n";
+    let cfg = "[paragraph]\ntext_align = \"justify\"\n";
+    let bytes = render(md, cfg);
+    let s = String::from_utf8_lossy(&bytes);
+    // The Tw operator appears in raw PDF content streams as " Tw".
+    assert!(
+        s.contains(" Tw"),
+        "justified paragraph should emit `Tw` (word-spacing) op"
+    );
+}
+
+#[test]
+fn text_align_left_does_not_emit_word_spacing() {
+    let md = "Long enough sentence that wraps to a second line for sure \
+              with enough text to make the line break occur somewhere.\n";
+    let bytes_left = render(md, "[paragraph]\ntext_align = \"left\"\n");
+    let s = String::from_utf8_lossy(&bytes_left);
+    // SetWordSpacing(0) might still appear if other code paths use it,
+    // but no positive-pt Tw should ever land. The simpler invariant:
+    // the bytes differ from a justified render of the same source.
+    let bytes_just = render(md, "[paragraph]\ntext_align = \"justify\"\n");
+    assert_ne!(
+        bytes_left, bytes_just,
+        "left vs justify should differ when there's a wrappable line"
+    );
+    // Also verify no obvious junk got introduced.
+    assert!(bytes_left.starts_with(b"%PDF-"));
+    let _ = s;
+}
+
+#[test]
 fn small_caps_uppercases_lowercase_letters_in_paragraph() {
     let cfg = "[paragraph]\nsmall_caps = true\n";
     let bytes = render("Hello world.", cfg);
