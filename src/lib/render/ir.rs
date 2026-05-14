@@ -4,10 +4,8 @@
 //! into a flat `Vec<Block>` plus per-block inline runs. The layout
 //! pass ([`super::layout`]) consumes that IR.
 //!
-//! The IR is intentionally smaller than the [`Token`] enum — it drops
-//! constructs the renderer doesn't handle yet (lists, blockquotes,
-//! tables, images, links) and degrades them to plain paragraphs.
-//! Phase 2+ will expand it.
+//! The IR is intentionally smaller than the [`Token`] enum: it drops
+//! anything the renderer doesn't need to distinguish at layout time.
 
 /// A top-level block-level rendering unit.
 #[derive(Debug, Clone)]
@@ -55,14 +53,20 @@ pub struct ListEntry {
     pub bullet: ListBullet,
     pub runs: Vec<InlineRun>,
     pub children: Vec<Block>,
+    /// CommonMark §5.3: a list is "loose" if any of its items has
+    /// `loose = true` (i.e., is separated from another item by a
+    /// blank line in the source). The renderer reads `any_loose`
+    /// over the entries and picks `item_spacing_loose_pt` vs
+    /// `item_spacing_tight_pt` for the inter-item gap.
+    pub loose: bool,
 }
 
 /// The marker drawn at the start of a [`ListEntry`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListBullet {
-    /// `- `, `+ `, `* ` — phase 2 renders them as a centered dot
-    /// regardless of source marker. The original marker is preserved
-    /// in case a later phase wants to honor it.
+    /// `- `, `+ `, `* ` — the source marker is preserved here; the
+    /// rendered bullet glyph comes from `[list.unordered.bullet]`
+    /// regardless of which source marker was used.
     Unordered(char),
     /// `1.`, `2.` (or `1)`, `2)`).
     Ordered(usize),

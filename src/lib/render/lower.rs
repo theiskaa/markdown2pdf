@@ -5,11 +5,9 @@
 //! flattened (bold/italic/monospace propagate through nested
 //! [`Token::Emphasis`]/[`Token::StrongEmphasis`]/[`Token::Code`]).
 //!
-//! Tokens the renderer doesn't yet handle natively (lists,
-//! blockquotes, tables, images, HTML) degrade gracefully to plain
-//! paragraphs containing the collected text — they appear in the PDF
-//! but without their distinctive layout. Phase 2+ replaces those
-//! degradations with real rendering.
+//! Tokens that don't have a dedicated `Block` variant degrade to
+//! a paragraph containing their collected text — the content still
+//! appears, just without distinctive layout.
 
 use crate::markdown::Token;
 
@@ -93,9 +91,10 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             Token::ListItem { .. } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 // Slurp every consecutive sibling ListItem into one
-                // List block. Items with different markers still go
-                // into one list — refining "marker change starts new
-                // list" is a phase 3 polish item.
+                // List block. Items with different markers (`-` then
+                // `*` etc.) currently merge into one list; CommonMark
+                // says marker changes should start a new list, which
+                // we'll fix when it actually bites.
                 let mut entries = Vec::new();
                 while i < tokens.len() {
                     let Token::ListItem {
@@ -103,12 +102,15 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                         ordered,
                         number,
                         checked,
+                        loose,
                         ..
                     } = &tokens[i]
                     else {
                         break;
                     };
-                    entries.push(make_list_entry(*ordered, *number, *checked, content));
+                    entries.push(make_list_entry(
+                        *ordered, *number, *checked, *loose, content,
+                    ));
                     i += 1;
                     // Skip blank lines between list items so we don't
                     // mistake the next item for the start of a new
@@ -222,6 +224,7 @@ fn make_list_entry(
     ordered: bool,
     number: Option<usize>,
     checked: Option<bool>,
+    loose: bool,
     content: &[Token],
 ) -> ListEntry {
     let bullet = match checked {
@@ -266,6 +269,7 @@ fn make_list_entry(
         bullet,
         runs,
         children,
+        loose,
     }
 }
 
@@ -325,8 +329,9 @@ fn flatten_one(tok: &Token, flags: RunFlags, link: Option<&str>, out: &mut Vec<I
             }
         }
         Token::Image { alt, .. } => {
-            // Phase 1/2: render the alt text inline. Embedding the
-            // image itself arrives in phase 4.
+            // Inline images render only their alt text. Block-level
+            // standalone images are promoted to `Block::Image` in the
+            // top-level lower loop and get the full embedded image.
             for t in alt {
                 flatten_one(t, flags, link, out);
             }
@@ -335,9 +340,8 @@ fn flatten_one(tok: &Token, flags: RunFlags, link: Option<&str>, out: &mut Vec<I
             // Recognized inline whitelist (b/i/u/s/del/strike/br plus
             // em/strong) is handled by the lexer via the regular
             // emphasis tokens, so by the time we see HtmlInline here
-            // the tag is *outside* that whitelist. Just emit the
-            // literal text for visibility — phase 6 adds a config
-            // switch for strip-vs-verbatim.
+            // the tag is *outside* that whitelist. Emit the literal
+            // text so the user sees what's there.
             let lower = tag.to_ascii_lowercase();
             // Hide standalone whitelist tags that the lexer doesn't
             // convert (e.g. `<br/>`).

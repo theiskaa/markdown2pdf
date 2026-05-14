@@ -207,7 +207,7 @@ impl<'a> Engine<'a> {
     /// at the captured marker (so text draws on top) and the border at
     /// the end (so it doesn't get covered by the fill). If the block
     /// spilled across a page break the paint is skipped — cross-page
-    /// fragments are a Theme B+ follow-up.
+    /// fragments are a known limitation.
     fn end_block(&mut self, ctx: BlockPaintCtx) {
         self.close_text_section();
         self.advance_y(ctx.padding_bottom);
@@ -322,8 +322,7 @@ impl<'a> Engine<'a> {
         let rendered_w_pt = natural_w_pt * scale;
         let rendered_h_pt = natural_h_pt * scale;
 
-        // Spacing before the image.
-        self.advance_y(2.0);
+        self.advance_y(self.style.image.margin_before_pt);
         if self.y_from_top_pt + rendered_h_pt + self.bottom_margin_pt() > self.page_height_pt() {
             self.start_new_page();
         }
@@ -350,7 +349,7 @@ impl<'a> Engine<'a> {
             },
         });
         self.y_from_top_pt += rendered_h_pt;
-        self.advance_y(2.0);
+        self.advance_y(self.style.image.margin_after_pt);
     }
 
     fn render_table(
@@ -365,10 +364,12 @@ impl<'a> Engine<'a> {
 
         let s_header = self.style.table.header.clone();
         let s_cell = self.style.table.cell.clone();
-        let before_pt = (s_cell.margin_before_pt + 0.5).max(0.5);
-        let after_pt = (s_cell.margin_after_pt + 0.5).max(0.5);
+        // Table-level margins come from `[table]` directly (separate
+        // from per-cell margins). Row gap comes from `[table.row_gap_pt]`.
+        let before_pt = self.style.table.margin_before_pt;
+        let after_pt = self.style.table.margin_after_pt;
+        let row_gap_pt = self.style.table.row_gap_pt;
         const CELL_PAD_PT: f32 = 4.0;
-        const ROW_GAP_PT: f32 = 2.0;
 
         self.advance_y(before_pt);
 
@@ -400,7 +401,7 @@ impl<'a> Engine<'a> {
         let header_bottom = header_top + header_height;
         self.draw_row_borders(header_top, header_bottom, col_count, col_width);
         self.y_from_top_pt = header_bottom;
-        self.advance_y(ROW_GAP_PT);
+        self.advance_y(row_gap_pt);
 
         // Data rows.
         for row in rows {
@@ -430,7 +431,7 @@ impl<'a> Engine<'a> {
                 let header_bottom = header_top + header_height;
                 self.draw_row_borders(header_top, header_bottom, col_count, col_width);
                 self.y_from_top_pt = header_bottom;
-                self.advance_y(ROW_GAP_PT);
+                self.advance_y(row_gap_pt);
             }
             let row_top = self.y_from_top_pt;
             self.draw_row(
@@ -445,7 +446,7 @@ impl<'a> Engine<'a> {
             let row_bottom = row_top + row_height;
             self.draw_row_borders(row_top, row_bottom, col_count, col_width);
             self.y_from_top_pt = row_bottom;
-            self.advance_y(ROW_GAP_PT);
+            self.advance_y(row_gap_pt);
         }
 
         let _ = CELL_PAD_PT;
@@ -595,7 +596,11 @@ impl<'a> Engine<'a> {
         let bullet_gap_pt = mm_to_pt(BULLET_GAP_MM);
         let saved_left = self.indent_left_pt;
 
-        for entry in entries {
+        // CommonMark §5.3: the whole list is loose if any item is loose.
+        // Pre-compute once so every iteration uses the same gap.
+        let any_loose = entries.iter().any(|e| e.loose);
+
+        for (idx, entry) in entries.iter().enumerate() {
             let list_style: ResolvedList = match entry.bullet {
                 ListBullet::Unordered(_) => self.style.list_unordered.clone(),
                 ListBullet::Ordered(_) => self.style.list_ordered.clone(),
@@ -606,12 +611,24 @@ impl<'a> Engine<'a> {
             let s = &list_style.block;
             let size_pt = s.font_size_pt;
             let line_height = s.line_height;
+            let inter_item_gap = if any_loose {
+                list_style.item_spacing_loose_pt
+            } else {
+                list_style.item_spacing_tight_pt
+            };
 
             let bullet_text = format_bullet(&entry.bullet, &list_style);
             let bullet_flags = RunFlags::default();
             let bullet_width = self.font_set.measure(bullet_flags, &bullet_text, size_pt);
 
-            self.advance_y(s.margin_before_pt.max(0.5));
+            // First item: honor `block.margin_before_pt` (list-level
+            // "space before the whole list"). Subsequent items use the
+            // tight/loose inter-item gap.
+            if idx == 0 {
+                self.advance_y(s.margin_before_pt.max(0.5));
+            } else {
+                self.advance_y(inter_item_gap.max(0.0));
+            }
             let bullet_x = saved_left;
             let bullet_y = self.y_from_top_pt + size_pt;
             self.close_text_section();
@@ -652,7 +669,13 @@ impl<'a> Engine<'a> {
             }
 
             self.indent_left_pt = saved_left;
-            self.advance_y(s.margin_after_pt.max(0.0));
+
+            // Last item: honor `block.margin_after_pt` (list-level
+            // "space after the whole list"). The inter-item gap is
+            // applied at the *start* of the next iteration.
+            if idx + 1 == entries.len() {
+                self.advance_y(s.margin_after_pt.max(0.0));
+            }
         }
     }
 
@@ -789,8 +812,7 @@ impl<'a> Engine<'a> {
             let word_width = self.font_set.measure(word.flags, &word.text, size_pt);
 
             // If the very first piece of a line is wider than the
-            // page, push it anyway — we don't break inside a word in
-            // phase 1.
+            // page, push it anyway — we don't break inside a word.
             if !current.is_empty() && current_width + word_width > max_width {
                 lines.push(std::mem::take(&mut current));
                 current_width = 0.0;

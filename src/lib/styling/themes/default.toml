@@ -96,7 +96,7 @@ left = { width_pt = 1.2, color = "#B4B4B4", style = "solid" }
 margin_after_pt = 0.5
 indent_per_level_pt = 17.0  # ~6 mm
 item_spacing_tight_pt = 0.5
-item_spacing_loose_pt = 2.0
+item_spacing_loose_pt = 6.0
 
 [list.unordered]
 bullet = "•"
