@@ -74,9 +74,14 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             }
             Token::HtmlBlock(content) => {
                 flush_paragraph(&mut out, &mut buffered_inline);
-                out.push(Block::HtmlBlock {
-                    content: content.clone(),
-                });
+                // CommonMark §4.6: HTML comments are invisible. The
+                // lexer wraps block-level `<!-- ... -->` lines in an
+                // `HtmlBlock` token, so drop comment-only payloads.
+                if !is_only_html_comments(content) {
+                    out.push(Block::HtmlBlock {
+                        content: content.clone(),
+                    });
+                }
                 i += 1;
             }
             Token::BlockQuote(body) => {
@@ -178,6 +183,28 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
 /// Returns true if a Token::Image at `idx` should be lifted to a
 /// block-level [`Block::Image`] — i.e. nothing comes after it on the
 /// same paragraph.
+/// True if `s` (trimmed) consists of zero or more `<!-- ... -->`
+/// blocks and nothing else. The block-level lexer rule for raw HTML
+/// catches a standalone comment line as `Token::HtmlBlock(content)`;
+/// we drop those at lower time so the PDF doesn't show the literal
+/// `<!--`.
+fn is_only_html_comments(s: &str) -> bool {
+    let mut rest = s.trim();
+    if rest.is_empty() {
+        return false;
+    }
+    while !rest.is_empty() {
+        if !rest.starts_with("<!--") {
+            return false;
+        }
+        match rest.find("-->") {
+            Some(end) => rest = rest[end + 3..].trim(),
+            None => return false,
+        }
+    }
+    true
+}
+
 fn image_is_standalone(tokens: &[Token], idx: usize) -> bool {
     for tok in tokens.iter().skip(idx + 1) {
         match tok {
