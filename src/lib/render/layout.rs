@@ -133,20 +133,29 @@ impl<'a> Engine<'a> {
         self.push_current_page();
 
         // Body content is fully laid out. Take it out so the engine's
-        // raw_pages slot is empty for the TOC pass.
+        // raw_pages slot is empty for title-page / TOC passes.
         let content_pages: Vec<Vec<Op>> = std::mem::take(&mut self.raw_pages);
         let body_link_count = self.pending_internal_links.len();
 
-        // Optional TOC pass. Iterate until the page count converges
-        // (rarely more than one iteration; bounded at 3). Each retry
-        // drops the previous attempt's pending links before re-laying
-        // out, so we don't accumulate duplicate annotations.
+        // Optional title page first. Currently always produces one
+        // page; multi-page title support is a follow-up.
+        let title_pages: Vec<Vec<Op>> = if self.style.title_page.is_some() {
+            self.lay_out_title_page()
+        } else {
+            Vec::new()
+        };
+        let title_offset = title_pages.len();
+        let title_link_count = self.pending_internal_links.len();
+
+        // Optional TOC pass. Convergence loop on page count (bounded
+        // at 3). Displayed page numbers include the title-page
+        // prefix so they match the final-document position.
         let toc_pages: Vec<Vec<Op>> = if self.style.toc.is_some() {
             let mut estimate = 1usize;
             let mut result = Vec::new();
             for _ in 0..3 {
-                self.pending_internal_links.truncate(body_link_count);
-                result = self.lay_out_toc(estimate);
+                self.pending_internal_links.truncate(title_link_count);
+                result = self.lay_out_toc(title_offset + estimate);
                 if result.len() == estimate {
                     break;
                 }
@@ -156,21 +165,25 @@ impl<'a> Engine<'a> {
         } else {
             Vec::new()
         };
-        let toc_offset = toc_pages.len();
+        let toc_count = toc_pages.len();
+        let prefix_offset = title_offset + toc_count;
 
         // Shift body anchors and body's pre-existing internal links
-        // forward by toc_offset (TOC pages will land at the front).
-        // TOC entries added to `pending_internal_links` during
-        // `lay_out_toc` already sit on TOC pages (indices 0..toc_offset)
-        // and don't need shifting.
+        // forward by prefix_offset (title + TOC pages land at the
+        // front). Shift TOC's own pending links by title_offset only
+        // (they sit on TOC pages, which now appear at indices
+        // [title_offset, prefix_offset)).
         for anchor in &mut self.heading_anchors {
-            anchor.page_idx += toc_offset;
+            anchor.page_idx += prefix_offset;
         }
         for link in &mut self.pending_internal_links[..body_link_count] {
-            link.page_idx += toc_offset;
+            link.page_idx += prefix_offset;
+        }
+        for link in &mut self.pending_internal_links[body_link_count..] {
+            link.page_idx += title_offset;
         }
 
-        let total = content_pages.len() + toc_offset;
+        let total = content_pages.len() + prefix_offset;
         let base = TemplateBase {
             total_pages: total,
             title: self.style.metadata.title.clone().unwrap_or_default(),
@@ -235,16 +248,27 @@ impl<'a> Engine<'a> {
             self.doc.add_bookmark(&name, anchor.page_idx + 1);
         }
 
-        // Page assembly: TOC pages first, content pages after. Header
-        // / footer furniture applies to every page uniformly.
+        // Page assembly: title pages → TOC pages → body content. Header
+        // / footer furniture applies to every page EXCEPT the title
+        // pages (book convention: clean cover, no chrome).
         let mut pages = Vec::with_capacity(total);
-        let combined = toc_pages.into_iter().chain(content_pages.into_iter());
+        let combined = title_pages
+            .into_iter()
+            .chain(toc_pages.into_iter())
+            .chain(content_pages.into_iter());
         for (idx, content_ops) in combined.enumerate() {
             let ctx = base.with_page(idx + 1);
-            let header_ops =
-                self.render_furniture(self.style.header.as_ref(), &ctx, FurniturePosition::Top);
-            let footer_ops =
-                self.render_furniture(self.style.footer.as_ref(), &ctx, FurniturePosition::Bottom);
+            let is_title_page = idx < title_offset;
+            let header_ops = if is_title_page {
+                Vec::new()
+            } else {
+                self.render_furniture(self.style.header.as_ref(), &ctx, FurniturePosition::Top)
+            };
+            let footer_ops = if is_title_page {
+                Vec::new()
+            } else {
+                self.render_furniture(self.style.footer.as_ref(), &ctx, FurniturePosition::Bottom)
+            };
             let internal_link_ops = deferred_per_page.remove(&idx).unwrap_or_default();
             let mut all = Vec::with_capacity(
                 header_ops.len()
@@ -267,6 +291,137 @@ impl<'a> Engine<'a> {
 
     /// Lay out the TOC into a fresh sequence of page ops. The
     /// estimated `toc_offset` is the number of pages the TOC is
+    /// Build the title page(s). Returns the resulting page op streams
+    /// (typically one page). Caller is responsible for ensuring
+    /// `raw_pages` is empty and `style.title_page` is `Some` before
+    /// calling.
+    fn lay_out_title_page(&mut self) -> Vec<Vec<Op>> {
+        let tp = self
+            .style
+            .title_page
+            .clone()
+            .expect("title_page must be Some when this is called");
+
+        // Snapshot geometric state. raw_pages is empty here (caller
+        // drained body into content_pages already).
+        let saved_y = self.y_from_top_pt;
+        let saved_left = self.indent_left_pt;
+        let saved_right = self.indent_right_pt;
+        let saved_in_text = self.in_text_section;
+
+        let page_width_pt = self.page_width_pt();
+        self.indent_left_pt = mm_to_pt(self.style.page.margins_mm.left.max(1.0));
+        self.indent_right_pt =
+            page_width_pt - mm_to_pt(self.style.page.margins_mm.right.max(1.0));
+        self.in_text_section = false;
+
+        let base_size = tp.style.font_size_pt.max(8.0);
+        let title_size = base_size * 2.4;
+        let subtitle_size = base_size * 1.4;
+        let author_size = base_size * 1.1;
+        let date_size = base_size;
+
+        // Vertical layout: estimate stack height, then center it
+        // between the top and bottom margins. Each piece contributes
+        // its font size plus a small gap.
+        let line_gap = base_size * 1.6;
+        let small_gap = base_size * 0.6;
+        let mut stack_h = title_size;
+        if tp.subtitle.is_some() {
+            stack_h += subtitle_size + small_gap;
+        }
+        if tp.author.is_some() {
+            stack_h += author_size + line_gap;
+        }
+        if tp.date.is_some() {
+            stack_h += date_size + small_gap;
+        }
+
+        let top = mm_to_pt(self.style.page.margins_mm.top.max(1.0));
+        let bottom = self.page_height_pt() - mm_to_pt(self.style.page.margins_mm.bottom.max(1.0));
+        let usable_h = bottom - top;
+        let start_y = top + ((usable_h - stack_h) * 0.5).max(0.0);
+        self.y_from_top_pt = start_y;
+
+        // Title (bold)
+        self.render_title_page_text(
+            &tp.title,
+            title_size,
+            &tp.style,
+            true,
+        );
+        self.advance_y(small_gap);
+
+        if let Some(sub) = tp.subtitle.as_deref() {
+            self.render_title_page_text(sub, subtitle_size, &tp.style, false);
+            self.advance_y(line_gap);
+        }
+        if let Some(author) = tp.author.as_deref() {
+            self.render_title_page_text(author, author_size, &tp.style, false);
+            self.advance_y(small_gap);
+        }
+        if let Some(date) = tp.date.as_deref() {
+            self.render_title_page_text(date, date_size, &tp.style, false);
+        }
+
+        self.close_text_section();
+        self.push_current_page();
+        let pages = std::mem::take(&mut self.raw_pages);
+
+        self.y_from_top_pt = saved_y;
+        self.indent_left_pt = saved_left;
+        self.indent_right_pt = saved_right;
+        self.in_text_section = saved_in_text;
+        pages
+    }
+
+    /// Emit a single centered line of text at the current
+    /// `y_from_top_pt`, advancing the cursor by `size_pt`.
+    fn render_title_page_text(
+        &mut self,
+        text: &str,
+        size_pt: f32,
+        style: &ResolvedBlock,
+        force_bold: bool,
+    ) {
+        if text.is_empty() {
+            self.advance_y(size_pt);
+            return;
+        }
+        let flags = RunFlags {
+            bold: force_bold || style.is_bold(),
+            italic: style.is_italic(),
+            monospace: false,
+            strikethrough: false,
+            underline: false,
+        };
+        let measured = self.font_set.measure(flags, text, size_pt);
+        let center_x = (self.page_width_pt() - measured) / 2.0;
+        let baseline_y = self.y_from_top_pt + size_pt;
+
+        self.close_text_section();
+        self.ensure_text_section();
+        self.move_cursor_to(center_x, baseline_y);
+        self.page_ops.push(Op::SetFont {
+            font: self.font_set.handle(flags),
+            size: Pt(size_pt),
+        });
+        self.page_ops.push(Op::SetFillColor {
+            col: rgb_color(style.text_color_rgb()),
+        });
+        let emit = if self.font_set.needs_transliteration(flags) {
+            to_win1252(text)
+        } else {
+            text.to_string()
+        };
+        self.page_ops.push(Op::ShowText {
+            items: vec![TextItem::Text(emit)],
+        });
+        self.close_text_section();
+
+        self.advance_y(size_pt);
+    }
+
     /// expected to occupy; entries display `anchor.page_idx + 1 +
     /// toc_offset` so the printed page numbers match what the body's
     /// headings will sit at after concatenation. Caller iterates

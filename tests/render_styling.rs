@@ -629,6 +629,75 @@ Body.
 }
 
 #[test]
+fn title_page_appears_when_configured() {
+    let bytes = render(
+        "Body paragraph.",
+        r##"
+        [title_page]
+        title = "HelloTitle"
+        "##,
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("(HelloTitle)"),
+        "title text missing from title page"
+    );
+    // Count /Type/Page tokens (not /Type/Pages).
+    let needle = b"/Type/Page";
+    let mut pages = 0usize;
+    for i in 0..bytes.len().saturating_sub(needle.len() + 1) {
+        if &bytes[i..i + needle.len()] == needle && bytes[i + needle.len()] != b's' {
+            pages += 1;
+        }
+    }
+    assert!(pages >= 2, "expected >=2 pages (title + body), got {}", pages);
+}
+
+#[test]
+fn title_page_has_no_header_or_footer() {
+    let bytes = render(
+        "Body paragraph that takes one body page.",
+        r##"
+        [title_page]
+        title = "Quiet"
+
+        [footer]
+        center = "page {page}"
+        "##,
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    // Footer suppressed on the title page; appears on the body's
+    // first page (which is page 2 in the final document).
+    assert!(
+        !s.contains("(page 1)"),
+        "footer leaked onto the title page"
+    );
+    assert!(
+        s.contains("(page 2)"),
+        "footer missing on the body's first page (final page 2)"
+    );
+}
+
+#[test]
+fn subtitle_and_author_render_when_present() {
+    let bytes = render(
+        "Body.",
+        r##"
+        [title_page]
+        title = "Main"
+        subtitle = "SubXY"
+        author = "AutBZ"
+        date = "2026-01-02"
+        "##,
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("(Main)"), "title missing");
+    assert!(s.contains("(SubXY)"), "subtitle missing");
+    assert!(s.contains("(AutBZ)"), "author missing");
+    assert!(s.contains("(2026-01-02)"), "date missing");
+}
+
+#[test]
 fn baseline_renders_without_any_styling_overrides() {
     // Sanity: with zero config, the renderer still produces a PDF.
     let bytes = render("# Hi\n\nHello.", "");
