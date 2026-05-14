@@ -512,6 +512,122 @@ fn unknown_internal_anchor_is_dropped_gracefully() {
     assert!(s.contains("%%EOF"), "PDF didn't finish properly");
 }
 
+/// Count case-insensitive occurrences of a substring in bytes. The
+/// TOC tests check that a heading appears twice (TOC + body) by
+/// counting.
+fn count_substr(bytes: &[u8], needle: &[u8]) -> usize {
+    let mut count = 0usize;
+    let mut i = 0usize;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            count += 1;
+            i += needle.len();
+        } else {
+            i += 1;
+        }
+    }
+    count
+}
+
+#[test]
+fn toc_renders_a_title_and_entries() {
+    let md = "\
+# First Heading
+
+Body content.
+
+## Second Heading
+
+More body.
+";
+    let bytes = render(
+        md,
+        r##"
+        [toc]
+        enabled = true
+        title = "Table of Contents"
+        max_depth = 3
+        "##,
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    // The TOC title appears once.
+    assert!(
+        s.contains("(Table of Contents)") || s.contains("Table of Contents"),
+        "TOC title missing from rendered bytes"
+    );
+    // First Heading text appears at least twice (TOC + body). Built-
+    // in font path emits as `(text) Tj` literally.
+    let occurrences = count_substr(&bytes, b"First Heading");
+    assert!(
+        occurrences >= 2,
+        "expected `First Heading` to appear in both TOC and body (got {})",
+        occurrences
+    );
+}
+
+#[test]
+fn toc_respects_max_depth() {
+    let md = "\
+# Top
+
+## Middle
+
+### Deep
+
+Body content.
+";
+    let shallow = render(
+        md,
+        r##"
+        [toc]
+        enabled = true
+        max_depth = 2
+        "##,
+    );
+    let deep = render(
+        md,
+        r##"
+        [toc]
+        enabled = true
+        max_depth = 6
+        "##,
+    );
+    // "Deep" appears once in shallow (body only) and twice in deep
+    // (TOC + body).
+    let shallow_count = count_substr(&shallow, b"Deep");
+    let deep_count = count_substr(&deep, b"Deep");
+    assert!(
+        deep_count > shallow_count,
+        "max_depth filter didn't reduce TOC entries (shallow={}, deep={})",
+        shallow_count,
+        deep_count
+    );
+}
+
+#[test]
+fn toc_entries_emit_goto_actions() {
+    let md = "\
+# A
+
+## B
+
+Body.
+";
+    let bytes = render(
+        md,
+        r##"
+        [toc]
+        enabled = true
+        max_depth = 3
+        "##,
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("/S/GoTo") || s.contains("/S /GoTo"),
+        "expected at least one GoTo action for TOC entries"
+    );
+}
+
 #[test]
 fn baseline_renders_without_any_styling_overrides() {
     // Sanity: with zero config, the renderer still produces a PDF.

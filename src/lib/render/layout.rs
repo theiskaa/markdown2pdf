@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::styling::{
     BorderStyle, Orientation, PageSize, ResolvedBlock, ResolvedBorder, ResolvedList,
-    ResolvedPage, ResolvedPageFurniture, ResolvedStyle,
+    ResolvedPage, ResolvedPageFurniture, ResolvedStyle, ResolvedToc,
 };
 
 use super::font::FontSet;
@@ -132,7 +132,45 @@ impl<'a> Engine<'a> {
         self.close_text_section();
         self.push_current_page();
 
-        let total = self.raw_pages.len();
+        // Body content is fully laid out. Take it out so the engine's
+        // raw_pages slot is empty for the TOC pass.
+        let content_pages: Vec<Vec<Op>> = std::mem::take(&mut self.raw_pages);
+        let body_link_count = self.pending_internal_links.len();
+
+        // Optional TOC pass. Iterate until the page count converges
+        // (rarely more than one iteration; bounded at 3). Each retry
+        // drops the previous attempt's pending links before re-laying
+        // out, so we don't accumulate duplicate annotations.
+        let toc_pages: Vec<Vec<Op>> = if self.style.toc.is_some() {
+            let mut estimate = 1usize;
+            let mut result = Vec::new();
+            for _ in 0..3 {
+                self.pending_internal_links.truncate(body_link_count);
+                result = self.lay_out_toc(estimate);
+                if result.len() == estimate {
+                    break;
+                }
+                estimate = result.len();
+            }
+            result
+        } else {
+            Vec::new()
+        };
+        let toc_offset = toc_pages.len();
+
+        // Shift body anchors and body's pre-existing internal links
+        // forward by toc_offset (TOC pages will land at the front).
+        // TOC entries added to `pending_internal_links` during
+        // `lay_out_toc` already sit on TOC pages (indices 0..toc_offset)
+        // and don't need shifting.
+        for anchor in &mut self.heading_anchors {
+            anchor.page_idx += toc_offset;
+        }
+        for link in &mut self.pending_internal_links[..body_link_count] {
+            link.page_idx += toc_offset;
+        }
+
+        let total = content_pages.len() + toc_offset;
         let base = TemplateBase {
             total_pages: total,
             title: self.style.metadata.title.clone().unwrap_or_default(),
@@ -141,8 +179,7 @@ impl<'a> Engine<'a> {
         };
 
         // Resolve every pending `#slug` link against the now-known
-        // heading anchor table. Annotations are grouped by the page
-        // that contains the link rect (NOT the destination page).
+        // heading anchor table.
         let anchor_index: HashMap<&str, &HeadingAnchor> = self
             .heading_anchors
             .iter()
@@ -185,9 +222,9 @@ impl<'a> Engine<'a> {
                 .push(Op::LinkAnnotation { link: annotation });
         }
 
-        // Register every heading as a PDF bookmark. printpdf 0.9 emits
-        // a flat outline list; visual hierarchy comes from a small
-        // indent prefix per nested level.
+        // Bookmarks: every heading is registered with its shifted page
+        // number. printpdf 0.9's outline serializer is flat; we hint at
+        // hierarchy via an indent prefix per heading level.
         for anchor in &self.heading_anchors {
             let indent_level = anchor.level.saturating_sub(1).min(5) as usize;
             let mut name = String::with_capacity(indent_level * 2 + anchor.text.len());
@@ -198,9 +235,11 @@ impl<'a> Engine<'a> {
             self.doc.add_bookmark(&name, anchor.page_idx + 1);
         }
 
+        // Page assembly: TOC pages first, content pages after. Header
+        // / footer furniture applies to every page uniformly.
         let mut pages = Vec::with_capacity(total);
-        let raw_pages = std::mem::take(&mut self.raw_pages);
-        for (idx, content_ops) in raw_pages.into_iter().enumerate() {
+        let combined = toc_pages.into_iter().chain(content_pages.into_iter());
+        for (idx, content_ops) in combined.enumerate() {
             let ctx = base.with_page(idx + 1);
             let header_ops =
                 self.render_furniture(self.style.header.as_ref(), &ctx, FurniturePosition::Top);
@@ -224,6 +263,162 @@ impl<'a> Engine<'a> {
             ));
         }
         pages
+    }
+
+    /// Lay out the TOC into a fresh sequence of page ops. The
+    /// estimated `toc_offset` is the number of pages the TOC is
+    /// expected to occupy; entries display `anchor.page_idx + 1 +
+    /// toc_offset` so the printed page numbers match what the body's
+    /// headings will sit at after concatenation. Caller iterates
+    /// until the returned page count matches the estimate.
+    fn lay_out_toc(&mut self, toc_offset_estimate: usize) -> Vec<Vec<Op>> {
+        let toc = self.style.toc.clone().expect("toc must be Some when this is called");
+
+        // Snapshot the engine's geometric state. raw_pages was already
+        // drained by finish() before this call; page_ops is empty too
+        // after `push_current_page` was called.
+        let saved_y = self.y_from_top_pt;
+        let saved_left = self.indent_left_pt;
+        let saved_right = self.indent_right_pt;
+        let saved_in_text = self.in_text_section;
+        let saved_link_count = self.pending_internal_links.len();
+        // Reset to first-page top.
+        self.y_from_top_pt = mm_to_pt(self.style.page.margins_mm.top.max(1.0));
+        let page_width_pt = self.page_width_pt();
+        self.indent_left_pt = mm_to_pt(self.style.page.margins_mm.left.max(1.0));
+        self.indent_right_pt =
+            page_width_pt - mm_to_pt(self.style.page.margins_mm.right.max(1.0));
+        self.in_text_section = false;
+
+        // Title
+        self.render_toc_title(&toc);
+
+        // Entries
+        let anchors = self.heading_anchors.clone();
+        for anchor in anchors.iter() {
+            if anchor.level > toc.max_depth {
+                continue;
+            }
+            let displayed = anchor.page_idx + 1 + toc_offset_estimate;
+            self.render_toc_entry(anchor, displayed, &toc);
+        }
+
+        self.close_text_section();
+        self.push_current_page();
+        let pages = std::mem::take(&mut self.raw_pages);
+
+        // Restore engine geometric state (links emitted by this
+        // iteration stay on `pending_internal_links`; the convergence
+        // loop in `finish` truncates them between attempts).
+        self.y_from_top_pt = saved_y;
+        self.indent_left_pt = saved_left;
+        self.indent_right_pt = saved_right;
+        self.in_text_section = saved_in_text;
+        let _ = saved_link_count;
+
+        pages
+    }
+
+    fn render_toc_title(&mut self, toc: &ResolvedToc) {
+        // The title visually dominates the entries by reusing the
+        // body's h1 style (font, color, weight, alignment, margins).
+        // This keeps typography consistent with the rest of the doc
+        // and is overridable by `[headings.h1]`. The toc-specific
+        // `[toc.style]` block governs entry rows only.
+        let s = self.style.headings[0].clone();
+        let runs = vec![InlineRun {
+            text: toc.title.clone(),
+            flags: RunFlags::default(),
+            link: None,
+        }];
+        let color = Some(rgb_color(s.text_color_rgb()));
+        let flags = RunFlags {
+            bold: s.is_bold(),
+            italic: s.is_italic(),
+            monospace: false,
+            strikethrough: false,
+            underline: false,
+        };
+        let ctx = self.begin_block(&s);
+        self.write_wrapped_runs(&runs, s.font_size_pt, s.line_height, flags, color);
+        self.end_block(ctx);
+    }
+
+    fn render_toc_entry(
+        &mut self,
+        anchor: &HeadingAnchor,
+        page_num: usize,
+        toc: &ResolvedToc,
+    ) {
+        let style = toc.style.clone();
+        let entry_indent = (anchor.level.saturating_sub(1) as f32) * 12.0;
+        let flags = RunFlags::default();
+        let size_pt = style.font_size_pt;
+        let line_h = size_pt * style.line_height.max(0.5);
+
+        let saved_left = self.indent_left_pt;
+        let row_left = saved_left + entry_indent;
+        let row_right = self.indent_right_pt;
+
+        // Page break if the new entry won't fit on the current page.
+        if self.y_from_top_pt + line_h + self.bottom_margin_pt() > self.page_height_pt() {
+            self.start_new_page();
+        }
+
+        let baseline_y = self.y_from_top_pt + size_pt;
+
+        // Heading-text portion (left).
+        self.close_text_section();
+        self.ensure_text_section();
+        self.move_cursor_to(row_left, baseline_y);
+        self.page_ops.push(Op::SetFont {
+            font: self.font_set.handle(flags),
+            size: Pt(size_pt),
+        });
+        self.page_ops.push(Op::SetFillColor {
+            col: rgb_color(style.text_color_rgb()),
+        });
+        let text_to_emit = if self.font_set.needs_transliteration(flags) {
+            to_win1252(&anchor.text)
+        } else {
+            anchor.text.clone()
+        };
+        self.page_ops.push(Op::ShowText {
+            items: vec![TextItem::Text(text_to_emit)],
+        });
+
+        // Page-number portion (right-aligned at row_right).
+        let page_str = page_num.to_string();
+        let num_w = self.font_set.measure(flags, &page_str, size_pt);
+        let num_x = row_right - num_w;
+        self.close_text_section();
+        self.ensure_text_section();
+        self.move_cursor_to(num_x, baseline_y);
+        self.page_ops.push(Op::SetFont {
+            font: self.font_set.handle(flags),
+            size: Pt(size_pt),
+        });
+        let num_emit = if self.font_set.needs_transliteration(flags) {
+            to_win1252(&page_str)
+        } else {
+            page_str
+        };
+        self.page_ops.push(Op::ShowText {
+            items: vec![TextItem::Text(num_emit)],
+        });
+        self.close_text_section();
+
+        // Clickable rect spans the whole row.
+        self.pending_internal_links.push(PendingInternalLink {
+            page_idx: self.raw_pages.len(),
+            x0_pt: row_left,
+            x1_pt: row_right,
+            baseline_y_pt: baseline_y,
+            size_pt,
+            target_slug: anchor.slug.clone(),
+        });
+
+        self.advance_y(line_h);
     }
 
     fn push_current_page(&mut self) {
@@ -1276,6 +1471,7 @@ impl<'a> Engine<'a> {
 
 /// One heading collected during layout. Drives the PDF outline and
 /// the `#slug` internal-link resolver.
+#[derive(Clone)]
 struct HeadingAnchor {
     slug: String,
     level: u8,
