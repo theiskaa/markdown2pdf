@@ -453,6 +453,66 @@ fn title_var_pulls_from_metadata() {
 }
 
 #[test]
+fn headings_become_pdf_bookmarks() {
+    let md = "\
+# Top Level
+
+Body paragraph.
+
+## Second Level
+
+More body.
+
+### Third Level
+
+Even more body.
+";
+    let bytes = render(md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    // printpdf serializes bookmarks under /Outlines with /Title
+    // entries. Headings round-trip as UTF-16BE strings (FEFF BOM).
+    assert!(
+        s.contains("/Outlines"),
+        "expected /Outlines dictionary in the PDF"
+    );
+    // "Top Level" in UTF-16BE = 0054 006F 0070 0020 004C 0065 0076 0065 006C
+    assert!(
+        s.contains("FEFF0054006F0070") || s.contains("FEFF0054006f0070"),
+        "expected the h1 title as a bookmark"
+    );
+}
+
+#[test]
+fn internal_link_emits_goto_action() {
+    let md = "\
+# Target Section
+
+Some body text.
+
+Click [the section](#target-section) to jump.
+";
+    let bytes = render(md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("/S/GoTo") || s.contains("/S /GoTo"),
+        "expected a GoTo action for the internal link"
+    );
+}
+
+#[test]
+fn unknown_internal_anchor_is_dropped_gracefully() {
+    let md = "Click [broken](#does-not-exist) here.";
+    let bytes = render(md, "");
+    // The render must succeed and produce a valid PDF; no annotation
+    // is emitted for the dangling anchor. We don't enforce *zero*
+    // GoTo ops globally (other features may grow them) — just that
+    // the render completes.
+    assert!(bytes.starts_with(b"%PDF-"));
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("%%EOF"), "PDF didn't finish properly");
+}
+
+#[test]
 fn baseline_renders_without_any_styling_overrides() {
     // Sanity: with zero config, the renderer still produces a PDF.
     let bytes = render("# Hi\n\nHello.", "");

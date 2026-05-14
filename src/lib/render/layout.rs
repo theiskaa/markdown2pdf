@@ -6,9 +6,11 @@
 //! would dip below the bottom margin.
 
 use printpdf::{
-    Actions, BorderArray, ColorArray, LineDashPattern, LinePoint, LinkAnnotation, Mm, Op,
-    PdfDocument, PdfPage, Point, Pt, RawImage, Rect, Rgb, TextItem, XObjectId, XObjectTransform,
+    Actions, BorderArray, ColorArray, Destination, LineDashPattern, LinePoint, LinkAnnotation,
+    Mm, Op, PdfDocument, PdfPage, Point, Pt, RawImage, Rect, Rgb, TextItem, XObjectId,
+    XObjectTransform,
 };
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::styling::{
     BorderStyle, Orientation, PageSize, ResolvedBlock, ResolvedBorder, ResolvedList,
@@ -87,6 +89,16 @@ struct Engine<'a> {
     /// `PdfPage`) so the second pass in [`finish`] can prepend
     /// header / footer ops after the total page count is known.
     raw_pages: Vec<Vec<Op>>,
+    /// One entry per heading rendered. Drives both the PDF outline
+    /// (bookmark pane) and the `#slug` internal-link resolver.
+    heading_anchors: Vec<HeadingAnchor>,
+    /// Link annotations whose URL was `#slug`. Their destination
+    /// heading may be laid out later in the document, so they're
+    /// resolved in [`finish`] once all anchors are known.
+    pending_internal_links: Vec<PendingInternalLink>,
+    /// Slugs already used in this document; new headings with the
+    /// same base slug get `-2`, `-3`, ... suffixes.
+    used_slugs: HashSet<String>,
     /// Whether a text section is currently open.
     in_text_section: bool,
 }
@@ -109,6 +121,9 @@ impl<'a> Engine<'a> {
             page_ops: Vec::new(),
             pending_decorations: Vec::new(),
             raw_pages: Vec::new(),
+            heading_anchors: Vec::new(),
+            pending_internal_links: Vec::new(),
+            used_slugs: HashSet::new(),
             in_text_section: false,
         }
     }
@@ -125,6 +140,64 @@ impl<'a> Engine<'a> {
             date: today_iso_date(),
         };
 
+        // Resolve every pending `#slug` link against the now-known
+        // heading anchor table. Annotations are grouped by the page
+        // that contains the link rect (NOT the destination page).
+        let anchor_index: HashMap<&str, &HeadingAnchor> = self
+            .heading_anchors
+            .iter()
+            .map(|a| (a.slug.as_str(), a))
+            .collect();
+        let mut deferred_per_page: BTreeMap<usize, Vec<Op>> = BTreeMap::new();
+        let page_height_pt = self.page_height_pt();
+        for pending in &self.pending_internal_links {
+            let Some(dest) = anchor_index.get(pending.target_slug.as_str()) else {
+                log::warn!(
+                    "internal link target `#{}` not found among {} headings",
+                    pending.target_slug,
+                    self.heading_anchors.len()
+                );
+                continue;
+            };
+            let y_bot_pt = page_height_pt - pending.baseline_y_pt;
+            let rect = Rect::from_xywh(
+                Pt(pending.x0_pt),
+                Pt(y_bot_pt),
+                Pt((pending.x1_pt - pending.x0_pt).max(1.0)),
+                Pt(pending.size_pt),
+            );
+            let dest_top_pdf_pt = page_height_pt - dest.y_pt;
+            let annotation = LinkAnnotation::new(
+                rect,
+                Actions::go_to(Destination::Xyz {
+                    page: dest.page_idx + 1,
+                    left: None,
+                    top: Some(dest_top_pdf_pt),
+                    zoom: None,
+                }),
+                Some(BorderArray::Solid([0.0, 0.0, 0.0])),
+                Some(ColorArray::Transparent),
+                None,
+            );
+            deferred_per_page
+                .entry(pending.page_idx)
+                .or_default()
+                .push(Op::LinkAnnotation { link: annotation });
+        }
+
+        // Register every heading as a PDF bookmark. printpdf 0.9 emits
+        // a flat outline list; visual hierarchy comes from a small
+        // indent prefix per nested level.
+        for anchor in &self.heading_anchors {
+            let indent_level = anchor.level.saturating_sub(1).min(5) as usize;
+            let mut name = String::with_capacity(indent_level * 2 + anchor.text.len());
+            for _ in 0..indent_level {
+                name.push_str("  ");
+            }
+            name.push_str(&anchor.text);
+            self.doc.add_bookmark(&name, anchor.page_idx + 1);
+        }
+
         let mut pages = Vec::with_capacity(total);
         let raw_pages = std::mem::take(&mut self.raw_pages);
         for (idx, content_ops) in raw_pages.into_iter().enumerate() {
@@ -133,10 +206,16 @@ impl<'a> Engine<'a> {
                 self.render_furniture(self.style.header.as_ref(), &ctx, FurniturePosition::Top);
             let footer_ops =
                 self.render_furniture(self.style.footer.as_ref(), &ctx, FurniturePosition::Bottom);
-            let mut all =
-                Vec::with_capacity(header_ops.len() + content_ops.len() + footer_ops.len());
+            let internal_link_ops = deferred_per_page.remove(&idx).unwrap_or_default();
+            let mut all = Vec::with_capacity(
+                header_ops.len()
+                    + content_ops.len()
+                    + footer_ops.len()
+                    + internal_link_ops.len(),
+            );
             all.extend(header_ops);
             all.extend(content_ops);
+            all.extend(internal_link_ops);
             all.extend(footer_ops);
             pages.push(PdfPage::new(
                 Mm(self.page_width_mm),
@@ -861,6 +940,29 @@ impl<'a> Engine<'a> {
             strikethrough: false,
             underline: false,
         };
+
+        let text = collect_heading_text(runs);
+        let base_slug = {
+            let s = slugify(&text);
+            if s.is_empty() { "section".to_string() } else { s }
+        };
+        let mut slug = base_slug.clone();
+        let mut n = 2usize;
+        while self.used_slugs.contains(&slug) {
+            slug = format!("{}-{}", base_slug, n);
+            n += 1;
+        }
+        self.used_slugs.insert(slug.clone());
+        // The bookmark / GoTo target is the heading's TOP y (before
+        // begin_block consumes margin_before_pt + padding).
+        self.heading_anchors.push(HeadingAnchor {
+            slug,
+            level,
+            text,
+            page_idx: self.raw_pages.len(),
+            y_pt: self.y_from_top_pt,
+        });
+
         let ctx = self.begin_block(&s);
         self.write_wrapped_runs(runs, s.font_size_pt, s.line_height, base_flags, color);
         self.end_block(ctx);
@@ -1133,32 +1235,66 @@ impl<'a> Engine<'a> {
                 DecorationKind::None => {}
             }
             if let Some(url) = d.link {
-                // Annotation rect spans baseline_y - size .. baseline_y
-                // in our top-down coords. printpdf wants the rect in
-                // bottom-up Pt space.
-                let y_bot_pt = page_h_pt - d.baseline_y_pt;
-                let rect = Rect::from_xywh(
-                    Pt(d.x0_pt),
-                    Pt(y_bot_pt),
-                    Pt((d.x1_pt - d.x0_pt).max(1.0)),
-                    Pt(d.size_pt),
-                );
-                // Border [0.0, 0.0, 0.0] = no visible border. The
-                // default `BorderArray::Solid([0.0, 0.0, 1.0])`
-                // draws a 1pt outline that shows up as a stray
-                // rectangle around link rects in some viewers.
-                let annotation = LinkAnnotation::new(
-                    rect,
-                    Actions::uri(url),
-                    Some(BorderArray::Solid([0.0, 0.0, 0.0])),
-                    Some(ColorArray::Transparent),
-                    None,
-                );
-                self.page_ops
-                    .push(Op::LinkAnnotation { link: annotation });
+                if let Some(slug) = url.strip_prefix('#') {
+                    // Internal link — destination heading may not be
+                    // laid out yet. Defer until finish() once every
+                    // anchor's (page_idx, y_pt) is known.
+                    self.pending_internal_links.push(PendingInternalLink {
+                        page_idx: self.raw_pages.len(),
+                        x0_pt: d.x0_pt,
+                        x1_pt: d.x1_pt,
+                        baseline_y_pt: d.baseline_y_pt,
+                        size_pt: d.size_pt,
+                        target_slug: slug.to_string(),
+                    });
+                } else {
+                    let y_bot_pt = page_h_pt - d.baseline_y_pt;
+                    let rect = Rect::from_xywh(
+                        Pt(d.x0_pt),
+                        Pt(y_bot_pt),
+                        Pt((d.x1_pt - d.x0_pt).max(1.0)),
+                        Pt(d.size_pt),
+                    );
+                    // Border [0.0, 0.0, 0.0] = no visible border. The
+                    // default `BorderArray::Solid([0.0, 0.0, 1.0])`
+                    // draws a 1pt outline that shows up as a stray
+                    // rectangle around link rects in some viewers.
+                    let annotation = LinkAnnotation::new(
+                        rect,
+                        Actions::uri(url),
+                        Some(BorderArray::Solid([0.0, 0.0, 0.0])),
+                        Some(ColorArray::Transparent),
+                        None,
+                    );
+                    self.page_ops
+                        .push(Op::LinkAnnotation { link: annotation });
+                }
             }
         }
     }
+}
+
+/// One heading collected during layout. Drives the PDF outline and
+/// the `#slug` internal-link resolver.
+struct HeadingAnchor {
+    slug: String,
+    level: u8,
+    text: String,
+    page_idx: usize,
+    y_pt: f32,
+}
+
+/// A `[text](#slug)` link annotation deferred until the destination
+/// heading's position is known. The page hosting the link rect is
+/// captured at creation time; the destination is resolved in
+/// `finish()` against `heading_anchors`.
+struct PendingInternalLink {
+    page_idx: usize,
+    x0_pt: f32,
+    x1_pt: f32,
+    baseline_y_pt: f32,
+    size_pt: f32,
+    target_slug: String,
 }
 
 struct BlockPaintCtx {
@@ -1587,6 +1723,40 @@ fn mm_to_pt(mm: f32) -> f32 {
 
 fn pt_to_mm(pt: f32) -> f32 {
     pt / MM_TO_PT
+}
+
+/// GitHub-style slug: lowercase, ASCII letters + digits + dashes,
+/// whitespace → `-`, everything else dropped, no leading / trailing
+/// dashes, no consecutive dashes.
+fn slugify(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last_was_dash = true;
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if ch.is_whitespace() || ch == '-' || ch == '_' {
+            if !last_was_dash {
+                out.push('-');
+                last_was_dash = true;
+            }
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+/// Concatenate the plain text of a heading's inline runs. The PDF
+/// outline + slug source. Markdown emphasis / inline code inside a
+/// heading collapses to its literal text.
+fn collect_heading_text(runs: &[InlineRun]) -> String {
+    let mut out = String::new();
+    for run in runs {
+        out.push_str(&run.text);
+    }
+    out
 }
 
 fn rgb_color((r, g, b): (u8, u8, u8)) -> Color {
