@@ -771,6 +771,33 @@ fn very_long_url_does_not_overflow() {
 }
 
 #[test]
+fn hyphenation_inserts_hyphen_into_overflow_english_word() {
+    // A real English word too long for a very narrow column. The
+    // hyphenation crate should find dictionary break points and the
+    // split_long_words pass should emit "-" at the chosen breaks.
+    let md = "antidisestablishmentarianism floccinaucinihilipilification.\n";
+    let cfg = r#"
+[page]
+size = "A4"
+[page.margins]
+top = 25.0
+right = 150.0
+bottom = 25.0
+left = 30.0
+"#;
+    let bytes = render(md, cfg);
+    let s = String::from_utf8_lossy(&bytes);
+    // A literal "-" emitted as part of a hyphenated chunk shows up in
+    // the PDF content stream. Since both words are >25 chars and the
+    // column is very narrow, at least one hyphenation point should
+    // have fired.
+    assert!(
+        s.contains("-)") || s.contains("- "),
+        "expected a hyphen at the chunk boundary in PDF stream"
+    );
+}
+
+#[test]
 fn long_word_with_unicode_breaks_at_char_boundaries() {
     let long = "ñ".repeat(150);
     let md = format!("Pre {} post.\n", long);

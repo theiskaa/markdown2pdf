@@ -680,6 +680,13 @@ impl<'a> Engine<'a> {
     /// column. Each input word is either kept (if it fits) or chopped
     /// into the smallest number of chunks that each fit `max_width`.
     /// Whitespace words pass through untouched.
+    ///
+    /// When the word is a dictionary-known English word, the chop
+    /// happens at Knuth-Liang hyphenation points (with a trailing
+    /// "-" appended to the prefix). When no hyphenation points are
+    /// available within the fit window — long URLs, identifiers,
+    /// repeated-char tokens — the chop falls back to UTF-8 char
+    /// boundaries.
     fn split_long_words(
         &self,
         words: Vec<InlineRun>,
@@ -697,22 +704,56 @@ impl<'a> Engine<'a> {
                 out.push(word);
                 continue;
             }
+            let breaks = super::hyphenate::break_points(&word.text);
+            let hyphen_width = self.font_set.measure(word.flags, "-", size_pt);
             let chars: Vec<(usize, char)> = word.text.char_indices().collect();
-            let mut chunk_start = 0usize;
-            while chunk_start < chars.len() {
-                let mut last_fit = chunk_start;
-                let mut j = chunk_start;
+            let mut chunk_start_byte = 0usize;
+            let mut chunk_start_char = 0usize;
+            while chunk_start_char < chars.len() {
+                // Try hyphenation first: pick the largest break offset
+                // that's strictly past chunk_start AND produces a
+                // prefix (plus "-") that fits in max_width.
+                let mut hyphen_break: Option<usize> = None;
+                for &b in &breaks {
+                    if b <= chunk_start_byte {
+                        continue;
+                    }
+                    let prefix = &word.text[chunk_start_byte..b];
+                    let w = self.font_set.measure(word.flags, prefix, size_pt) + hyphen_width;
+                    if w <= max_width {
+                        hyphen_break = Some(b);
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(b) = hyphen_break {
+                    let mut chunk_text = word.text[chunk_start_byte..b].to_string();
+                    chunk_text.push('-');
+                    out.push(InlineRun {
+                        text: chunk_text,
+                        flags: word.flags,
+                        link: word.link.clone(),
+                    });
+                    chunk_start_byte = b;
+                    chunk_start_char = chars
+                        .iter()
+                        .position(|(off, _)| *off == b)
+                        .unwrap_or(chars.len());
+                    continue;
+                }
+                // No hyphenation point fits; fall back to char-boundary
+                // chopping (longest prefix that fits in max_width).
+                let mut last_fit = chunk_start_char;
+                let mut j = chunk_start_char;
                 while j < chars.len() {
                     let end_byte = chars
                         .get(j + 1)
                         .map(|c| c.0)
                         .unwrap_or(word.text.len());
-                    let prefix = &word.text[chars[chunk_start].0..end_byte];
+                    let prefix = &word.text[chunk_start_byte..end_byte];
                     let w = self.font_set.measure(word.flags, prefix, size_pt);
                     if w > max_width {
-                        if last_fit == chunk_start {
-                            // The first char alone overflows — emit it
-                            // anyway so we always make forward progress.
+                        if last_fit == chunk_start_char {
                             last_fit = j;
                         }
                         break;
@@ -724,13 +765,17 @@ impl<'a> Engine<'a> {
                     .get(last_fit + 1)
                     .map(|c| c.0)
                     .unwrap_or(word.text.len());
-                let chunk_text = word.text[chars[chunk_start].0..end_byte].to_string();
+                let chunk_text = word.text[chunk_start_byte..end_byte].to_string();
                 out.push(InlineRun {
                     text: chunk_text,
                     flags: word.flags,
                     link: word.link.clone(),
                 });
-                chunk_start = last_fit + 1;
+                chunk_start_char = last_fit + 1;
+                chunk_start_byte = chars
+                    .get(chunk_start_char)
+                    .map(|(off, _)| *off)
+                    .unwrap_or(word.text.len());
             }
         }
         out

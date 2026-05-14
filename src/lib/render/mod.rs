@@ -51,6 +51,7 @@
 //!   footers, page numbers, TOC, bookmarks — all roadmap items
 
 mod font;
+mod hyphenate;
 mod ir;
 mod layout;
 mod lower;

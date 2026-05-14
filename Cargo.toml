@@ -46,6 +46,7 @@ unicode-linebreak = "0.1"
 # default `variable-fonts` only subsets CFF2-variable; we don't use it.
 subsetter = { version = "0.2", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+hyphenation = { version = "0.8", default-features = false, features = ["embed_en-us"] }
 
 [build-dependencies]
 phf_codegen = "0.13"
