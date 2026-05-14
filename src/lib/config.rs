@@ -44,12 +44,14 @@ pub fn load_config_strict(
         ConfigSource::Embedded(s) => (s.to_string(), None),
     };
 
-    let user: DocumentConfig =
-        toml::from_str(&toml_text).map_err(|source| ResolveError::BadToml {
+    let user: DocumentConfig = toml::from_str(&toml_text).map_err(|source| {
+        let suggestion = crate::styling::error::unknown_field_suggestion(source.message());
+        ResolveError::BadToml {
             source,
             file: file_for_errors,
-            suggestion: None,
-        })?;
+            suggestion,
+        }
+    })?;
 
     resolve(user, theme_override)
 }

@@ -64,6 +64,7 @@ pub struct ResolvedBlock {
     pub letter_spacing_pt: f32,
     pub strikethrough: bool,
     pub underline: bool,
+    pub small_caps: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -751,6 +751,70 @@ fn baseline_renders_without_any_styling_overrides() {
 }
 
 #[test]
+fn small_caps_uppercases_lowercase_letters_in_paragraph() {
+    let cfg = "[paragraph]\nsmall_caps = true\n";
+    let bytes = render("Hello world.", cfg);
+    let s = String::from_utf8_lossy(&bytes);
+    // `ello` is its own small-caps segment; `world` is all-lowercase
+    // so the entire word becomes one small-caps segment "WORLD".
+    assert!(s.contains("(ELLO)"), "expected `ello` -> `ELLO`");
+    assert!(s.contains("(WORLD)"), "expected `world` -> `WORLD`");
+}
+
+#[test]
+fn small_caps_keeps_originally_uppercase_letters_separate() {
+    let cfg = "[paragraph]\nsmall_caps = true\n";
+    let bytes = render("Hello.", cfg);
+    let s = String::from_utf8_lossy(&bytes);
+    // The originally-uppercase `H` and the originally-lowercase `ello`
+    // become two distinct segments in the PDF text stream.
+    assert!(s.contains("(H)"), "expected H emitted as its own segment");
+    assert!(
+        s.contains("(ELLO)"),
+        "expected ELLO emitted as its own segment"
+    );
+}
+
+#[test]
+fn small_caps_off_by_default() {
+    let bytes = render("Hello world.", "");
+    let s = String::from_utf8_lossy(&bytes);
+    // Without the config, lowercase chars stay lowercase.
+    assert!(
+        s.contains("(Hello world.)") || s.contains("(Hello world.) "),
+        "expected `Hello world.` emitted as-is when small_caps is off"
+    );
+}
+
+#[test]
+fn small_caps_leaves_digits_and_punctuation_full_size() {
+    // The lowercase tails of `Year` and `yes` become small-caps
+    // segments; digits / punctuation / uppercase form their own
+    // non-small-caps segments (which printpdf may hex-encode when the
+    // payload contains literal `(` or `)`, so we don't assert on the
+    // exact string form).
+    let cfg = "[paragraph]\nsmall_caps = true\n";
+    let bytes = render("Year 1984 (yes!).", cfg);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("(EAR)"), "`ear` -> `EAR` small-caps segment");
+    assert!(s.contains("(YES)"), "`yes` -> `YES` small-caps segment");
+    // 1984's digits must still be in the document somewhere — either
+    // as a literal `(...)` string or hex-encoded.
+    assert!(
+        s.contains("1984") || s.contains("31393834"),
+        "digit run 1984 must appear in PDF text stream"
+    );
+}
+
+#[test]
+fn small_caps_applies_to_h1_when_configured() {
+    let cfg = "[headings.h1]\nsmall_caps = true\n";
+    let bytes = render("# Hello world\n", cfg);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("(ELLO"), "h1 lowercase should be uppercased");
+}
+
+#[test]
 fn url_image_without_fetch_feature_renders_alt_text() {
     // Without --features fetch (the default test build), an http(s)
     // URL image should fall back to the italic alt-text fallback and

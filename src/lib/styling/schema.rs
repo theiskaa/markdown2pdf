@@ -79,6 +79,11 @@ pub struct BlockConfig {
     pub letter_spacing_pt: Option<f32>,
     pub strikethrough: Option<bool>,
     pub underline: Option<bool>,
+    /// When true, every lowercase letter in this block's text is
+    /// rendered uppercase at ~78% font size (faux small caps). Real
+    /// OpenType `smcp` substitution depends on the loaded font and is
+    /// a follow-up.
+    pub small_caps: Option<bool>,
 }
 
 /// Subset of `BlockConfig` for true inline runs (`code_inline`,

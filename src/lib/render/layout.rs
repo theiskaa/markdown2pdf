@@ -402,6 +402,7 @@ impl<'a> Engine<'a> {
             strikethrough: false,
             superscript: false,
             subscript: false,
+            small_caps: false,
             underline: false,
         };
         let measured = self.font_set.measure(flags, text, size_pt);
@@ -503,6 +504,7 @@ impl<'a> Engine<'a> {
             strikethrough: false,
             superscript: false,
             subscript: false,
+            small_caps: false,
             underline: false,
         };
         let ctx = self.begin_block(&s);
@@ -621,6 +623,51 @@ impl<'a> Engine<'a> {
 
     fn content_width_pt(&self) -> f32 {
         self.indent_right_pt - self.indent_left_pt
+    }
+
+    /// Per-character small-caps expansion: every lowercase character
+    /// in each run becomes an uppercase character with the
+    /// `small_caps` flag set (which the segment loop renders at ~78%
+    /// font size). Characters that weren't lowercase pass through with
+    /// the flag cleared, so digits, punctuation, and originally-caps
+    /// letters keep their full size. Runs are split at every
+    /// case-class boundary; adjacent same-flag chunks are merged.
+    fn expand_small_caps(&self, runs: &[InlineRun]) -> Vec<InlineRun> {
+        let mut out: Vec<InlineRun> = Vec::with_capacity(runs.len());
+        for run in runs {
+            let mut buf = String::new();
+            let mut buf_lower: Option<bool> = None;
+            for ch in run.text.chars() {
+                let is_lower = ch.is_lowercase();
+                if buf_lower.is_some() && buf_lower != Some(is_lower) {
+                    let mut f = run.flags;
+                    f.small_caps = buf_lower == Some(true);
+                    out.push(InlineRun {
+                        text: std::mem::take(&mut buf),
+                        flags: f,
+                        link: run.link.clone(),
+                    });
+                }
+                if is_lower {
+                    for u in ch.to_uppercase() {
+                        buf.push(u);
+                    }
+                } else {
+                    buf.push(ch);
+                }
+                buf_lower = Some(is_lower);
+            }
+            if !buf.is_empty() {
+                let mut f = run.flags;
+                f.small_caps = buf_lower == Some(true);
+                out.push(InlineRun {
+                    text: buf,
+                    flags: f,
+                    link: run.link.clone(),
+                });
+            }
+        }
+        out
     }
 
     /// Greedy character-level word break for tokens wider than the
@@ -865,6 +912,7 @@ impl<'a> Engine<'a> {
             strikethrough: false,
             superscript: false,
             subscript: false,
+            small_caps: false,
             underline: false,
         };
         let size_pt = style.font_size_pt;
@@ -994,6 +1042,7 @@ impl<'a> Engine<'a> {
             underline: false,
             superscript: false,
             subscript: false,
+            small_caps: false,
         };
         let ctx = self.begin_block(&h2);
         self.write_wrapped_runs(&title_runs, h2.font_size_pt, h2.line_height, flags, color);
@@ -1582,6 +1631,7 @@ impl<'a> Engine<'a> {
             strikethrough: false,
             superscript: false,
             subscript: false,
+            small_caps: false,
             underline: false,
         };
 
@@ -1608,7 +1658,14 @@ impl<'a> Engine<'a> {
         });
 
         let ctx = self.begin_block(&s);
-        self.write_wrapped_runs(runs, s.font_size_pt, s.line_height, base_flags, color);
+        let owned_runs;
+        let runs_ref: &[InlineRun] = if s.small_caps {
+            owned_runs = self.expand_small_caps(runs);
+            &owned_runs
+        } else {
+            runs
+        };
+        self.write_wrapped_runs(runs_ref, s.font_size_pt, s.line_height, base_flags, color);
         self.end_block(ctx);
     }
 
@@ -1617,7 +1674,14 @@ impl<'a> Engine<'a> {
         let color = Some(rgb_color(s.text_color_rgb()));
         let base = RunFlags::default();
         let ctx = self.begin_block(&s);
-        self.write_wrapped_runs(runs, s.font_size_pt, s.line_height, base, color);
+        let owned_runs;
+        let runs_ref: &[InlineRun] = if s.small_caps {
+            owned_runs = self.expand_small_caps(runs);
+            &owned_runs
+        } else {
+            runs
+        };
+        self.write_wrapped_runs(runs_ref, s.font_size_pt, s.line_height, base, color);
         self.end_block(ctx);
     }
 
@@ -1803,6 +1867,8 @@ impl<'a> Engine<'a> {
                     (size_pt * 0.70, baseline_y_pt - size_pt * 0.32)
                 } else if seg.flags.subscript {
                     (size_pt * 0.70, baseline_y_pt + size_pt * 0.20)
+                } else if seg.flags.small_caps {
+                    (size_pt * 0.78, baseline_y_pt)
                 } else {
                     (size_pt, baseline_y_pt)
                 };

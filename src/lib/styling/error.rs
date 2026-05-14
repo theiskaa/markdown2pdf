@@ -131,6 +131,29 @@ fn source_input(_err: &toml::de::Error) -> Option<&str> {
     None
 }
 
+/// `serde(deny_unknown_fields)` produces messages shaped like:
+///   ``unknown field `foo`, expected one of `bar`, `baz`, `qux` ``
+/// Extract the unknown field + the candidate list, run a typo-tolerant
+/// match against the candidates, and format a "did you mean" hint. None
+/// if the message doesn't match the shape (e.g. it's a type-mismatch
+/// error rather than an unknown-field error) or no candidate is close
+/// enough.
+pub(crate) fn unknown_field_suggestion(msg: &str) -> Option<String> {
+    let after_prefix = msg.strip_prefix("unknown field `")?;
+    let (field, rest) = after_prefix.split_once("`, expected one of ")?;
+    if field.is_empty() {
+        return None;
+    }
+    // Rest is `cand1`, `cand2`, ... — strip surrounding backticks.
+    let candidates: Vec<&str> = rest
+        .split(", ")
+        .map(|c| c.trim().trim_matches('`'))
+        .filter(|c| !c.is_empty())
+        .collect();
+    closest_match(field, candidates.iter().copied(), 3)
+        .map(|m| format!("did you mean `{}`?", m))
+}
+
 /// Hand-rolled Levenshtein for typo suggestions on unknown fields and
 /// unknown theme names. Limited to small inputs (TOML keys), so the
 /// O(n*m) cost is irrelevant. Returns the closest candidate whose
@@ -186,6 +209,29 @@ mod tests {
         assert_eq!(levenshtein("", "abc"), 3);
         assert_eq!(levenshtein("abc", ""), 3);
         assert_eq!(levenshtein("same", "same"), 0);
+    }
+
+    #[test]
+    fn unknown_field_suggestion_extracts_match() {
+        let msg = "unknown field `text_colr`, expected one of `text_color`, `background_color`, `font_size_pt`";
+        assert_eq!(
+            unknown_field_suggestion(msg),
+            Some("did you mean `text_color`?".to_string())
+        );
+    }
+
+    #[test]
+    fn unknown_field_suggestion_returns_none_when_far_off() {
+        let msg = "unknown field `xyzzy`, expected one of `text_color`, `background_color`";
+        assert_eq!(unknown_field_suggestion(msg), None);
+    }
+
+    #[test]
+    fn unknown_field_suggestion_returns_none_for_non_matching_shape() {
+        // Type-mismatch errors don't contain "expected one of"; we
+        // can't synthesize a suggestion for them.
+        let msg = "invalid type: integer `12`, expected a string";
+        assert_eq!(unknown_field_suggestion(msg), None);
     }
 
     #[test]

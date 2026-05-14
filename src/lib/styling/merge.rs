@@ -99,6 +99,7 @@ fn merge_block(base: BlockConfig, overlay: BlockConfig) -> BlockConfig {
         letter_spacing_pt: overlay.letter_spacing_pt.or(base.letter_spacing_pt),
         strikethrough: overlay.strikethrough.or(base.strikethrough),
         underline: overlay.underline.or(base.underline),
+        small_caps: overlay.small_caps.or(base.small_caps),
     }
 }
 
@@ -360,6 +361,7 @@ fn lower_block(
         letter_spacing_pt: merged.letter_spacing_pt.unwrap_or(0.0),
         strikethrough: merged.strikethrough.unwrap_or(false),
         underline: merged.underline.unwrap_or(false),
+        small_caps: merged.small_caps.unwrap_or(false),
     })
 }
 

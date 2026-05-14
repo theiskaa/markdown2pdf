@@ -256,6 +256,11 @@ pub struct RunFlags {
     /// Renders the glyphs at ~70% size with a lowered baseline. Used
     /// for `<sub>` HTML inline (chemical formulas, indices).
     pub subscript: bool,
+    /// Faux small caps — emit at ~78% size on the original baseline.
+    /// Set per-segment by the layout's `expand_small_caps` pass, which
+    /// upper-cases the source character and tags only the
+    /// originally-lowercase characters with this flag.
+    pub small_caps: bool,
 }
 
 impl RunFlags {
@@ -285,6 +290,10 @@ impl RunFlags {
     }
     pub fn with_subscript(mut self) -> Self {
         self.subscript = true;
+        self
+    }
+    pub fn with_small_caps(mut self) -> Self {
+        self.small_caps = true;
         self
     }
 }
