@@ -250,6 +250,9 @@ pub struct RunFlags {
     /// Renders the glyphs at ~70% size with a raised baseline. Used
     /// for footnote marker numbers and any `<sup>` HTML inline.
     pub superscript: bool,
+    /// Renders the glyphs at ~70% size with a lowered baseline. Used
+    /// for `<sub>` HTML inline (chemical formulas, indices).
+    pub subscript: bool,
 }
 
 impl RunFlags {
@@ -275,6 +278,10 @@ impl RunFlags {
     }
     pub fn with_superscript(mut self) -> Self {
         self.superscript = true;
+        self
+    }
+    pub fn with_subscript(mut self) -> Self {
+        self.subscript = true;
         self
     }
 }

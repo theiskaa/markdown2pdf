@@ -26,6 +26,12 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
     let footnote_numbers = collect_footnote_numbering(tokens);
     let mut footnote_definitions: HashMap<String, Vec<InlineRun>> = HashMap::new();
 
+    // `<sup>` / `<sub>` HTML inlines toggle these depth counters as we
+    // walk the top-level token stream, mirroring the same logic in
+    // `flatten_inline` for nested contexts.
+    let mut root_sup_depth = 0u32;
+    let mut root_sub_depth = 0u32;
+
     fn flush_paragraph(out: &mut Vec<Block>, buffered: &mut Vec<InlineRun>) {
         if !buffered.iter().all(|r| r.text.trim().is_empty()) {
             out.push(Block::Paragraph {
@@ -217,7 +223,39 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             // Inline-level tokens at the root accumulate into the
             // current paragraph buffer.
             _ => {
-                flatten_one(&tokens[i], RunFlags::default(), None, &mut buffered_inline, &footnote_numbers);
+                if let Token::HtmlInline(tag) = &tokens[i] {
+                    match classify_sup_sub_tag(tag) {
+                        Some(SupSubTag::SupOpen) => {
+                            root_sup_depth += 1;
+                            i += 1;
+                            continue;
+                        }
+                        Some(SupSubTag::SupClose) => {
+                            root_sup_depth = root_sup_depth.saturating_sub(1);
+                            i += 1;
+                            continue;
+                        }
+                        Some(SupSubTag::SubOpen) => {
+                            root_sub_depth += 1;
+                            i += 1;
+                            continue;
+                        }
+                        Some(SupSubTag::SubClose) => {
+                            root_sub_depth = root_sub_depth.saturating_sub(1);
+                            i += 1;
+                            continue;
+                        }
+                        None => {}
+                    }
+                }
+                let mut effective = RunFlags::default();
+                if root_sup_depth > 0 {
+                    effective = effective.with_superscript();
+                }
+                if root_sub_depth > 0 {
+                    effective = effective.with_subscript();
+                }
+                flatten_one(&tokens[i], effective, None, &mut buffered_inline, &footnote_numbers);
                 i += 1;
             }
         }
@@ -446,10 +484,61 @@ fn flatten_inline(
     footnotes: &HashMap<String, usize>,
 ) -> Vec<InlineRun> {
     let mut out = Vec::new();
+    // Track open `<sup>` / `<sub>` HTML inline scopes. The lexer emits
+    // the opening / closing tag as separate `HtmlInline` tokens, so we
+    // toggle the relevant flag here and consume the tag tokens.
+    let mut sup_depth = 0u32;
+    let mut sub_depth = 0u32;
     for tok in tokens {
-        flatten_one(tok, flags, link, &mut out, footnotes);
+        if let Token::HtmlInline(tag) = tok {
+            match classify_sup_sub_tag(tag) {
+                Some(SupSubTag::SupOpen) => {
+                    sup_depth += 1;
+                    continue;
+                }
+                Some(SupSubTag::SupClose) => {
+                    sup_depth = sup_depth.saturating_sub(1);
+                    continue;
+                }
+                Some(SupSubTag::SubOpen) => {
+                    sub_depth += 1;
+                    continue;
+                }
+                Some(SupSubTag::SubClose) => {
+                    sub_depth = sub_depth.saturating_sub(1);
+                    continue;
+                }
+                None => {}
+            }
+        }
+        let mut effective = flags;
+        if sup_depth > 0 {
+            effective = effective.with_superscript();
+        }
+        if sub_depth > 0 {
+            effective = effective.with_subscript();
+        }
+        flatten_one(tok, effective, link, &mut out, footnotes);
     }
     out
+}
+
+enum SupSubTag {
+    SupOpen,
+    SupClose,
+    SubOpen,
+    SubClose,
+}
+
+fn classify_sup_sub_tag(raw: &str) -> Option<SupSubTag> {
+    let s = raw.trim().to_ascii_lowercase();
+    match s.as_str() {
+        "<sup>" => Some(SupSubTag::SupOpen),
+        "</sup>" => Some(SupSubTag::SupClose),
+        "<sub>" => Some(SupSubTag::SubOpen),
+        "</sub>" => Some(SupSubTag::SubClose),
+        _ => None,
+    }
 }
 
 fn flatten_one(

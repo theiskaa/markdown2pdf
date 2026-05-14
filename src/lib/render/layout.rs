@@ -394,6 +394,7 @@ impl<'a> Engine<'a> {
             monospace: false,
             strikethrough: false,
             superscript: false,
+            subscript: false,
             underline: false,
         };
         let measured = self.font_set.measure(flags, text, size_pt);
@@ -494,6 +495,7 @@ impl<'a> Engine<'a> {
             monospace: false,
             strikethrough: false,
             superscript: false,
+            subscript: false,
             underline: false,
         };
         let ctx = self.begin_block(&s);
@@ -795,6 +797,7 @@ impl<'a> Engine<'a> {
             monospace: false,
             strikethrough: false,
             superscript: false,
+            subscript: false,
             underline: false,
         };
         let size_pt = style.font_size_pt;
@@ -921,6 +924,7 @@ impl<'a> Engine<'a> {
             strikethrough: false,
             underline: false,
             superscript: false,
+            subscript: false,
         };
         let ctx = self.begin_block(&h2);
         self.write_wrapped_runs(&title_runs, h2.font_size_pt, h2.line_height, flags, color);
@@ -1403,6 +1407,7 @@ impl<'a> Engine<'a> {
             monospace: false,
             strikethrough: false,
             superscript: false,
+            subscript: false,
             underline: false,
         };
 
@@ -1618,6 +1623,8 @@ impl<'a> Engine<'a> {
                 // re-establishes its cursor via Td.
                 let (seg_size, seg_baseline) = if seg.flags.superscript {
                     (size_pt * 0.70, baseline_y_pt - size_pt * 0.32)
+                } else if seg.flags.subscript {
+                    (size_pt * 0.70, baseline_y_pt + size_pt * 0.20)
                 } else {
                     (size_pt, baseline_y_pt)
                 };
@@ -1630,9 +1637,9 @@ impl<'a> Engine<'a> {
                     seg.text.clone()
                 };
 
-                if seg.flags.superscript {
+                if seg.flags.superscript || seg.flags.subscript {
                     // Close the line's main section, emit the small
-                    // baseline-raised glyphs in their own BT/ET, then
+                    // shifted-baseline glyphs in their own BT/ET, then
                     // the next iteration (if any) re-opens the main
                     // section with an explicit cursor.
                     self.close_text_section();

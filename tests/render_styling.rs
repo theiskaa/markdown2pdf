@@ -751,6 +751,141 @@ fn baseline_renders_without_any_styling_overrides() {
 }
 
 #[test]
+fn html_sup_renders_as_superscript() {
+    let bytes = render("Einstein: E = mc<sup>2</sup>.", "");
+    let s = String::from_utf8_lossy(&bytes);
+    // The `2` should appear in the rendered content stream. The `<sup>`
+    // tags themselves should be consumed (not appear literally).
+    assert!(s.contains("(2)"), "expected `2` literal in PDF stream");
+    assert!(
+        !s.contains("(<sup>)") && !s.contains("(</sup>)"),
+        "expected <sup> tags to be consumed"
+    );
+}
+
+#[test]
+fn html_sub_renders_as_subscript() {
+    let bytes = render("Water is H<sub>2</sub>O.", "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("(2)"), "expected `2` literal in PDF stream");
+    assert!(
+        !s.contains("(<sub>)") && !s.contains("(</sub>)"),
+        "expected <sub> tags to be consumed"
+    );
+}
+
+#[test]
+fn html_sup_sub_does_not_crash_unbalanced() {
+    let bytes = render("Stray <sup>open only.\n\nStray close only</sub>.", "");
+    assert!(bytes.starts_with(b"%PDF-"));
+}
+
+#[test]
+fn html_sup_sub_uppercase_tags_recognized() {
+    let bytes = render("Number: 10<SUP>3</SUP> and 2<SUB>4</SUB>.", "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        !s.contains("(<SUP>)") && !s.contains("(<SUB>)"),
+        "expected uppercase sup/sub tags to be consumed"
+    );
+}
+
+#[test]
+fn cross_reference_backward_link_to_earlier_heading() {
+    // Link AFTER its target heading. The GoTo destination still needs
+    // to resolve correctly.
+    let md = "\
+# Introduction
+
+Body text.
+
+## Details
+
+See [the introduction](#introduction) for context.
+";
+    let bytes = render(md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("/S/GoTo") || s.contains("/S /GoTo"),
+        "backward cross-reference should emit a GoTo action"
+    );
+}
+
+#[test]
+fn cross_reference_slug_normalizes_special_characters() {
+    // GitHub-style slug: lowercase, spaces -> hyphens, punctuation removed.
+    let md = "\
+# Hello, World!
+
+Click [here](#hello-world) to jump.
+";
+    let bytes = render(md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("/S/GoTo") || s.contains("/S /GoTo"),
+        "slug normalization should make `#hello-world` resolve to `# Hello, World!`"
+    );
+}
+
+#[test]
+fn cross_reference_multiple_links_to_same_anchor() {
+    let md = "\
+# Conclusion
+
+Intro paragraph.
+
+See [the conclusion](#conclusion) below. Or maybe revisit [it](#conclusion) later.
+";
+    let bytes = render(md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    let count = count_substr(s.as_bytes(), b"/S/GoTo") + count_substr(s.as_bytes(), b"/S /GoTo");
+    assert!(
+        count >= 2,
+        "expected two GoTo actions for two references; got {}",
+        count
+    );
+}
+
+#[test]
+fn cross_reference_mixed_with_external_link_in_same_paragraph() {
+    let md = "\
+# Reference Heading
+
+See [the heading](#reference-heading) or [the spec](https://example.com).
+";
+    let bytes = render(md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("/S/GoTo") || s.contains("/S /GoTo"),
+        "internal link should emit GoTo"
+    );
+    assert!(
+        s.contains("/S/URI") || s.contains("/S /URI"),
+        "external link should emit URI action"
+    );
+}
+
+#[test]
+fn cross_reference_collision_suffix_resolves() {
+    // Two headings with the same text → second one gets `-2` suffix.
+    let md = "\
+# Section
+
+First section.
+
+# Section
+
+Second section. Click [back to second](#section-2).
+";
+    let bytes = render(md, "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("/S/GoTo") || s.contains("/S /GoTo"),
+        "collision-suffixed slug `#section-2` should resolve"
+    );
+}
+
+#[test]
 fn definition_list_emits_term_and_definition() {
     let bytes = render("Apple\n: A red fruit.\n", "");
     let s = String::from_utf8_lossy(&bytes);
