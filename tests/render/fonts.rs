@@ -1,10 +1,8 @@
 //! End-to-end regression tests for the renderer's font handling.
 //!
-//! These tests assert on bytes emitted into the rendered PDF. They are
-//! the only integration tests today that verify renderer behavior
-//! (the lexer has hundreds, the renderer had ~12 unit tests). When you
-//! add new font logic, drop a regression test here so visual
-//! regressions get caught by CI.
+//! These tests assert on bytes emitted into the rendered PDF. The
+//! FontDescriptor block printpdf emits is decompressed (no Flate
+//! filter), so byte-level scans against it are cheap and stable.
 
 use markdown2pdf::config::ConfigSource;
 use markdown2pdf::fonts::FontConfig;
@@ -13,9 +11,7 @@ use markdown2pdf::parse_into_bytes;
 /// Read every `/Ascent <number>` value emitted in the PDF.
 ///
 /// printpdf serializes FontDescriptor entries as `/Ascent 916\n` (one
-/// per embedded font). We scan the raw bytes because reaching into
-/// printpdf's internal serializer from here would be brittle and the
-/// FontDescriptor block is decompressed by default (no Flate filter).
+/// per embedded font).
 fn ascents(bytes: &[u8]) -> Vec<i32> {
     extract_named_numbers(bytes, b"/Ascent ")
 }
@@ -125,8 +121,7 @@ fn inline_code_does_not_fall_back_to_builtin_courier_when_external_body_is_loade
 #[test]
 fn renderer_works_without_any_external_font_config() {
     // Baseline: with no FontConfig, everything goes through the
-    // built-in Helvetica/Courier path. Used to be the default; we
-    // mustn't break it while adding the external-fallback logic.
+    // built-in Helvetica/Courier path.
     let md = "Plain paragraph with `inline code` and **bold**.".to_string();
     let bytes = parse_into_bytes(md, ConfigSource::Default, None).expect("render");
     assert!(
@@ -139,14 +134,11 @@ fn renderer_works_without_any_external_font_config() {
 fn ascent_and_descent_normalize_for_a_second_unrelated_font() {
     // The normalization formula is font-agnostic; this test exercises
     // a second font with a different UPEM to make sure no Georgia-
-    // specific assumptions snuck in. Times New Roman is typically
-    // UPEM=2048 like Georgia; we don't probe UPEM here, only that
-    // the normalized output stays inside /1000-em range.
+    // specific assumptions snuck in.
     let md = "Body text in Times New Roman.".to_string();
     let cfg = FontConfig::new().with_default_font("Times New Roman");
     let Ok(bytes) = parse_into_bytes(md, ConfigSource::Default, Some(&cfg)) else {
-        // System doesn't have the font — that's fine, this test is
-        // opportunistic.
+        // System doesn't have the font — opportunistic test.
         return;
     };
     let values = ascents(&bytes);
