@@ -31,10 +31,9 @@ use ttf_parser::Face;
 use super::ir::{RunFlags, VariantUsage};
 use crate::fonts::{FontConfig, FontSource, find_system_font};
 
-/// The family of built-in fonts the renderer uses for everything.
-///
-/// Phase 1: regular paragraphs use Helvetica; code blocks use Courier;
-/// emphasis/strong picks the corresponding Helvetica variant.
+/// The set of built-in PDF fonts the renderer can fall back to when
+/// no external Unicode font is loaded. Body / emphasis runs map to a
+/// Helvetica variant; monospace runs map to Courier.
 #[derive(Debug, Clone, Copy)]
 pub enum FontVariant {
     HelveticaRegular,

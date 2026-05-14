@@ -21,28 +21,34 @@
 //! Vec<u8>               ← serialized PDF bytes
 //! ```
 //!
-//! # Current scope — phase 1
+//! What the renderer covers today:
 //!
-//! - Headings (levels 1–6), with size + bold from `StyleMatch`
-//! - Paragraphs with real glyph-advance-based wrapping
-//! - Code blocks in Courier (one PDF line per source line)
-//! - Horizontal rules drawn as a horizontal line
-//! - Inline emphasis (bold / italic / inline code) inside paragraphs
-//!   and headings — each run uses the matching built-in font variant
-//! - Page splits when content overflows the bottom margin
+//! - Headings (levels 1–6), paragraphs with glyph-advance wrapping,
+//!   fenced code blocks, horizontal rules with per-style dash + width
+//! - Inline emphasis (bold / italic / inline code / strike / underline)
+//!   with per-variant external Unicode font selection
+//! - Unordered, ordered, and task lists with configurable bullets and
+//!   loose-vs-tight spacing
+//! - Block backgrounds, per-side borders, padding, line-height —
+//!   all reading from the resolved style schema
+//! - Blockquotes with configurable border (replacing the old hardcoded
+//!   left rule)
+//! - GFM tables with per-column alignment, header repeat across pages
+//! - Local-file images (PNG / JPEG); URL fetch is gated under the
+//!   `fetch` feature
+//! - Hyperlinks as PDF link annotations
+//! - Block-level HTML treated as monospace; comment-only blocks are
+//!   invisible per CommonMark §4.6
+//! - Page splits with header repeat for tables
 //!
-//! # Out of scope for phase 1 (planned phases)
+//! Known gaps (tracked in `ROADMAP.md`):
 //!
-//! - Lists (bullets, ordered, task) — phase 2
-//! - Blockquotes (left rule + indent) — phase 2
-//! - Hyperlinks (PDF annotations) — phase 2
-//! - Tables — phase 3
-//! - Images (decode + embed via printpdf images feature) — phase 4
-//! - Justified alignment + hyphenation — phase 5
-//!
-//! Tokens whose dedicated layout hasn't landed yet (lists, blockquotes,
-//! tables, html) degrade gracefully to plain paragraphs — they remain
-//! visible in the output rather than disappearing.
+//! - Real justified text (Knuth-Plass) — `text_align = justify`
+//!   silently degrades to left
+//! - Cross-page block background fragments — a paragraph that spans
+//!   pages paints its background only on the starting page
+//! - URL image fetching, inline link tooltips, footnotes, headers /
+//!   footers, page numbers, TOC, bookmarks — all roadmap items
 
 mod font;
 mod ir;

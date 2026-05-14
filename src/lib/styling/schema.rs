@@ -235,7 +235,7 @@ pub enum FontWeight {
     Normal,
     Bold,
     /// CSS-style numeric weight (100..=900). Maps to bold ≥ 600 in the
-    /// renderer today; richer mapping arrives with Theme B's
+    /// renderer today; richer mapping arrives once the
     /// per-weight font variant work.
     Numeric(u16),
 }
