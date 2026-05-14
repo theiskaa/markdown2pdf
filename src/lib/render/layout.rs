@@ -616,6 +616,66 @@ impl<'a> Engine<'a> {
         self.indent_right_pt - self.indent_left_pt
     }
 
+    /// Greedy character-level word break for tokens wider than the
+    /// column. Each input word is either kept (if it fits) or chopped
+    /// into the smallest number of chunks that each fit `max_width`.
+    /// Whitespace words pass through untouched.
+    fn split_long_words(
+        &self,
+        words: Vec<InlineRun>,
+        max_width: f32,
+        size_pt: f32,
+    ) -> Vec<InlineRun> {
+        let mut out: Vec<InlineRun> = Vec::with_capacity(words.len());
+        for word in words {
+            if word.text.chars().all(char::is_whitespace) {
+                out.push(word);
+                continue;
+            }
+            let total = self.font_set.measure(word.flags, &word.text, size_pt);
+            if total <= max_width {
+                out.push(word);
+                continue;
+            }
+            let chars: Vec<(usize, char)> = word.text.char_indices().collect();
+            let mut chunk_start = 0usize;
+            while chunk_start < chars.len() {
+                let mut last_fit = chunk_start;
+                let mut j = chunk_start;
+                while j < chars.len() {
+                    let end_byte = chars
+                        .get(j + 1)
+                        .map(|c| c.0)
+                        .unwrap_or(word.text.len());
+                    let prefix = &word.text[chars[chunk_start].0..end_byte];
+                    let w = self.font_set.measure(word.flags, prefix, size_pt);
+                    if w > max_width {
+                        if last_fit == chunk_start {
+                            // The first char alone overflows — emit it
+                            // anyway so we always make forward progress.
+                            last_fit = j;
+                        }
+                        break;
+                    }
+                    last_fit = j;
+                    j += 1;
+                }
+                let end_byte = chars
+                    .get(last_fit + 1)
+                    .map(|c| c.0)
+                    .unwrap_or(word.text.len());
+                let chunk_text = word.text[chars[chunk_start].0..end_byte].to_string();
+                out.push(InlineRun {
+                    text: chunk_text,
+                    flags: word.flags,
+                    link: word.link.clone(),
+                });
+                chunk_start = last_fit + 1;
+            }
+        }
+        out
+    }
+
     /// Advance the y cursor by `dy` points. If the cursor crosses the
     /// bottom margin, finalize the current page and start a new one.
     fn advance_y(&mut self, dy: f32) {
@@ -1527,12 +1587,16 @@ impl<'a> Engine<'a> {
 
         // Split runs into a flat sequence of (word, flags) pairs.
         // Whitespace is the only break opportunity in this phase.
-        let words = words_from_runs(runs);
+        let mut words = words_from_runs(runs);
         if words.is_empty() {
             return;
         }
 
         let max_width = self.content_width_pt();
+        // Any word that on its own exceeds the column width gets
+        // chopped at character boundaries so the chunks each fit. URLs,
+        // long identifiers, CJK runs without spaces, etc.
+        words = self.split_long_words(words, max_width, size_pt);
         let mut lines: Vec<Vec<TextSegment>> = Vec::new();
         let mut current: Vec<TextSegment> = Vec::new();
         let mut current_width = 0.0f32;

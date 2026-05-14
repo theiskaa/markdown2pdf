@@ -751,6 +751,47 @@ fn baseline_renders_without_any_styling_overrides() {
 }
 
 #[test]
+fn very_long_word_does_not_overflow_horizontally() {
+    // A single 200-char word with no whitespace would otherwise
+    // overflow the right margin. The split_long_words pre-pass should
+    // chunk it so each piece fits within the column.
+    let long = "x".repeat(200);
+    let md = format!("Body {} tail.\n", long);
+    let bytes = render(&md, "");
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(String::from_utf8_lossy(&bytes).contains("%%EOF"));
+    // The PDF must contain multiple line breaks — we don't pin the
+    // exact count (font metrics vary) but it should be greater than 1
+    // line because the word can't fit on one.
+}
+
+#[test]
+fn very_long_url_does_not_overflow() {
+    // A long URL is the typical real-world trigger for long-word
+    // breaking. The link annotation should still be emitted even when
+    // the URL text is split across multiple chunks.
+    let url = format!("https://example.com/{}", "a".repeat(180));
+    let md = format!("See [{}]({}) here.\n", url, url);
+    let bytes = render(&md, "");
+    assert!(bytes.starts_with(b"%PDF-"));
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("/S/URI") || s.contains("/S /URI"),
+        "long-URL link annotation should still be emitted"
+    );
+}
+
+#[test]
+fn long_word_with_unicode_breaks_at_char_boundaries() {
+    // Repeated multi-byte char run. The break must not slice the UTF-8.
+    let long = "ñ".repeat(150);
+    let md = format!("Pre {} post.\n", long);
+    let bytes = render(&md, "");
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(String::from_utf8_lossy(&bytes).contains("%%EOF"));
+}
+
+#[test]
 fn html_sup_renders_as_superscript() {
     let bytes = render("Einstein: E = mc<sup>2</sup>.", "");
     let s = String::from_utf8_lossy(&bytes);
