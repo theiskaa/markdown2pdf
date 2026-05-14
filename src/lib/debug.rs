@@ -389,6 +389,37 @@ impl Token {
                 result.push_str(&format!("{}}}", indent));
                 result
             }
+            Token::FootnoteReference(label) => format!(
+                "{}{{\n{}\"type\": \"FootnoteReference\",\n{}\"label\": \"{}\"\n{}}}",
+                indent,
+                inner_indent,
+                inner_indent,
+                label.replace("\"", "\\\""),
+                indent
+            ),
+            Token::FootnoteDefinition { label, content } => {
+                let mut result = format!("{}{{\n", indent);
+                result.push_str(&format!(
+                    "{}\"type\": \"FootnoteDefinition\",\n",
+                    inner_indent
+                ));
+                result.push_str(&format!(
+                    "{}\"label\": \"{}\",\n",
+                    inner_indent,
+                    label.replace("\"", "\\\"")
+                ));
+                result.push_str(&format!("{}\"content\": [\n", inner_indent));
+                for (i, token) in content.iter().enumerate() {
+                    result.push_str(&token.to_readable_json(indent_level + 2));
+                    if i < content.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}]\n", inner_indent));
+                result.push_str(&format!("{}}}", indent));
+                result
+            }
             Token::Unknown(content) => {
                 format!(
                     "{}{{\n{}\"type\": \"Unknown\",\n{}\"content\": \"{}\"\n{}}}",
@@ -480,6 +511,10 @@ impl Token {
                     None => "_".to_string(),
                 };
                 format!("Image({}, {}, title={})", list(alt), quote(url), t)
+            }
+            Token::FootnoteReference(label) => format!("FootnoteRef({})", quote(label)),
+            Token::FootnoteDefinition { label, content } => {
+                format!("FootnoteDef({}, {})", quote(label), list(content))
             }
             Token::Text(s) => format!("Text({})", quote(s)),
             Token::DelimRun { ch, count } => {

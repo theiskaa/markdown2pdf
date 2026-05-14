@@ -456,6 +456,20 @@ fn render_inline_token(t: &Token, out: &mut String) {
             render_blocks(std::slice::from_ref(t), out, false);
         }
         Token::Unknown(s) => out.push_str(&escape_text(s)),
+        Token::FootnoteReference(label) => {
+            out.push_str("<sup class=\"footnote-ref\">");
+            out.push_str(&escape_text(label));
+            out.push_str("</sup>");
+        }
+        Token::FootnoteDefinition { label, content } => {
+            // CommonMark HTML render emits these as a `<div class="footnote">`
+            // — for spec coverage we just escape the contents.
+            out.push_str("<div class=\"footnote\" id=\"");
+            out.push_str(&escape_text(label));
+            out.push_str("\">");
+            render_inlines(content, out);
+            out.push_str("</div>");
+        }
     }
 }
 

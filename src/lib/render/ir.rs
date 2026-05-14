@@ -45,6 +45,21 @@ pub enum Block {
     /// flushes the current page and starts a fresh one with no
     /// other side effects.
     PageBreak,
+    /// Collected GFM footnote definitions, rendered as a "Footnotes"
+    /// section at the end of the document. Numbers are assigned in
+    /// first-reference order by the lower pass.
+    FootnoteDefinitions { entries: Vec<FootnoteEntry> },
+}
+
+#[derive(Debug, Clone)]
+pub struct FootnoteEntry {
+    /// Original markdown label (e.g. `1` or `note-a`). Retained for
+    /// future use (e.g. footnote-to-bibliography lookups); not read
+    /// by the v1 renderer.
+    #[allow(dead_code)]
+    pub label: String,
+    pub number: usize,
+    pub runs: Vec<InlineRun>,
 }
 
 /// One entry inside a [`Block::List`].
@@ -170,6 +185,13 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
         Block::CodeBlock { .. } | Block::HtmlBlock { .. } => {
             u.mono_regular = true;
         }
+        Block::FootnoteDefinitions { entries } => {
+            for entry in entries {
+                for r in &entry.runs {
+                    walk_run(r, u);
+                }
+            }
+        }
         Block::HorizontalRule | Block::Image { .. } | Block::PageBreak => {}
     }
 }
@@ -199,6 +221,9 @@ pub struct RunFlags {
     pub monospace: bool,
     pub strikethrough: bool,
     pub underline: bool,
+    /// Renders the glyphs at ~70% size with a raised baseline. Used
+    /// for footnote marker numbers and any `<sup>` HTML inline.
+    pub superscript: bool,
 }
 
 impl RunFlags {
@@ -220,6 +245,10 @@ impl RunFlags {
     }
     pub fn with_underline(mut self) -> Self {
         self.underline = true;
+        self
+    }
+    pub fn with_superscript(mut self) -> Self {
+        self.superscript = true;
         self
     }
 }

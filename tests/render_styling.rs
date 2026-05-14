@@ -698,6 +698,52 @@ fn subtitle_and_author_render_when_present() {
 }
 
 #[test]
+fn footnote_reference_renders_as_superscript_number() {
+    let bytes = render("Text with note[^a].\n\n[^a]: Defined.", "");
+    let s = String::from_utf8_lossy(&bytes);
+    // The first (and only) footnote label gets number `1`.
+    assert!(s.contains("(1)"), "expected superscript marker `(1)`");
+    assert!(
+        s.contains("Defined."),
+        "expected definition text in PDF content stream"
+    );
+}
+
+#[test]
+fn footnotes_section_heading_appears() {
+    let bytes = render(
+        "Note[^a].\n\n[^a]: First definition.",
+        "",
+    );
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("(Footnotes)"),
+        "expected `Footnotes` section heading in document"
+    );
+}
+
+#[test]
+fn unresolved_footnote_reference_does_not_crash() {
+    let bytes = render("Body text with[^missing] no def.", "");
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(String::from_utf8_lossy(&bytes).contains("%%EOF"));
+}
+
+#[test]
+fn footnote_reuse_keeps_same_number() {
+    // Two references to the same label should produce two `(1)`
+    // superscript markers in the body.
+    let bytes = render("First[^a] then again[^a].\n\n[^a]: Note.", "");
+    let s = String::from_utf8_lossy(&bytes);
+    let occurrences = s.matches("(1)").count();
+    assert!(
+        occurrences >= 2,
+        "expected `(1)` to appear at least twice (got {})",
+        occurrences
+    );
+}
+
+#[test]
 fn baseline_renders_without_any_styling_overrides() {
     // Sanity: with zero config, the renderer still produces a PDF.
     let bytes = render("# Hi\n\nHello.", "");

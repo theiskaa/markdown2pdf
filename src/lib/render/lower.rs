@@ -11,12 +11,20 @@
 
 use crate::markdown::Token;
 
-use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
+use super::ir::{Block, FootnoteEntry, InlineRun, ListBullet, ListEntry, RunFlags};
+use std::collections::HashMap;
 
 /// Lower a slice of top-level tokens into the block IR.
 pub fn lower(tokens: &[Token]) -> Vec<Block> {
     let mut out = Vec::new();
     let mut buffered_inline: Vec<InlineRun> = Vec::new();
+
+    // First-reference-order numbering for footnotes. The map is built
+    // once over the entire token tree; flatten_one consults it to
+    // render references with the right superscript number, and the
+    // post-pass walks definitions in numeric order.
+    let footnote_numbers = collect_footnote_numbering(tokens);
+    let mut footnote_definitions: HashMap<String, Vec<InlineRun>> = HashMap::new();
 
     fn flush_paragraph(out: &mut Vec<Block>, buffered: &mut Vec<InlineRun>) {
         if !buffered.iter().all(|r| r.text.trim().is_empty()) {
@@ -48,7 +56,7 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             }
             Token::Heading(content, level) => {
                 flush_paragraph(&mut out, &mut buffered_inline);
-                let runs = flatten_inline(content, RunFlags::default(), None);
+                let runs = flatten_inline(content, RunFlags::default(), None, &footnote_numbers);
                 out.push(Block::Heading {
                     level: (*level).clamp(1, 6) as u8,
                     runs,
@@ -90,6 +98,20 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 out.push(Block::BlockQuote { body: nested });
                 i += 1;
             }
+            Token::FootnoteDefinition { label, content } => {
+                flush_paragraph(&mut out, &mut buffered_inline);
+                // Definitions don't produce a Block at their source
+                // position; they're collected into a single
+                // `Block::FootnoteDefinitions` appended at the end of
+                // the document below. Pre-flatten the content's
+                // inline runs so the post-pass doesn't have to lower
+                // recursively.
+                let runs = flatten_inline(content, RunFlags::default(), None, &footnote_numbers);
+                footnote_definitions
+                    .entry(label.clone())
+                    .or_insert(runs);
+                i += 1;
+            }
             Token::ListItem { .. } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 // Slurp every consecutive sibling ListItem into one
@@ -111,7 +133,12 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                         break;
                     };
                     entries.push(make_list_entry(
-                        *ordered, *number, *checked, *loose, content,
+                        *ordered,
+                        *number,
+                        *checked,
+                        *loose,
+                        content,
+                        &footnote_numbers,
                     ));
                     i += 1;
                     // Skip blank lines between list items so we don't
@@ -131,13 +158,13 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 let head_runs: Vec<Vec<InlineRun>> = headers
                     .iter()
-                    .map(|cell| flatten_inline(cell, RunFlags::default(), None))
+                    .map(|cell| flatten_inline(cell, RunFlags::default(), None, &footnote_numbers))
                     .collect();
                 let row_runs: Vec<Vec<Vec<InlineRun>>> = rows
                     .iter()
                     .map(|row| {
                         row.iter()
-                            .map(|cell| flatten_inline(cell, RunFlags::default(), None))
+                            .map(|cell| flatten_inline(cell, RunFlags::default(), None, &footnote_numbers))
                             .collect()
                     })
                     .collect();
@@ -168,19 +195,58 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 }
                 // Fall through to inline rendering if the file isn't
                 // there — we'd rather show the alt text than nothing.
-                flatten_one(&tokens[i], RunFlags::default(), None, &mut buffered_inline);
+                flatten_one(&tokens[i], RunFlags::default(), None, &mut buffered_inline, &footnote_numbers);
                 i += 1;
             }
             // Inline-level tokens at the root accumulate into the
             // current paragraph buffer.
             _ => {
-                flatten_one(&tokens[i], RunFlags::default(), None, &mut buffered_inline);
+                flatten_one(&tokens[i], RunFlags::default(), None, &mut buffered_inline, &footnote_numbers);
                 i += 1;
             }
         }
     }
 
     flush_paragraph(&mut out, &mut buffered_inline);
+
+    // Collect all footnote definitions captured during lowering into
+    // a single tail-of-document block, ordered by the number assigned
+    // when each label was first referenced in the body. Labels that
+    // were defined but never referenced are appended at the end in
+    // label-sort order so they don't disappear.
+    if !footnote_definitions.is_empty() {
+        let mut entries: Vec<FootnoteEntry> = Vec::with_capacity(footnote_definitions.len());
+        for (label, number) in {
+            let mut v: Vec<(String, usize)> = footnote_numbers
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            v.sort_by_key(|(_, n)| *n);
+            v
+        } {
+            if let Some(runs) = footnote_definitions.remove(&label) {
+                entries.push(FootnoteEntry {
+                    label,
+                    number,
+                    runs,
+                });
+            }
+        }
+        // Unused definitions (never referenced) — assign trailing numbers.
+        let mut next = entries.len() + 1;
+        let mut unused: Vec<(String, Vec<InlineRun>)> = footnote_definitions.into_iter().collect();
+        unused.sort_by(|a, b| a.0.cmp(&b.0));
+        for (label, runs) in unused {
+            entries.push(FootnoteEntry {
+                label,
+                number: next,
+                runs,
+            });
+            next += 1;
+        }
+        out.push(Block::FootnoteDefinitions { entries });
+    }
+
     out
 }
 
@@ -222,6 +288,59 @@ fn is_only_html_comments(s: &str) -> bool {
     true
 }
 
+/// Walk every token in document order; assign each unique footnote
+/// label the next ordinal. The returned map is consumed by
+/// `flatten_one` (for rendering inline `[^label]` references with
+/// the right number) and by the post-pass that collects definitions
+/// into `Block::FootnoteDefinitions` in numeric order.
+fn collect_footnote_numbering(tokens: &[Token]) -> HashMap<String, usize> {
+    let mut map: HashMap<String, usize> = HashMap::new();
+    fn walk(t: &Token, map: &mut HashMap<String, usize>) {
+        match t {
+            Token::FootnoteReference(label) => {
+                let next = map.len() + 1;
+                map.entry(label.clone()).or_insert(next);
+            }
+            Token::Heading(inner, _)
+            | Token::Emphasis { content: inner, .. }
+            | Token::StrongEmphasis(inner)
+            | Token::Strikethrough(inner)
+            | Token::BlockQuote(inner)
+            | Token::ListItem { content: inner, .. }
+            | Token::Link { content: inner, .. }
+            | Token::Image { alt: inner, .. } => {
+                for c in inner {
+                    walk(c, map);
+                }
+            }
+            Token::FootnoteDefinition { content, .. } => {
+                for c in content {
+                    walk(c, map);
+                }
+            }
+            Token::Table { headers, rows, .. } => {
+                for header in headers {
+                    for c in header {
+                        walk(c, map);
+                    }
+                }
+                for row in rows {
+                    for cell in row {
+                        for c in cell {
+                            walk(c, map);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for t in tokens {
+        walk(t, &mut map);
+    }
+    map
+}
+
 fn image_is_standalone(tokens: &[Token], idx: usize) -> bool {
     for tok in tokens.iter().skip(idx + 1) {
         match tok {
@@ -241,6 +360,7 @@ fn make_list_entry(
     checked: Option<bool>,
     loose: bool,
     content: &[Token],
+    footnotes: &HashMap<String, usize>,
 ) -> ListEntry {
     let bullet = match checked {
         Some(true) => ListBullet::TaskChecked,
@@ -273,7 +393,7 @@ fn make_list_entry(
     let head = &content[..inline_end];
     let tail = &content[inline_end..];
 
-    let runs = flatten_inline(head, RunFlags::default(), None);
+    let runs = flatten_inline(head, RunFlags::default(), None, footnotes);
     let children = if tail.is_empty() {
         Vec::new()
     } else {
@@ -291,15 +411,26 @@ fn make_list_entry(
 /// Recursively flatten a slice of inline-level tokens into runs,
 /// propagating `flags` and the current link URL through nested
 /// style wrappers.
-fn flatten_inline(tokens: &[Token], flags: RunFlags, link: Option<&str>) -> Vec<InlineRun> {
+fn flatten_inline(
+    tokens: &[Token],
+    flags: RunFlags,
+    link: Option<&str>,
+    footnotes: &HashMap<String, usize>,
+) -> Vec<InlineRun> {
     let mut out = Vec::new();
     for tok in tokens {
-        flatten_one(tok, flags, link, &mut out);
+        flatten_one(tok, flags, link, &mut out, footnotes);
     }
     out
 }
 
-fn flatten_one(tok: &Token, flags: RunFlags, link: Option<&str>, out: &mut Vec<InlineRun>) {
+fn flatten_one(
+    tok: &Token,
+    flags: RunFlags,
+    link: Option<&str>,
+    out: &mut Vec<InlineRun>,
+    footnotes: &HashMap<String, usize>,
+) {
     match tok {
         Token::Text(s) => push_text(out, s, flags, link),
         Token::Emphasis { level, content } => {
@@ -309,19 +440,19 @@ fn flatten_one(tok: &Token, flags: RunFlags, link: Option<&str>, out: &mut Vec<I
                 _ => flags.with_bold().with_italic(),
             };
             for t in content {
-                flatten_one(t, nested, link, out);
+                flatten_one(t, nested, link, out, footnotes);
             }
         }
         Token::StrongEmphasis(content) => {
             let nested = flags.with_bold();
             for t in content {
-                flatten_one(t, nested, link, out);
+                flatten_one(t, nested, link, out, footnotes);
             }
         }
         Token::Strikethrough(content) => {
             let nested = flags.with_strikethrough();
             for t in content {
-                flatten_one(t, nested, link, out);
+                flatten_one(t, nested, link, out, footnotes);
             }
         }
         Token::Code {
@@ -340,15 +471,36 @@ fn flatten_one(tok: &Token, flags: RunFlags, link: Option<&str>, out: &mut Vec<I
             let url_str = url.as_str();
             let nested = flags.with_underline();
             for t in content {
-                flatten_one(t, nested, Some(url_str), out);
+                flatten_one(t, nested, Some(url_str), out, footnotes);
             }
+        }
+        Token::FootnoteReference(label) => {
+            // Display number assigned by collect_footnote_numbering.
+            // Missing entries can happen if numbering wasn't run for
+            // this subtree (e.g. nested calls from a fresh sub-lexer
+            // in `make_list_entry`); fall back to the literal label.
+            let number = footnotes.get(label).copied();
+            let display = number
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| label.clone());
+            let anchor_link = number.map(|n| format!("#footnote-{}", n));
+            let sup_flags = flags.with_superscript();
+            out.push(InlineRun {
+                text: display,
+                flags: sup_flags,
+                link: anchor_link,
+            });
+        }
+        Token::FootnoteDefinition { .. } => {
+            // Definitions handled at the top-level lower loop; this
+            // arm is unreachable in practice but kept exhaustive.
         }
         Token::Image { alt, .. } => {
             // Inline images render only their alt text. Block-level
             // standalone images are promoted to `Block::Image` in the
             // top-level lower loop and get the full embedded image.
             for t in alt {
-                flatten_one(t, flags, link, out);
+                flatten_one(t, flags, link, out, footnotes);
             }
         }
         Token::HtmlInline(tag) => {
@@ -384,7 +536,7 @@ fn flatten_one(tok: &Token, flags: RunFlags, link: Option<&str>, out: &mut Vec<I
         | Token::BlockQuote(content)
         | Token::ListItem { content, .. } => {
             for t in content {
-                flatten_one(t, flags, link, out);
+                flatten_one(t, flags, link, out, footnotes);
             }
         }
         Token::Code {

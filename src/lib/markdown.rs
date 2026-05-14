@@ -154,6 +154,18 @@ pub enum Token {
         url: String,
         title: Option<String>,
     },
+    /// GFM footnote reference: `[^label]` in body text. The renderer
+    /// resolves the label to a number (first-reference order) and
+    /// displays it as a superscript marker linked to the matching
+    /// definition.
+    FootnoteReference(String),
+    /// GFM footnote definition: `[^label]: definition` at the start
+    /// of a paragraph. The renderer collects all definitions and
+    /// emits a "Footnotes" section at the end of the document.
+    FootnoteDefinition {
+        label: String,
+        content: Vec<Token>,
+    },
     /// Plain text content
     Text(String),
     /// Internal: a run of `*` or `_` delimiter characters before emphasis
@@ -276,6 +288,17 @@ impl Token {
             }
             Token::Strikethrough(nested) => {
                 for token in nested {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::FootnoteReference(label) => {
+                // Markers are rendered visually as numbers; for text-
+                // extraction purposes (validation, title fallback) we
+                // emit the raw label so the text isn't lost.
+                result.push_str(label);
+            }
+            Token::FootnoteDefinition { content, .. } => {
+                for token in content {
                     token.collect_text_recursive(result);
                 }
             }
@@ -1475,6 +1498,24 @@ impl Lexer {
             let at_line_start = i == 0 || chars[i - 1] == '\n';
             if at_line_start {
                 line_start = i;
+                // Skip GFM footnote definitions (`[^label]: ...`) — they
+                // look like link reference definitions but aren't.
+                // Detected by `[^` (after up to 3 leading spaces).
+                let footnote_skip = {
+                    let mut p = i;
+                    let mut lead = 0usize;
+                    while p < chars.len() && chars[p] == ' ' && lead < 3 {
+                        p += 1;
+                        lead += 1;
+                    }
+                    p + 1 < chars.len() && chars[p] == '[' && chars[p + 1] == '^'
+                };
+                if footnote_skip {
+                    kept.push(chars[i]);
+                    i += 1;
+                    may_start_def = false;
+                    continue;
+                }
                 if may_start_def {
                     if let Some((label, url, title, end)) = try_parse_definition(&chars, i) {
                         definitions
@@ -1828,7 +1869,7 @@ impl Lexer {
                     self.parse_text(ctx)?
                 }
             }
-            '[' => self.parse_link()?,
+            '[' => self.parse_bracket_dispatch(is_block_start)?,
             '!' => {
                 // Check if this is a valid image start (! followed by [)
                 if self.position + 1 < self.input.len() && self.input[self.position + 1] == '[' {
@@ -2574,6 +2615,108 @@ impl Lexer {
     /// `[text](url "title")`, full reference `[text][label]`, collapsed
     /// `[text][]`, and shortcut `[text]` (the last only when the label
     /// resolves; otherwise emits the brackets literally).
+    /// Dispatch `[` at the `next_token` level. Extracted as its own
+    /// method so `next_token` keeps a small stack frame — the
+    /// `parse_link` recursion path stresses frame budget on inputs
+    /// with hundreds of unclosed brackets.
+    #[inline(never)]
+    fn parse_bracket_dispatch(&mut self, is_block_start: bool) -> Result<Token, LexerError> {
+        // GFM footnote markers: `[^...]` discriminator on second char.
+        // Block-level definition (`[^id]: text`) only at line start.
+        if self.position + 1 < self.input.len()
+            && self.input[self.position + 1] == '^'
+        {
+            if is_block_start {
+                if let Some(tok) = self.try_parse_footnote_definition()? {
+                    return Ok(tok);
+                }
+            }
+            if let Some(tok) = self.try_parse_footnote_reference()? {
+                return Ok(tok);
+            }
+        }
+        self.parse_link()
+    }
+
+    /// Try to consume `[^label]` as a footnote reference. Returns
+    /// `Ok(None)` (restoring position) on any mismatch so the caller
+    /// can fall back to other `[...]` interpretations. Labels match
+    /// `[A-Za-z0-9_-]+`.
+    fn try_parse_footnote_reference(&mut self) -> Result<Option<Token>, LexerError> {
+        let start = self.position;
+        // Caller guarantees `self.input[start] == '['` and
+        // `self.input[start + 1] == '^'`.
+        let mut i = start + 2;
+        let label_start = i;
+        while i < self.input.len() {
+            let c = self.input[i];
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i == label_start || i >= self.input.len() || self.input[i] != ']' {
+            return Ok(None);
+        }
+        let label: String = self.input[label_start..i].iter().collect();
+        self.position = i + 1; // past the `]`
+        Ok(Some(Token::FootnoteReference(label)))
+    }
+
+    /// Try to consume `[^label]: rest-of-line` as a footnote
+    /// definition. Returns `Ok(None)` on any mismatch (position
+    /// restored). The content is the inline-tokenized remainder of
+    /// the line.
+    fn try_parse_footnote_definition(&mut self) -> Result<Option<Token>, LexerError> {
+        let start = self.position;
+        let mut i = start + 2;
+        let label_start = i;
+        while i < self.input.len() {
+            let c = self.input[i];
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i == label_start || i + 1 >= self.input.len() {
+            return Ok(None);
+        }
+        if self.input[i] != ']' || self.input[i + 1] != ':' {
+            return Ok(None);
+        }
+        let label: String = self.input[label_start..i].iter().collect();
+        // Skip over `]:` and any single space.
+        let mut content_start = i + 2;
+        if content_start < self.input.len() && self.input[content_start] == ' ' {
+            content_start += 1;
+        }
+        // Find the end of the line (or input).
+        let mut content_end = content_start;
+        while content_end < self.input.len() && self.input[content_end] != '\n' {
+            content_end += 1;
+        }
+
+        // Emit the body as a single Text token. Inline markdown
+        // inside footnote definitions (emphasis, links, code spans)
+        // is a v2 follow-up; recursing into a sub-lexer is unsafe
+        // against pathological inputs (stress-tested) so the v1
+        // path captures the raw text.
+        let body: String = self.input[content_start..content_end].iter().collect();
+        let inner_tokens = if body.is_empty() {
+            Vec::new()
+        } else {
+            vec![Token::Text(body)]
+        };
+
+        self.position = content_end;
+        Ok(Some(Token::FootnoteDefinition {
+            label,
+            content: inner_tokens,
+        }))
+    }
+
     fn parse_link(&mut self) -> Result<Token, LexerError> {
         let bracket_pos = self.position;
         self.advance(); // skip '['

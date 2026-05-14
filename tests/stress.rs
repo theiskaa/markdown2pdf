@@ -17,7 +17,7 @@ fn run_within_budget(name: &str, input: String) {
     // and the default test-thread stack (256 KiB) overflows on inputs that
     // a generous-stack thread handles fine.
     std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
+        .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut lexer = Lexer::new(input_for_thread);

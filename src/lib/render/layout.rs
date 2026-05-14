@@ -393,6 +393,7 @@ impl<'a> Engine<'a> {
             italic: style.is_italic(),
             monospace: false,
             strikethrough: false,
+            superscript: false,
             underline: false,
         };
         let measured = self.font_set.measure(flags, text, size_pt);
@@ -492,6 +493,7 @@ impl<'a> Engine<'a> {
             italic: s.is_italic(),
             monospace: false,
             strikethrough: false,
+            superscript: false,
             underline: false,
         };
         let ctx = self.begin_block(&s);
@@ -792,6 +794,7 @@ impl<'a> Engine<'a> {
             italic: style.is_italic(),
             monospace: false,
             strikethrough: false,
+            superscript: false,
             underline: false,
         };
         let size_pt = style.font_size_pt;
@@ -849,6 +852,73 @@ impl<'a> Engine<'a> {
             Block::Image { path, alt } => self.render_image(path, alt),
             Block::HtmlBlock { content } => self.render_html_block(content),
             Block::PageBreak => self.start_new_page(),
+            Block::FootnoteDefinitions { entries } => {
+                self.render_footnote_definitions(entries)
+            }
+        }
+    }
+
+    fn render_footnote_definitions(&mut self, entries: &[crate::render::ir::FootnoteEntry]) {
+        if entries.is_empty() {
+            return;
+        }
+        // Render the "Footnotes" section heading using h2 typography.
+        let h2 = self.style.headings[1].clone();
+        let title_runs = vec![InlineRun {
+            text: "Footnotes".to_string(),
+            flags: RunFlags::default(),
+            link: None,
+        }];
+        let color = Some(rgb_color(h2.text_color_rgb()));
+        let flags = RunFlags {
+            bold: h2.is_bold(),
+            italic: h2.is_italic(),
+            monospace: false,
+            strikethrough: false,
+            underline: false,
+            superscript: false,
+        };
+        let ctx = self.begin_block(&h2);
+        self.write_wrapped_runs(&title_runs, h2.font_size_pt, h2.line_height, flags, color);
+        self.end_block(ctx);
+
+        // Each entry: a paragraph whose first run is the superscript
+        // number marker and the rest is the definition body. A heading
+        // anchor with slug `footnote-N` is registered so body refs
+        // (lower pass emits links to `#footnote-N`) resolve.
+        let body_style = self.style.paragraph.clone();
+        for entry in entries {
+            self.heading_anchors.push(HeadingAnchor {
+                slug: format!("footnote-{}", entry.number),
+                level: 6,
+                text: format!("[{}]", entry.number),
+                page_idx: self.raw_pages.len(),
+                y_pt: self.y_from_top_pt,
+            });
+            let mut runs: Vec<InlineRun> = Vec::with_capacity(entry.runs.len() + 2);
+            runs.push(InlineRun {
+                text: format!("{}", entry.number),
+                flags: RunFlags::default().with_superscript(),
+                link: None,
+            });
+            runs.push(InlineRun {
+                text: "  ".to_string(),
+                flags: RunFlags::default(),
+                link: None,
+            });
+            for r in &entry.runs {
+                runs.push(r.clone());
+            }
+            let color = Some(rgb_color(body_style.text_color_rgb()));
+            let ctx = self.begin_block(&body_style);
+            self.write_wrapped_runs(
+                &runs,
+                body_style.font_size_pt,
+                body_style.line_height,
+                RunFlags::default(),
+                color,
+            );
+            self.end_block(ctx);
         }
     }
 
@@ -1288,6 +1358,7 @@ impl<'a> Engine<'a> {
             italic: s.is_italic(),
             monospace: false,
             strikethrough: false,
+            superscript: false,
             underline: false,
         };
 
@@ -1493,33 +1564,94 @@ impl<'a> Engine<'a> {
             }
 
             let mut x_cursor_pt = self.indent_left_pt;
+            let mut cursor_needs_reset = false;
+            let mut line_was_broken = false;
             for seg in line {
-                let seg_width = self.font_set.measure(seg.flags, &seg.text, size_pt);
+                // Superscript: render at 70% size on a baseline raised
+                // by ~32% of the original size. Implemented as a
+                // self-contained little text section so it doesn't
+                // disturb the line's main BT/ET. The next segment
+                // re-establishes its cursor via Td.
+                let (seg_size, seg_baseline) = if seg.flags.superscript {
+                    (size_pt * 0.70, baseline_y_pt - size_pt * 0.32)
+                } else {
+                    (size_pt, baseline_y_pt)
+                };
+                let seg_width = self.font_set.measure(seg.flags, &seg.text, seg_size);
                 let font_handle = self.font_set.handle(seg.flags);
                 let needs_trans = self.font_set.needs_transliteration(seg.flags);
-
-                // Restore the text fill colour if this is a link
-                // (link colour) vs body (block colour).
-                if seg.flags.underline {
-                    if let Some(lc) = link_color.clone() {
-                        self.page_ops.push(Op::SetFillColor { col: lc });
-                    }
-                } else if let Some(c) = color.clone() {
-                    self.page_ops.push(Op::SetFillColor { col: c });
-                }
-
-                self.page_ops.push(Op::SetFont {
-                    font: font_handle,
-                    size: Pt(size_pt),
-                });
                 let emit_text = if needs_trans {
                     to_win1252(&seg.text)
                 } else {
                     seg.text.clone()
                 };
-                self.page_ops.push(Op::ShowText {
-                    items: vec![TextItem::Text(emit_text)],
-                });
+
+                if seg.flags.superscript {
+                    // Close the line's main section, emit the small
+                    // baseline-raised glyphs in their own BT/ET, then
+                    // the next iteration (if any) re-opens the main
+                    // section with an explicit cursor.
+                    self.close_text_section();
+                    self.page_ops.push(Op::SaveGraphicsState);
+                    self.page_ops.push(Op::StartTextSection);
+                    let x_mm = pt_to_mm(x_cursor_pt);
+                    let y_mm = pt_to_mm(self.page_height_pt() - seg_baseline);
+                    self.page_ops.push(Op::SetTextCursor {
+                        pos: Point::new(Mm(x_mm), Mm(y_mm)),
+                    });
+                    self.page_ops.push(Op::SetFont {
+                        font: font_handle,
+                        size: Pt(seg_size),
+                    });
+                    if let Some(c) = color.clone() {
+                        self.page_ops.push(Op::SetFillColor { col: c });
+                    }
+                    self.page_ops.push(Op::ShowText {
+                        items: vec![TextItem::Text(emit_text)],
+                    });
+                    self.page_ops.push(Op::EndTextSection);
+                    self.page_ops.push(Op::RestoreGraphicsState);
+                    cursor_needs_reset = true;
+                    line_was_broken = true;
+                } else {
+                    if cursor_needs_reset {
+                        // Re-open the line's main section after a
+                        // superscript broke out. Place the cursor at
+                        // the post-superscript x position on the
+                        // baseline AND restore the leading + color so
+                        // any subsequent `T*` line break in this
+                        // section behaves like the original BT.
+                        self.ensure_text_section();
+                        let x_mm = pt_to_mm(x_cursor_pt);
+                        let y_mm = pt_to_mm(self.page_height_pt() - baseline_y_pt);
+                        self.page_ops.push(Op::SetTextCursor {
+                            pos: Point::new(Mm(x_mm), Mm(y_mm)),
+                        });
+                        self.page_ops.push(Op::SetLineHeight {
+                            lh: Pt(line_height_pt),
+                        });
+                        if let Some(c) = color.clone() {
+                            self.page_ops.push(Op::SetFillColor { col: c });
+                        }
+                        cursor_needs_reset = false;
+                    }
+                    // Restore the text fill colour if this is a link
+                    // (link colour) vs body (block colour).
+                    if seg.flags.underline {
+                        if let Some(lc) = link_color.clone() {
+                            self.page_ops.push(Op::SetFillColor { col: lc });
+                        }
+                    } else if let Some(c) = color.clone() {
+                        self.page_ops.push(Op::SetFillColor { col: c });
+                    }
+                    self.page_ops.push(Op::SetFont {
+                        font: font_handle,
+                        size: Pt(seg_size),
+                    });
+                    self.page_ops.push(Op::ShowText {
+                        items: vec![TextItem::Text(emit_text)],
+                    });
+                }
 
                 // Buffer decorations and link rects until the line is
                 // finished — they need a closed text section to draw
@@ -1547,6 +1679,16 @@ impl<'a> Engine<'a> {
                     });
                 }
                 x_cursor_pt += seg_width;
+            }
+
+            // A line that had any superscript break also has its
+            // current BT's LineMatrix anchored mid-line (from the
+            // reopen Td). Subsequent `T*` line breaks would advance
+            // from that mid-line x. Close the section here so the
+            // next line opens fresh with an absolute Td at the
+            // intended left edge.
+            if line_was_broken {
+                self.close_text_section();
             }
 
             self.advance_y(line_height_pt);
