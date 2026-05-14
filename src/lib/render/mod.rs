@@ -84,11 +84,30 @@ pub fn render_to_bytes(
     style: ResolvedStyle,
     font_config: Option<&FontConfig>,
 ) -> Result<Vec<u8>, MdpError> {
-    let mut doc = PdfDocument::new("markdown2pdf");
+    let doc_title = style
+        .metadata
+        .title
+        .clone()
+        .unwrap_or_else(|| "markdown2pdf".to_string());
+    let mut doc = PdfDocument::new(&doc_title);
 
-    // Collect every distinct character in the document so the font
-    // loader can pre-populate its codepoint -> glyph table without
-    // walking the font's full cmap.
+    {
+        let info = &mut doc.metadata.info;
+        info.document_title = doc_title.clone();
+        if let Some(a) = &style.metadata.author {
+            info.author = a.clone();
+        }
+        if let Some(s) = &style.metadata.subject {
+            info.subject = s.clone();
+        }
+        if let Some(c) = &style.metadata.creator {
+            info.creator = c.clone();
+        }
+        if !style.metadata.keywords.is_empty() {
+            info.keywords = style.metadata.keywords.clone();
+        }
+    }
+
     let body_text = Token::collect_all_text(&tokens);
     let used_codepoints: Vec<char> = {
         let mut chars: Vec<char> = body_text.chars().collect();
@@ -102,12 +121,11 @@ pub fn render_to_bytes(
     let font_set = font::FontSet::load(font_config, &used_codepoints, usage, &mut doc);
     let pages = layout::lay_out_pages(&blocks, &style, &font_set, &mut doc);
 
-    // Always include at least one page so the resulting PDF is valid
-    // even for an empty token stream.
+    let (fallback_w, fallback_h) = layout::page_dimensions_mm(&style.page);
     let pages = if pages.is_empty() {
         vec![printpdf::PdfPage::new(
-            printpdf::Mm(210.0),
-            printpdf::Mm(297.0),
+            printpdf::Mm(fallback_w),
+            printpdf::Mm(fallback_h),
             Vec::new(),
         )]
     } else {

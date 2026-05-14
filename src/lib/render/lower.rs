@@ -72,10 +72,12 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             }
             Token::HtmlBlock(content) => {
                 flush_paragraph(&mut out, &mut buffered_inline);
-                // CommonMark §4.6: HTML comments are invisible. The
-                // lexer wraps block-level `<!-- ... -->` lines in an
-                // `HtmlBlock` token, so drop comment-only payloads.
-                if !is_only_html_comments(content) {
+                if is_pagebreak_marker(content) {
+                    out.push(Block::PageBreak);
+                } else if !is_only_html_comments(content) {
+                    // CommonMark §4.6: HTML comments are invisible.
+                    // Only emit a real HtmlBlock when the payload has
+                    // something beyond comments.
                     out.push(Block::HtmlBlock {
                         content: content.clone(),
                     });
@@ -185,6 +187,19 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
 /// Returns true if a Token::Image at `idx` should be lifted to a
 /// block-level [`Block::Image`] — i.e. nothing comes after it on the
 /// same paragraph.
+/// True if `s` is exactly `<!-- pagebreak -->` (whitespace-tolerant,
+/// case-insensitive). Standalone-comment convention borrowed from
+/// Pandoc / mdBook / GitBook: a single HTML comment whose payload is
+/// the word `pagebreak` flushes the current page.
+fn is_pagebreak_marker(s: &str) -> bool {
+    let trimmed = s.trim();
+    let inner = trimmed
+        .strip_prefix("<!--")
+        .and_then(|s| s.strip_suffix("-->"))
+        .map(str::trim);
+    matches!(inner, Some(word) if word.eq_ignore_ascii_case("pagebreak"))
+}
+
 /// True if `s` (trimmed) consists of zero or more `<!-- ... -->`
 /// blocks and nothing else. The block-level lexer rule for raw HTML
 /// catches a standalone comment line as `Token::HtmlBlock(content)`;

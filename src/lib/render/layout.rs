@@ -11,7 +11,8 @@ use printpdf::{
 };
 
 use crate::styling::{
-    BorderStyle, ResolvedBlock, ResolvedBorder, ResolvedList, ResolvedStyle,
+    BorderStyle, Orientation, PageSize, ResolvedBlock, ResolvedBorder, ResolvedList,
+    ResolvedPage, ResolvedStyle,
 };
 
 use super::font::FontSet;
@@ -19,8 +20,23 @@ use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
 
 type Color = printpdf::Color;
 
-const PAGE_WIDTH_MM: f32 = 210.0;
-const PAGE_HEIGHT_MM: f32 = 297.0;
+/// Resolve a `ResolvedPage` to (width_mm, height_mm). Landscape
+/// swaps the named-size dimensions; `PageSize::Custom` is taken
+/// verbatim.
+pub(crate) fn page_dimensions_mm(page: &ResolvedPage) -> (f32, f32) {
+    let (w, h) = match page.size {
+        PageSize::A4 => (210.0, 297.0),
+        PageSize::Letter => (216.0, 279.4),
+        PageSize::Legal => (216.0, 355.6),
+        PageSize::A3 => (297.0, 420.0),
+        PageSize::A5 => (148.0, 210.0),
+        PageSize::Custom { width_mm, height_mm } => (width_mm, height_mm),
+    };
+    match page.orientation {
+        Orientation::Portrait => (w, h),
+        Orientation::Landscape => (h, w),
+    }
+}
 
 /// Render the IR to a vector of [`PdfPage`]s ready to hand to
 /// [`printpdf::PdfDocument::with_pages`].
@@ -46,6 +62,11 @@ struct Engine<'a> {
     font_set: &'a FontSet,
     /// Used to register XObjects (images) and get back their IDs.
     doc: &'a mut PdfDocument,
+    /// Page width in mm, resolved from `style.page.size` +
+    /// `style.page.orientation` at construction. All pages produced by
+    /// this engine share these dimensions.
+    page_width_mm: f32,
+    page_height_mm: f32,
     /// Distance from the top of the page to the current text baseline
     /// in points. Grows downward.
     y_from_top_pt: f32,
@@ -70,13 +91,16 @@ struct Engine<'a> {
 
 impl<'a> Engine<'a> {
     fn new(style: &'a ResolvedStyle, font_set: &'a FontSet, doc: &'a mut PdfDocument) -> Self {
+        let (page_width_mm, page_height_mm) = page_dimensions_mm(&style.page);
         let left = mm_to_pt(style.page.margins_mm.left.max(1.0));
-        let right = PAGE_WIDTH_MM * MM_TO_PT - mm_to_pt(style.page.margins_mm.right.max(1.0));
+        let right = page_width_mm * MM_TO_PT - mm_to_pt(style.page.margins_mm.right.max(1.0));
         let top = mm_to_pt(style.page.margins_mm.top.max(1.0));
         Self {
             style,
             font_set,
             doc,
+            page_width_mm,
+            page_height_mm,
             y_from_top_pt: top,
             indent_left_pt: left,
             indent_right_pt: right,
@@ -98,7 +122,7 @@ impl<'a> Engine<'a> {
             return;
         }
         let ops = std::mem::take(&mut self.page_ops);
-        let page = PdfPage::new(Mm(PAGE_WIDTH_MM), Mm(PAGE_HEIGHT_MM), ops);
+        let page = PdfPage::new(Mm(self.page_width_mm), Mm(self.page_height_mm), ops);
         self.pages.push(page);
     }
 
@@ -119,7 +143,11 @@ impl<'a> Engine<'a> {
     }
 
     fn page_height_pt(&self) -> f32 {
-        PAGE_HEIGHT_MM * MM_TO_PT
+        self.page_height_mm * MM_TO_PT
+    }
+
+    fn page_width_pt(&self) -> f32 {
+        self.page_width_mm * MM_TO_PT
     }
 
     fn content_width_pt(&self) -> f32 {
@@ -263,6 +291,7 @@ impl<'a> Engine<'a> {
             } => self.render_table(headers, aligns, rows),
             Block::Image { path, alt } => self.render_image(path, alt),
             Block::HtmlBlock { content } => self.render_html_block(content),
+            Block::PageBreak => self.start_new_page(),
         }
     }
 
@@ -751,7 +780,7 @@ impl<'a> Engine<'a> {
         self.advance_y(s.margin_before_pt + thickness * 0.5);
 
         let mut x_left_pt = self.left_margin_pt();
-        let mut x_right_pt = PAGE_WIDTH_MM * MM_TO_PT - self.right_margin_pt();
+        let mut x_right_pt = self.page_width_pt() - self.right_margin_pt();
         let pct = (s.width_pct / 100.0).clamp(0.05, 1.0);
         if pct < 1.0 {
             let full = x_right_pt - x_left_pt;

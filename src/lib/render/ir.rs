@@ -40,6 +40,11 @@ pub enum Block {
     /// so the source stays visible. CommonMark §4.6 lets us choose
     /// whether to interpret HTML or pass it through; we pass through.
     HtmlBlock { content: String },
+    /// A user-requested page break. Triggered by a standalone
+    /// `<!-- pagebreak -->` block in the source. The renderer
+    /// flushes the current page and starts a fresh one with no
+    /// other side effects.
+    PageBreak,
 }
 
 /// One entry inside a [`Block::List`].
@@ -165,7 +170,7 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
         Block::CodeBlock { .. } | Block::HtmlBlock { .. } => {
             u.mono_regular = true;
         }
-        Block::HorizontalRule | Block::Image { .. } => {}
+        Block::HorizontalRule | Block::Image { .. } | Block::PageBreak => {}
     }
 }
 
