@@ -10,7 +10,7 @@ use printpdf::{
     PdfDocument, PdfPage, Point, Pt, RawImage, Rect, Rgb, TextItem, XObjectId, XObjectTransform,
 };
 
-use crate::styling::StyleMatch;
+use crate::styling::ResolvedStyle;
 
 use super::font::FontSet;
 use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
@@ -28,7 +28,7 @@ const PAGE_HEIGHT_MM: f32 = 297.0;
 /// back IDs for use in page operation streams.
 pub fn lay_out_pages(
     blocks: &[Block],
-    style: &StyleMatch,
+    style: &ResolvedStyle,
     font_set: &FontSet,
     doc: &mut PdfDocument,
 ) -> Vec<PdfPage> {
@@ -40,7 +40,7 @@ pub fn lay_out_pages(
 }
 
 struct Engine<'a> {
-    style: &'a StyleMatch,
+    style: &'a ResolvedStyle,
     font_set: &'a FontSet,
     /// Used to register XObjects (images) and get back their IDs.
     doc: &'a mut PdfDocument,
@@ -81,10 +81,10 @@ struct BlockQuoteFrame {
 }
 
 impl<'a> Engine<'a> {
-    fn new(style: &'a StyleMatch, font_set: &'a FontSet, doc: &'a mut PdfDocument) -> Self {
-        let left = mm_to_pt(style.margins.left.max(1.0));
-        let right = PAGE_WIDTH_MM * MM_TO_PT - mm_to_pt(style.margins.right.max(1.0));
-        let top = mm_to_pt(style.margins.top.max(1.0));
+    fn new(style: &'a ResolvedStyle, font_set: &'a FontSet, doc: &'a mut PdfDocument) -> Self {
+        let left = mm_to_pt(style.page.margins_mm.left.max(1.0));
+        let right = PAGE_WIDTH_MM * MM_TO_PT - mm_to_pt(style.page.margins_mm.right.max(1.0));
+        let top = mm_to_pt(style.page.margins_mm.top.max(1.0));
         Self {
             style,
             font_set,
@@ -117,19 +117,19 @@ impl<'a> Engine<'a> {
     }
 
     fn top_margin_pt(&self) -> f32 {
-        mm_to_pt(self.style.margins.top.max(1.0))
+        mm_to_pt(self.style.page.margins_mm.top.max(1.0))
     }
 
     fn bottom_margin_pt(&self) -> f32 {
-        mm_to_pt(self.style.margins.bottom.max(1.0))
+        mm_to_pt(self.style.page.margins_mm.bottom.max(1.0))
     }
 
     fn left_margin_pt(&self) -> f32 {
-        mm_to_pt(self.style.margins.left.max(1.0))
+        mm_to_pt(self.style.page.margins_mm.left.max(1.0))
     }
 
     fn right_margin_pt(&self) -> f32 {
-        mm_to_pt(self.style.margins.right.max(1.0))
+        mm_to_pt(self.style.page.margins_mm.right.max(1.0))
     }
 
     fn page_height_pt(&self) -> f32 {
@@ -200,8 +200,6 @@ impl<'a> Engine<'a> {
             pos: Point::new(Mm(x_mm), Mm(y_mm)),
         });
     }
-
-    // === block-level entry points ===
 
     fn render_block(&mut self, block: &Block) {
         match block {
@@ -318,10 +316,10 @@ impl<'a> Engine<'a> {
             return;
         }
 
-        let s_header = self.style.table_header;
-        let s_cell = self.style.table_cell;
-        let before_pt = (s_cell.before_spacing + 0.5).max(0.5);
-        let after_pt = (s_cell.after_spacing + 0.5).max(0.5);
+        let s_header = self.style.table.header.clone();
+        let s_cell = self.style.table.cell.clone();
+        let before_pt = (s_cell.margin_before_pt + 0.5).max(0.5);
+        let after_pt = (s_cell.margin_after_pt + 0.5).max(0.5);
         const CELL_PAD_PT: f32 = 4.0;
         const ROW_GAP_PT: f32 = 2.0;
 
@@ -332,7 +330,7 @@ impl<'a> Engine<'a> {
         let col_width = total_width / col_count as f32;
 
         // Header row.
-        let header_height = self.measure_row_height(headers, s_header.size, col_width, true);
+        let header_height = self.measure_row_height(headers, s_header.font_size_pt, col_width, true);
         if self.y_from_top_pt + header_height + self.bottom_margin_pt() > self.page_height_pt() {
             self.start_new_page();
         }
@@ -340,10 +338,10 @@ impl<'a> Engine<'a> {
         self.draw_row(
             headers,
             aligns,
-            s_header.size,
+            s_header.font_size_pt,
             col_width,
             true,
-            s_header.text_color.unwrap_or((0, 0, 0)),
+            s_header.text_color_rgb(),
         );
         let header_bottom = header_top + header_height;
         self.draw_row_borders(header_top, header_bottom, col_count, col_width);
@@ -355,7 +353,7 @@ impl<'a> Engine<'a> {
             // Pad / truncate to header column count.
             let mut padded: Vec<Vec<InlineRun>> = row.clone();
             padded.resize(col_count, Vec::new());
-            let row_height = self.measure_row_height(&padded, s_cell.size, col_width, false);
+            let row_height = self.measure_row_height(&padded, s_cell.font_size_pt, col_width, false);
             if self.y_from_top_pt + row_height + self.bottom_margin_pt() > self.page_height_pt() {
                 self.start_new_page();
                 // Reprint headers on the new page.
@@ -363,10 +361,10 @@ impl<'a> Engine<'a> {
                 self.draw_row(
                     headers,
                     aligns,
-                    s_header.size,
+                    s_header.font_size_pt,
                     col_width,
                     true,
-                    s_header.text_color.unwrap_or((0, 0, 0)),
+                    s_header.text_color_rgb(),
                 );
                 let header_bottom = header_top + header_height;
                 self.draw_row_borders(header_top, header_bottom, col_count, col_width);
@@ -377,10 +375,10 @@ impl<'a> Engine<'a> {
             self.draw_row(
                 &padded,
                 aligns,
-                s_cell.size,
+                s_cell.font_size_pt,
                 col_width,
                 false,
-                s_cell.text_color.unwrap_or((0, 0, 0)),
+                s_cell.text_color_rgb(),
             );
             let row_bottom = row_top + row_height;
             self.draw_row_borders(row_top, row_bottom, col_count, col_width);
@@ -395,7 +393,7 @@ impl<'a> Engine<'a> {
     fn measure_row_height(
         &self,
         cells: &[Vec<InlineRun>],
-        font_size: u8,
+        font_size: f32,
         col_width: f32,
         bold: bool,
     ) -> f32 {
@@ -414,7 +412,7 @@ impl<'a> Engine<'a> {
         &mut self,
         cells: &[Vec<InlineRun>],
         aligns: &[crate::markdown::TableAlignment],
-        font_size: u8,
+        font_size: f32,
         col_width: f32,
         bold: bool,
         color: (u8, u8, u8),
@@ -496,8 +494,8 @@ impl<'a> Engine<'a> {
         let bullet_gap_pt = mm_to_pt(BULLET_GAP_MM);
 
         let saved_left = self.indent_left_pt;
-        let s = &self.style.list_item;
-        let size_pt = f32::from(s.size);
+        let s = &self.style.list_unordered.block;
+        let size_pt = s.font_size_pt;
 
         for entry in entries {
             let bullet_text = format_bullet(&entry.bullet);
@@ -506,7 +504,7 @@ impl<'a> Engine<'a> {
 
             // Reserve bullet column at the *current* left edge.
             // Then indent inline content past it.
-            self.advance_y(s.before_spacing.max(0.5));
+            self.advance_y(s.margin_before_pt.max(0.5));
             let bullet_x = saved_left;
             let bullet_y = self.y_from_top_pt + size_pt;
             // Force a fresh BT before the bullet's Td so absolute
@@ -524,7 +522,7 @@ impl<'a> Engine<'a> {
                 lh: Pt(size_pt * 1.4),
             });
             self.page_ops.push(Op::SetFillColor {
-                col: rgb_color(s.text_color.unwrap_or((0, 0, 0))),
+                col: rgb_color(s.text_color_rgb()),
             });
             let bullet_emit = if self.font_set.needs_transliteration(bullet_flags) {
                 to_win1252(&bullet_text)
@@ -539,7 +537,7 @@ impl<'a> Engine<'a> {
             self.indent_left_pt = (saved_left + bullet_width + bullet_gap_pt)
                 .min(self.indent_right_pt - 10.0);
 
-            self.write_wrapped_runs(&entry.runs, s.size, RunFlags::default(), s.text_color.map(rgb_color));
+            self.write_wrapped_runs(&entry.runs, s.font_size_pt, RunFlags::default(), Some(rgb_color(s.text_color_rgb())));
 
             // Render any nested children (sub-lists, paragraphs from
             // a loose list item) at this same indent.
@@ -548,7 +546,7 @@ impl<'a> Engine<'a> {
             }
 
             self.indent_left_pt = saved_left;
-            self.advance_y(s.after_spacing.max(0.0));
+            self.advance_y(s.margin_after_pt.max(0.0));
         }
     }
 
@@ -559,9 +557,9 @@ impl<'a> Engine<'a> {
         let rule_x_pt = self.indent_left_pt + mm_to_pt(RULE_OFFSET_MM);
 
         let saved_left = self.indent_left_pt;
-        let s = &self.style.block_quote;
-        let before_pt = s.before_spacing.max(0.5);
-        let after_pt = s.after_spacing.max(0.5);
+        let s = &self.style.blockquote;
+        let before_pt = s.margin_before_pt.max(0.5);
+        let after_pt = s.margin_after_pt.max(0.5);
 
         self.advance_y(before_pt);
 
@@ -595,78 +593,72 @@ impl<'a> Engine<'a> {
 
     fn render_heading(&mut self, level: u8, runs: &[InlineRun]) {
         let s = match level {
-            1 => &self.style.heading_1,
-            2 => &self.style.heading_2,
-            _ => &self.style.heading_3,
-        };
-        // For h4-h6, derive a smaller size from heading_3 so there's
-        // still some visual hierarchy.
-        let size = if level >= 4 {
-            let drop = level.saturating_sub(3);
-            s.size.saturating_sub(drop).max(8)
-        } else {
-            s.size
+            1 => &self.style.headings[0],
+            2 => &self.style.headings[1],
+            3 => &self.style.headings[2],
+            4 => &self.style.headings[3],
+            5 => &self.style.headings[4],
+            _ => &self.style.headings[5],
         };
 
-        let color = s.text_color.map(rgb_color);
+        let color = Some(rgb_color(s.text_color_rgb()));
         let base_flags = RunFlags {
-            bold: s.bold,
-            italic: s.italic,
+            bold: s.is_bold(),
+            italic: s.is_italic(),
             monospace: false,
             strikethrough: false,
             underline: false,
         };
-        let before_pt = s.before_spacing * mm_to_pt(1.0).max(1.0);
-        let after_pt = s.after_spacing * mm_to_pt(1.0).max(1.0);
+        let before_pt = s.margin_before_pt;
+        let after_pt = s.margin_after_pt;
 
         self.advance_y(before_pt);
-        self.write_wrapped_runs(runs, size, base_flags, color);
+        self.write_wrapped_runs(runs, s.font_size_pt, base_flags, color);
         self.advance_y(after_pt);
     }
 
     fn render_paragraph(&mut self, runs: &[InlineRun]) {
-        let s = &self.style.text;
-        let color = s.text_color.map(rgb_color);
+        let s = &self.style.paragraph;
+        let color = Some(rgb_color(s.text_color_rgb()));
         let base = RunFlags::default();
-        let before_pt = s.before_spacing * mm_to_pt(1.0).max(1.0);
-        let after_pt = s.after_spacing * mm_to_pt(1.0).max(1.0);
+        let before_pt = s.margin_before_pt;
+        let after_pt = s.margin_after_pt;
 
         self.advance_y(before_pt);
-        self.write_wrapped_runs(runs, s.size, base, color);
+        self.write_wrapped_runs(runs, s.font_size_pt, base, color);
         self.advance_y(after_pt);
     }
 
     fn render_code_block(&mut self, lines: &[String]) {
-        let s = &self.style.code;
-        let color = s.text_color.map(rgb_color);
+        let s = &self.style.code_block;
+        let color = Some(rgb_color(s.text_color_rgb()));
         let base = RunFlags::default().with_monospace();
-        let before_pt = s.before_spacing * mm_to_pt(1.0).max(1.0);
-        let after_pt = s.after_spacing * mm_to_pt(1.0).max(1.0);
+        let before_pt = s.margin_before_pt;
+        let after_pt = s.margin_after_pt;
+        let size_pt = s.font_size_pt;
 
         self.advance_y(before_pt);
         for line in lines {
-            // Each source line of a code block becomes one rendered
-            // line — we never wrap inside a code block.
             let run = InlineRun {
                 text: line.clone(),
                 flags: base,
                 link: None,
             };
-            self.write_wrapped_runs(std::slice::from_ref(&run), s.size, base, color.clone());
+            self.write_wrapped_runs(std::slice::from_ref(&run), size_pt, base, color.clone());
         }
         self.advance_y(after_pt);
     }
 
     fn render_horizontal_rule(&mut self) {
-        // Close any open text section so we can draw a path.
         self.close_text_section();
 
         let s = &self.style.horizontal_rule;
-        let before_pt = s.before_spacing * mm_to_pt(1.0).max(1.0);
-        let after_pt = s.after_spacing * mm_to_pt(1.0).max(1.0);
-        let line_color = s.text_color.unwrap_or((128, 128, 128));
+        let before_pt = s.margin_before_pt;
+        let after_pt = s.margin_after_pt;
+        let line_color = s.color_rgb();
+        let thickness = s.thickness_pt.max(0.1);
 
-        self.advance_y(before_pt + f32::from(s.size).max(1.0) * 0.5);
+        self.advance_y(before_pt + thickness * 0.5);
 
         let x_left_pt = self.left_margin_pt();
         let x_right_pt = PAGE_WIDTH_MM * MM_TO_PT - self.right_margin_pt();
@@ -703,8 +695,6 @@ impl<'a> Engine<'a> {
         self.advance_y(after_pt);
     }
 
-    // === inline wrapping engine ===
-
     /// Wrap `runs` to the page width and emit one ShowText per line.
     /// `font_size_pt` is the size used for line metrics; `base_flags`
     /// is the fallback style applied to runs whose flags match. The
@@ -712,7 +702,7 @@ impl<'a> Engine<'a> {
     fn write_wrapped_runs(
         &mut self,
         runs: &[InlineRun],
-        font_size: u8,
+        font_size: f32,
         _base_flags: RunFlags,
         color: Option<Color>,
     ) {
@@ -778,7 +768,7 @@ impl<'a> Engine<'a> {
             });
         }
 
-        let link_color = self.style.link.text_color.map(rgb_color);
+        let link_color = Some(rgb_color(self.style.link.text_color_rgb()));
 
         // Close any open section so the first line of this block
         // starts with a fresh BT (and absolute Td). Subsequent lines
@@ -885,7 +875,7 @@ impl<'a> Engine<'a> {
         self.close_text_section();
         let page_h_pt = self.page_height_pt();
         let pending = std::mem::take(&mut self.pending_decorations);
-        let link_color = self.style.link.text_color.map(rgb_color);
+        let link_color = Some(rgb_color(self.style.link.text_color_rgb()));
         for d in pending {
             match d.kind {
                 DecorationKind::Underline | DecorationKind::Strike => {
@@ -996,7 +986,7 @@ fn to_win1252(s: &str) -> String {
 /// occupy in a column of `max_width` points.
 fn count_wrapped_lines(
     runs: &[InlineRun],
-    font_size: u8,
+    font_size: f32,
     max_width: f32,
     font_set: &FontSet,
     bold: bool,
@@ -1148,8 +1138,6 @@ fn words_from_runs(runs: &[InlineRun]) -> Vec<InlineRun> {
     out
 }
 
-// === unit conversions ===
-
 /// 1 inch = 72 pt; 1 inch = 25.4 mm; so 1 mm = 72/25.4 ≈ 2.8346 pt.
 const MM_TO_PT: f32 = 72.0 / 25.4;
 
@@ -1173,12 +1161,12 @@ fn rgb_color((r, g, b): (u8, u8, u8)) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::styling::StyleMatch;
+    use crate::styling::ResolvedStyle;
 
     #[test]
     fn empty_block_list_produces_no_pages() {
         let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
-        let style = StyleMatch::default();
+        let style = ResolvedStyle::default();
         let pages = lay_out_pages(&[], &style, &font_set, &mut PdfDocument::new("test"));
         assert!(pages.is_empty());
     }
@@ -1186,7 +1174,7 @@ mod tests {
     #[test]
     fn one_paragraph_produces_one_page() {
         let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
-        let style = StyleMatch::default();
+        let style = ResolvedStyle::default();
         let blocks = vec![Block::Paragraph {
             runs: vec![InlineRun::new("hello world")],
         }];
@@ -1197,7 +1185,7 @@ mod tests {
     #[test]
     fn many_paragraphs_split_across_pages() {
         let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
-        let style = StyleMatch::default();
+        let style = ResolvedStyle::default();
         let blocks: Vec<_> = (0..200)
             .map(|i| Block::Paragraph {
                 runs: vec![InlineRun::new(format!("paragraph {}", i))],
@@ -1210,7 +1198,7 @@ mod tests {
     #[test]
     fn very_long_paragraph_wraps_to_multiple_lines() {
         let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
-        let style = StyleMatch::default();
+        let style = ResolvedStyle::default();
         let long_text = "word ".repeat(200);
         let blocks = vec![Block::Paragraph {
             runs: vec![InlineRun::new(long_text)],

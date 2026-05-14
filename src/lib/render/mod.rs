@@ -50,7 +50,7 @@ mod layout;
 mod lower;
 
 use crate::markdown::Token;
-use crate::styling::StyleMatch;
+use crate::styling::ResolvedStyle;
 use crate::{MdpError, fonts::FontConfig};
 
 use printpdf::{PdfDocument, PdfSaveOptions};
@@ -58,7 +58,7 @@ use printpdf::{PdfDocument, PdfSaveOptions};
 /// Render a token stream to a PDF file at `path`.
 pub fn render_to_file(
     tokens: Vec<Token>,
-    style: StyleMatch,
+    style: ResolvedStyle,
     font_config: Option<&FontConfig>,
     path: &str,
 ) -> Result<(), MdpError> {
@@ -75,7 +75,7 @@ pub fn render_to_file(
 /// Render a token stream to PDF bytes.
 pub fn render_to_bytes(
     tokens: Vec<Token>,
-    style: StyleMatch,
+    style: ResolvedStyle,
     font_config: Option<&FontConfig>,
 ) -> Result<Vec<u8>, MdpError> {
     let mut doc = PdfDocument::new("markdown2pdf");
@@ -125,8 +125,8 @@ mod tests {
     use super::*;
     use crate::markdown::Token;
 
-    fn default_style() -> StyleMatch {
-        StyleMatch::default()
+    fn default_style() -> ResolvedStyle {
+        ResolvedStyle::default()
     }
 
     #[test]

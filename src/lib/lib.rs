@@ -283,6 +283,42 @@ impl MdpError {
 ///     Ok(())
 /// }
 /// ```
+/// Variant of [`parse_into_file`] that takes a pre-resolved style
+/// instead of a `ConfigSource`. Useful when the caller has already
+/// loaded the config (e.g. to also serialize it for
+/// `--print-effective-config`) and doesn't want to load it again.
+pub fn parse_into_file_with_style(
+    markdown: String,
+    path: &str,
+    style: styling::ResolvedStyle,
+    font_config: Option<&fonts::FontConfig>,
+) -> Result<(), MdpError> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            return Err(MdpError::IoError {
+                message: "Output directory does not exist".to_string(),
+                path: parent.display().to_string(),
+                suggestion: format!("Create the directory first: mkdir -p {}", parent.display()),
+            });
+        }
+    }
+
+    let mut lexer = Lexer::new(markdown);
+    let tokens = lexer.parse().map_err(|e| {
+        let msg = format!("{:?}", e);
+        MdpError::ParseError {
+            message: msg.clone(),
+            position: None,
+            suggestion: Some(if msg.contains("UnexpectedEndOfInput") {
+                "Check for unclosed code blocks (```), links, or image tags".to_string()
+            } else {
+                "Verify your Markdown syntax is valid. Try testing with a simpler document first.".to_string()
+            }),
+        }
+    })?;
+    render::render_to_file(tokens, style, font_config, path)
+}
+
 pub fn parse_into_file(
     markdown: String,
     path: &str,

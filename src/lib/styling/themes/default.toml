@@ -1,0 +1,152 @@
+# Default theme — built-in fallback for every render. The preset
+# system requires this file to be exhaustive: every field the
+# resolver needs must be present here, because user-provided configs
+# are allowed to omit anything.
+#
+# Other presets inherit from this one (`inherits = "default"`) and
+# only override what's distinctive about them.
+
+[page]
+size = "A4"
+orientation = "portrait"
+margins = { top = 22.6, right = 22.6, bottom = 22.6, left = 22.6 }  # ~8pt margins, mm
+columns = 1
+column_gap_mm = 6.0
+
+[defaults]
+font_family = "Helvetica"
+font_size_pt = 8.0
+font_weight = "normal"
+font_style = "normal"
+text_color = "#000000"
+line_height = 1.4
+text_align = "left"
+padding = 0.0
+margin_before_pt = 0.0
+margin_after_pt = 0.0
+indent_pt = 0.0
+letter_spacing_pt = 0.0
+strikethrough = false
+underline = false
+
+[paragraph]
+margin_after_pt = 4.0
+
+[headings.h1]
+font_size_pt = 14.0
+font_weight = "bold"
+text_align = "center"
+margin_before_pt = 2.2
+margin_after_pt = 1.4
+
+[headings.h2]
+font_size_pt = 12.0
+font_weight = "bold"
+margin_before_pt = 2.2
+margin_after_pt = 1.4
+
+[headings.h3]
+font_size_pt = 10.0
+font_weight = "bold"
+margin_before_pt = 2.2
+margin_after_pt = 1.4
+
+[headings.h4]
+font_size_pt = 9.0
+font_weight = "bold"
+margin_before_pt = 1.8
+margin_after_pt = 1.2
+
+[headings.h5]
+font_size_pt = 8.5
+font_weight = "bold"
+margin_before_pt = 1.6
+margin_after_pt = 1.0
+
+[headings.h6]
+font_size_pt = 8.0
+font_weight = "bold"
+margin_before_pt = 1.4
+margin_after_pt = 1.0
+
+[code_block]
+font_family = "Courier"
+text_color = "#808080"
+background_color = "#E6E6E6"
+margin_before_pt = 1.1
+margin_after_pt = 1.1
+padding = 4.0
+
+[code_inline]
+font_family = "Courier"
+
+[blockquote]
+text_color = "#808080"
+background_color = "#F5F5F5"
+font_style = "italic"
+indent_pt = 17.0  # ~6 mm
+margin_before_pt = 1.5
+margin_after_pt = 1.5
+padding = { top = 2.0, right = 6.0, bottom = 2.0, left = 6.0 }
+
+[blockquote.border]
+left = { width_pt = 1.2, color = "#B4B4B4", style = "solid" }
+
+[list]
+[list.common]
+margin_after_pt = 0.5
+indent_per_level_pt = 17.0  # ~6 mm
+item_spacing_tight_pt = 0.5
+item_spacing_loose_pt = 2.0
+
+[list.unordered]
+bullet = "•"
+
+[list.ordered]
+bullet = "1."
+
+[list.task]
+bullet = "[ ]"
+
+[table]
+row_gap_pt = 2.0
+cell_padding = { top = 3.0, right = 4.0, bottom = 3.0, left = 4.0 }
+margin_before_pt = 1.4
+margin_after_pt = 1.4
+
+[table.header]
+font_weight = "bold"
+
+[table.cell]
+
+[table.border.all]
+width_pt = 0.5
+color = "#B4B4B4"
+style = "solid"
+
+[image]
+max_width_pct = 100.0
+align = "center"
+margin_before_pt = 2.0
+margin_after_pt = 2.0
+
+[image.caption]
+font_size_pt = 7.5
+font_style = "italic"
+text_align = "center"
+margin_before_pt = 1.0
+
+[link]
+text_color = "#808080"
+underline = true
+
+[horizontal_rule]
+color = "#808080"
+thickness_pt = 0.5
+style = "solid"
+width_pct = 100.0
+margin_before_pt = 1.5
+margin_after_pt = 1.5
+
+[metadata]
+creator = "markdown2pdf"

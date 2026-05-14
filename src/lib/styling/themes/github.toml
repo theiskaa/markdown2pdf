@@ -1,0 +1,45 @@
+# GitHub-flavored theme — sans body, mono code blocks with a light-gray
+# panel, blue links, slightly larger headings.
+inherits = "default"
+
+[page]
+margins = { top = 25.4, right = 25.4, bottom = 25.4, left = 25.4 }
+
+[defaults]
+font_family = "Helvetica"
+font_size_pt = 10.0
+line_height = 1.5
+text_color = "#24292F"
+
+[headings.h1]
+font_size_pt = 22.0
+[headings.h2]
+font_size_pt = 17.0
+[headings.h3]
+font_size_pt = 14.0
+[headings.h4]
+font_size_pt = 12.0
+[headings.h5]
+font_size_pt = 11.0
+[headings.h6]
+font_size_pt = 10.5
+text_color = "#57606A"
+
+[code_block]
+background_color = "#F6F8FA"
+text_color = "#1F2328"
+padding = { top = 8.0, right = 10.0, bottom = 8.0, left = 10.0 }
+
+[code_inline]
+background_color = "#EFF1F3"
+text_color = "#1F2328"
+
+[blockquote]
+text_color = "#57606A"
+background_color = "#FFFFFF"
+[blockquote.border]
+left = { width_pt = 3.0, color = "#D0D7DE", style = "solid" }
+
+[link]
+text_color = "#0969DA"
+underline = false
