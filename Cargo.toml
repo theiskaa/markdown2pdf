@@ -27,14 +27,22 @@ native-tls = ["fetch", "reqwest/native-tls"]
 
 [dependencies]
 log = "0.4"
-genpdfi = "0.2.7"
 toml = "1.1"
 clap = { version = "4.6", features = ["derive"] }
 reqwest = { version = "0.13", features = [
     "blocking",
 ], default-features = false, optional = true }
-printpdf = "0.7.0"
+printpdf = { version = "0.9", default-features = false, features = [
+    "png",
+    "jpeg",
+] }
 phf = "0.13"
+
+# Foundation crates for the in-tree renderer (src/lib/render/).
+ttf-parser = "0.25"
+rustybuzz = "0.20"
+unicode-linebreak = "0.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [build-dependencies]
 phf_codegen = "0.13"

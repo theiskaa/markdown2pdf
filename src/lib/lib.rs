@@ -109,12 +109,11 @@ pub mod config;
 mod debug;
 pub mod fonts;
 pub mod markdown;
-pub mod pdf;
+pub mod render;
 pub mod styling;
 pub mod validation;
 
 use markdown::*;
-use pdf::Pdf;
 use std::error::Error;
 use std::fmt;
 
@@ -317,24 +316,7 @@ pub fn parse_into_file(
     })?;
 
     let style = config::load_config_from_source(config);
-    let pdf = Pdf::new(tokens, style, font_config)?;
-    let document = pdf.render_into_document();
-
-    if let Some(err) = Pdf::render(document, path) {
-        return Err(MdpError::PdfError {
-            message: err.clone(),
-            path: Some(path.to_string()),
-            suggestion: Some(if err.contains("Permission") || err.contains("denied") {
-                "Check that you have write permissions for this location".to_string()
-            } else if err.contains("No such file") {
-                "Make sure the output directory exists".to_string()
-            } else {
-                "Try a different output path or check available disk space".to_string()
-            }),
-        });
-    }
-
-    Ok(())
+    render::render_to_file(tokens, style, font_config, path)
 }
 
 /// Transforms Markdown content into a styled PDF document and returns the PDF data as bytes.
@@ -397,14 +379,7 @@ pub fn parse_into_bytes(
     })?;
 
     let style = config::load_config_from_source(config);
-    let pdf = Pdf::new(tokens, style, font_config)?;
-    let document = pdf.render_into_document();
-
-    Pdf::render_to_bytes(document).map_err(|err| MdpError::PdfError {
-        message: err,
-        path: None,
-        suggestion: Some("Check available memory and try with a smaller document".to_string()),
-    })
+    render::render_to_bytes(tokens, style, font_config)
 }
 
 #[cfg(test)]
