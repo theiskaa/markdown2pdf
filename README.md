@@ -60,10 +60,14 @@ cargo add markdown2pdf
 Or add to your Cargo.toml:
 
 ```toml
+# Minimal — local files only, no network, no SVG
 markdown2pdf = "0.4.0"
 ```
 
-### Feature Flags
+```toml
+# Full library: URL fetching + SVG rasterization
+markdown2pdf = { version = "0.4.0", features = ["fetch", "svg"] }
+```
 
 Two optional features. Both off by default.
 
@@ -77,16 +81,6 @@ Two optional features. Both off by default.
   README-style hero images and any SVG embedded via `![](path.svg)`
   or `<img src="...svg">`.
 
-```toml
-# Minimal — local files only, no network, no SVG
-markdown2pdf = "0.4.0"
-```
-
-```toml
-# Full library: URL fetching + SVG rasterization
-markdown2pdf = { version = "0.4.0", features = ["fetch", "svg"] }
-```
-
 To build the binary with URL fetching:
 
 ```bash
@@ -99,149 +93,65 @@ Or from source:
 cargo build --release --features fetch,svg
 ```
 
-## Usage
-
-The tool accepts file paths (`-p`), string content (`-s`), or URLs (`-u`) as input. Output path is specified with `-o`. Input precedence: path > url > string. Defaults to 'output.pdf'.
-
-Convert a Markdown file:
-```bash
-markdown2pdf -p "docs/resume.md" -o "resume.pdf"
-```
-
-Convert string content:
-```bash
-markdown2pdf -s "**bold text** *italic text*." -o "output.pdf"
-```
-
-Convert from URL (requires `fetch` feature):
-```bash
-markdown2pdf -u "https://raw.githubusercontent.com/user/repo/main/README.md" -o "readme.pdf"
-```
-
-Use `--verbose` for detailed output, `--quiet` for CI/CD pipelines, or `--dry-run` to validate syntax without generating PDF.
-
-## Fonts
-
-The font system supports four modes:
-
-- **Built-in fonts**: Helvetica, Times, Courier (fastest, no file I/O, works everywhere including Docker/CI with no system fonts)
-- **System fonts**: Searches standard OS font directories
-- **File paths**: Load directly from a TTF/OTF file
-- **Embedded bytes**: Load from compile-time included font data (great for GUI apps)
-
-```bash
-# Use built-in font (fastest)
-markdown2pdf -p document.md -o output.pdf
-```
-
-```bash
-# Use system font
-markdown2pdf -p document.md --default-font Georgia -o output.pdf
-```
-
-```bash
-# Use specific font file
-markdown2pdf -p document.md --default-font "/path/to/font.ttf" -o output.pdf
-```
-
-Font subsetting is enabled by default, reducing PDF size by embedding only the glyphs used in the document. A Unicode document with Arial Unicode MS produces ~45KB instead of 23MB.
-
-Built-in fonts work out of the box in any environment, including minimal Docker images (`rust:slim`, `debian:slim`, Alpine) and CI runners with no fonts installed. The library ships with embedded font metrics so no external font files are needed for Helvetica, Times, or Courier.
-
-Performance is ~20ms for standard documents with built-in fonts.
-
-## Library Usage
-
-Two main functions: `parse_into_file()` saves PDF to disk, `parse_into_bytes()` returns bytes for web services. Both parse Markdown, apply styling, and render output.
-
-Configuration uses `ConfigSource`: `Default` for built-in styling, `File("path")` for runtime loading, or `Embedded(content)` for compile-time embedding.
-
-
-```rust
-// Default styling
-parse_into_file(markdown, "output.pdf", ConfigSource::Default, None)?;
-```
-
-```rust
-// File-based configuration
-parse_into_file(markdown, "output.pdf", ConfigSource::File("config.toml"), None)?;
-```
-
-```rust
-// Embedded configuration
-const CONFIG: &str = include_str!("../config.toml");
-parse_into_file(markdown, "output.pdf", ConfigSource::Embedded(CONFIG), None)?;
-```
-
-Font configuration uses `FontConfig` for programmatic control:
-
-```rust
-use markdown2pdf::{parse_into_file, config::ConfigSource, fonts::FontConfig};
-
-let font_config = FontConfig::new()
-    .with_default_font("Georgia")
-    .with_code_font("Courier");
-
-parse_into_file(
-    markdown,
-    "output.pdf",
-    ConfigSource::Default,
-    Some(&font_config),
-)?;
-```
-
-You can also load fonts directly from embedded bytes using `FontSource`, which is useful for GUI applications or environments without filesystem access:
-
-```rust
-use markdown2pdf::{parse_into_file, config::ConfigSource, fonts::{FontConfig, FontSource}};
-
-static BODY_FONT: &[u8] = include_bytes!("path/to/body_font.ttf");
-static CODE_FONT: &[u8] = include_bytes!("path/to/code_font.ttf");
-
-let font_config = FontConfig::new()
-    .with_default_font_source(FontSource::bytes(BODY_FONT))
-    .with_code_font_source(FontSource::bytes(CODE_FONT));
-
-parse_into_file(
-    markdown,
-    "output.pdf",
-    ConfigSource::Default,
-    Some(&font_config),
-)?;
-```
-
-## Logging
-
-The library uses the [`log`](https://crates.io/crates/log) crate. No output by default. Enable with any `log`-compatible backend (e.g., `env_logger`) and set `RUST_LOG=markdown2pdf=info` or `debug` for diagnostics.
-
 ## Configuration
 
 Every visual choice — fonts, colors, page setup, headers / footers,
 table of contents, title page, alignment, per-block typography — lives
 in a TOML configuration. Six bundled themes (`default`, `github`,
-`academic`, `minimal`, `compact`, `modern`) give one-line styling, and
-per-block overrides handle the long tail.
-
-Pick a theme:
+`academic`, `minimal`, `compact`, `modern`) give one-line styling;
+per-block overrides handle the long tail; and **any value can be
+overridden per-run from the command line**, winning over the config
+file and theme.
 
 ```sh
+# A theme
 markdown2pdf -p input.md --theme github -o out.pdf
-```
 
-Or pass your own config:
-
-```sh
+# Your own config file
 markdown2pdf -p input.md -c my-config.toml -o out.pdf
+
+# Override individual values at runtime (highest priority)
+markdown2pdf -p input.md --title "Report" --font-size 11 --margin 2.5cm \
+  --page-numbers -V headings.h1.font_size_pt=28 -o out.pdf
 ```
 
-The full configuration guide with every field explained lives at
-**[`docs/Configuration.md`](docs/Configuration.md)**. The annotated
-reference config you can copy and tweak is at
-**[`docs/config.toml`](docs/config.toml)**.
+The full schema with every field explained is in
+**[`docs/Configuration.md`](docs/Configuration.md)**; an annotated,
+copy-and-tweak reference config is **[`docs/config.toml`](docs/config.toml)**.
 
-For library usage, pass a `ConfigSource::File(path)`,
-`ConfigSource::Embedded(toml_str)`, or `ConfigSource::Default` to
-`parse_into_bytes`.
+## Usage
+
+`markdown2pdf` converts a file (`-p`), a string (`-s`), or a URL
+(`-u`, requires the `fetch` build feature) to a PDF (`-o`, default
+`./output.pdf`).
+
+```bash
+markdown2pdf -p docs/resume.md -o resume.pdf
+markdown2pdf -s "**bold** *italic*." -o out.pdf
+markdown2pdf -p doc.md --theme academic --page-numbers -o out.pdf
+```
+
+`--verbose` / `--quiet` control output; `--dry-run` validates
+without writing; `--print-effective-config` prints the resolved
+style as TOML. Full flag reference, the config-override system, and
+font selection: **[`docs/CLI.md`](docs/CLI.md)**.
+
+## Library Usage
+
+`parse_into_file` writes a PDF; `parse_into_bytes` returns a
+`Vec<u8>` for web services. `ConfigSource` selects styling
+(`Default`, `Theme("github")`, `File(path)`, `Embedded(toml)`).
+
+```rust
+use markdown2pdf::{parse_into_file, config::ConfigSource};
+
+parse_into_file("# Hello".into(), "out.pdf", ConfigSource::Default, None)?;
+parse_into_file("# Doc".into(), "out.pdf", ConfigSource::Theme("academic"), None)?;
+```
+
+Pre-resolved styles + runtime overrides, fonts (name / path /
+embedded bytes), frontmatter, and the error model are covered in
+**[`docs/Library.md`](docs/Library.md)**.
 
 ## Markdown Coverage
 
