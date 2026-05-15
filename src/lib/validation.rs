@@ -144,27 +144,18 @@ fn detect_unicode_chars(markdown: &str) -> Option<Vec<char>> {
     }
 }
 
-/// Checks if font config has Unicode-capable fonts
+/// Checks if font config has Unicode-capable fonts.
+///
+/// Any external `default_font` (specified by name OR by explicit file
+/// source) takes the renderer's Identity-H Unicode emit path regardless
+/// of the font's name, so we only flag the built-in-fonts case — when
+/// nothing at all is specified, the renderer falls back to printpdf's
+/// Helvetica/Courier (WinAnsi-encoded, no Unicode).
 fn has_unicode_font(font_config: Option<&FontConfig>) -> bool {
-    if let Some(config) = font_config {
-        if let Some(font) = &config.default_font {
-            // Common Unicode fonts
-            let unicode_fonts = [
-                "noto",
-                "dejavu",
-                "liberation",
-                "arial unicode",
-                "roboto",
-                "sf pro",
-                "segoe",
-            ];
-            let font_lower = font.to_lowercase();
-            if unicode_fonts.iter().any(|uf| font_lower.contains(uf)) {
-                return true;
-            }
-        }
-    }
-    false
+    let Some(config) = font_config else {
+        return false;
+    };
+    config.default_font.is_some() || config.default_font_source.is_some()
 }
 
 /// Checks for common markdown syntax issues
@@ -291,5 +282,35 @@ mod tests {
         assert!(warnings
             .iter()
             .any(|w| w.kind == WarningKind::LargeDocument));
+    }
+
+    #[test]
+    fn external_font_suppresses_unicode_warning() {
+        // Any named external default font qualifies — the renderer's
+        // Identity-H path handles Unicode regardless of font family.
+        let cfg = FontConfig {
+            default_font: Some("Georgia".to_string()),
+            default_font_source: None,
+            code_font: None,
+            code_font_source: None,
+            enable_subsetting: true,
+        };
+        let warnings = validate_conversion("Hello café", Some(&cfg), None);
+        assert!(
+            warnings
+                .iter()
+                .all(|w| w.kind != WarningKind::UnicodeWithoutFont),
+            "external font should suppress the Unicode warning"
+        );
+    }
+
+    #[test]
+    fn missing_font_config_still_warns_about_unicode() {
+        // No font specified → renderer falls back to built-in
+        // WinAnsi-encoded Helvetica/Courier; warning still fires.
+        let warnings = validate_conversion("Hello café", None, None);
+        assert!(warnings
+            .iter()
+            .any(|w| w.kind == WarningKind::UnicodeWithoutFont));
     }
 }

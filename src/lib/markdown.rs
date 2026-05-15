@@ -43,8 +43,19 @@
 //!         ├── url: String
 //!         └── title: Option<String>
 
-use genpdfi::Alignment;
 use std::collections::HashMap;
+
+/// Column alignment for a GFM table.
+///
+/// Owned by the lexer so the parser has no dependency on the PDF backend.
+/// Renderers translate this to whatever alignment type their layout
+/// engine uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableAlignment {
+    Left,
+    Center,
+    Right,
+}
 
 include!(concat!(env!("OUT_DIR"), "/entities_table.rs"));
 
@@ -71,9 +82,10 @@ const BLOCK_ELEMENT_TAG_NAMES: &[&str] = &[
     "thead", "title", "tr", "track", "ul",
 ];
 
-/// Parsing context — determines which tokens are valid in the current location.
+/// Internal parsing-state context — which tokens are valid where.
+/// Not exposed: consumers use [`Lexer::parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParseContext {
+pub(crate) enum ParseContext {
     Root,       // top-level document
     ListItem,   // inside a list item (block context)
     TableCell,  // inside a table cell (restrict block-level tokens)
@@ -143,12 +155,36 @@ pub enum Token {
         url: String,
         title: Option<String>,
     },
+    /// GFM footnote reference: `[^label]` in body text. The renderer
+    /// resolves the label to a number (first-reference order) and
+    /// displays it as a superscript marker linked to the matching
+    /// definition.
+    FootnoteReference(String),
+    /// GFM footnote definition: `[^label]: definition` at the start
+    /// of a paragraph. The renderer collects all definitions and
+    /// emits a "Footnotes" section at the end of the document.
+    FootnoteDefinition {
+        label: String,
+        content: Vec<Token>,
+    },
+    /// PHP Markdown Extra-style definition list. A term line is
+    /// followed by one or more lines beginning with `:` introducing a
+    /// definition. Consecutive entries (term/definition groups) are
+    /// gathered into the same list when separated by at most one
+    /// blank line. The renderer emits each entry as a bold term plus
+    /// an indented definition body.
+    DefinitionList {
+        entries: Vec<DefinitionListEntry>,
+    },
     /// Plain text content
     Text(String),
-    /// Internal: a run of `*` or `_` delimiter characters before emphasis
-    /// matching. After `resolve_emphasis` runs, unmatched runs are flattened
-    /// into `Text` and matched runs become `Emphasis`. Should never escape
-    /// the lexer to consumers.
+    /// Internal lexer state — a run of `*` or `_` delimiter characters
+    /// awaiting emphasis matching. After `resolve_emphasis` runs,
+    /// unmatched runs flatten to `Text` and matched runs become
+    /// `Emphasis`. **Never appears in [`Lexer::parse`] output**; listed
+    /// only because Rust requires public enum variants to be public.
+    /// Hidden from rustdoc.
+    #[doc(hidden)]
     DelimRun {
         ch: char,
         count: usize,
@@ -156,11 +192,11 @@ pub enum Token {
     /// Table with header, alignment info, and rows
     Table {
         headers: Vec<Vec<Token>>,
-        aligns: Vec<Alignment>,
+        aligns: Vec<TableAlignment>,
         rows: Vec<Vec<Vec<Token>>>,
     },
     /// Text alignment for table columns
-    TableAlignment(Alignment),
+    TableAlignment(TableAlignment),
     /// HTML comment content
     HtmlComment(String),
     /// Raw inline HTML (`<span>`, `</span>`, `<br/>`, etc.)
@@ -182,6 +218,15 @@ pub enum Token {
     Strikethrough(Vec<Token>),
     /// Unknown or malformed token
     Unknown(String),
+}
+
+/// One entry in a [`Token::DefinitionList`]: a single term followed by
+/// one or more definitions. Each definition is its own inline-token
+/// sequence so the renderer can stack them on separate lines.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DefinitionListEntry {
+    pub term: Vec<Token>,
+    pub definitions: Vec<Vec<Token>>,
 }
 
 impl Token {
@@ -266,6 +311,29 @@ impl Token {
             Token::Strikethrough(nested) => {
                 for token in nested {
                     token.collect_text_recursive(result);
+                }
+            }
+            Token::FootnoteReference(label) => {
+                // Markers are rendered visually as numbers; for text-
+                // extraction purposes (validation, title fallback) we
+                // emit the raw label so the text isn't lost.
+                result.push_str(label);
+            }
+            Token::FootnoteDefinition { content, .. } => {
+                for token in content {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::DefinitionList { entries } => {
+                for entry in entries {
+                    for token in &entry.term {
+                        token.collect_text_recursive(result);
+                    }
+                    for def in &entry.definitions {
+                        for token in def {
+                            token.collect_text_recursive(result);
+                        }
+                    }
                 }
             }
             Token::Table {
@@ -858,6 +926,88 @@ fn is_paragraph_breaking_line_chars(chars: &[char], start: usize, end: usize) ->
     false
 }
 
+/// Returns the indent width when the line at `pos` is a valid
+/// footnote-definition continuation line: leading whitespace of at
+/// least 4 columns (4+ spaces, or a tab counted as 4), and at least
+/// one non-whitespace character after the indent. `None` for blank
+/// lines, EOF, or non-indented lines (which end the definition body).
+fn footnote_continuation_indent(chars: &[char], pos: usize) -> Option<usize> {
+    let mut p = pos;
+    let mut cols = 0usize;
+    while p < chars.len() {
+        match chars[p] {
+            ' ' => {
+                p += 1;
+                cols += 1;
+            }
+            '\t' => {
+                p += 1;
+                cols += 4;
+            }
+            _ => break,
+        }
+    }
+    if cols < 4 {
+        return None;
+    }
+    if p >= chars.len() || chars[p] == '\n' {
+        return None;
+    }
+    Some(p - pos)
+}
+
+/// True if `chars[pos..]` starts a definition-list definition marker
+/// line: up to 3 leading spaces, then `:`, then a single space or tab
+/// (definition body may be empty after that).
+fn is_definition_marker_line(chars: &[char], pos: usize) -> bool {
+    let mut p = pos;
+    let mut lead = 0;
+    while p < chars.len() && chars[p] == ' ' && lead < 3 {
+        p += 1;
+        lead += 1;
+    }
+    if p >= chars.len() || chars[p] != ':' {
+        return false;
+    }
+    p += 1;
+    if p >= chars.len() {
+        return false;
+    }
+    matches!(chars[p], ' ' | '\t' | '\n')
+}
+
+/// True if the given single line begins a block-level construct that
+/// must not be reinterpreted as a definition-list term (list markers,
+/// ATX/setext headings, blockquotes, fences, thematic breaks, table
+/// pipes, footnote / link refs). Keeps `Term\n: definition` detection
+/// from cannibalizing other block constructs.
+fn line_starts_block_construct(line: &[char]) -> bool {
+    let mut p = 0;
+    let mut lead = 0;
+    while p < line.len() && line[p] == ' ' && lead < 3 {
+        p += 1;
+        lead += 1;
+    }
+    if p >= line.len() {
+        return true; // blank line
+    }
+    let c = line[p];
+    match c {
+        '#' | '>' | '|' | '`' | '~' | '<' => true,
+        '*' | '-' | '+' | '_' => true,
+        '0'..='9' => {
+            let mut q = p;
+            while q < line.len() && line[q].is_ascii_digit() {
+                q += 1;
+            }
+            matches!(line.get(q), Some(&'.') | Some(&')'))
+        }
+        '[' => true,
+        ':' => true,
+        _ => false,
+    }
+}
+
 fn normalize_label(s: &str) -> String {
     // Per CommonMark, label comparison is the case-folded, whitespace-
     // collapsed RAW string — no backslash-escape or entity decoding. So
@@ -1347,14 +1497,49 @@ fn is_ascii_punctuation(c: char) -> bool {
     )
 }
 
-/// Error types that can occur during lexical analysis
+/// Error types that can occur during lexical analysis. `line` and
+/// `column` are 1-based and point at the source character that
+/// triggered the failure.
 #[derive(Debug)]
 pub enum LexerError {
-    /// Input ended unexpectedly while parsing a token
-    UnexpectedEndOfInput,
-    /// Encountered an invalid or malformed token
-    UnknownToken(String),
+    /// Input ended unexpectedly while parsing a token.
+    UnexpectedEndOfInput { line: usize, column: usize },
+    /// Encountered an invalid or malformed token.
+    UnknownToken {
+        message: String,
+        line: usize,
+        column: usize,
+    },
 }
+
+impl LexerError {
+    /// Returns the 1-based (line, column) where the failure occurred.
+    pub fn position(&self) -> (usize, usize) {
+        match self {
+            LexerError::UnexpectedEndOfInput { line, column } => (*line, *column),
+            LexerError::UnknownToken { line, column, .. } => (*line, *column),
+        }
+    }
+}
+
+impl std::fmt::Display for LexerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LexerError::UnexpectedEndOfInput { line, column } => write!(
+                f,
+                "unexpected end of input at line {}, column {}",
+                line, column
+            ),
+            LexerError::UnknownToken {
+                message,
+                line,
+                column,
+            } => write!(f, "{} (line {}, column {})", message, line, column),
+        }
+    }
+}
+
+impl std::error::Error for LexerError {}
 
 /// A lexical analyzer that converts Markdown text into a sequence of tokens.
 /// Handles nested structures and special Markdown syntax elements while maintaining
@@ -1464,6 +1649,24 @@ impl Lexer {
             let at_line_start = i == 0 || chars[i - 1] == '\n';
             if at_line_start {
                 line_start = i;
+                // Skip GFM footnote definitions (`[^label]: ...`) — they
+                // look like link reference definitions but aren't.
+                // Detected by `[^` (after up to 3 leading spaces).
+                let footnote_skip = {
+                    let mut p = i;
+                    let mut lead = 0usize;
+                    while p < chars.len() && chars[p] == ' ' && lead < 3 {
+                        p += 1;
+                        lead += 1;
+                    }
+                    p + 1 < chars.len() && chars[p] == '[' && chars[p + 1] == '^'
+                };
+                if footnote_skip {
+                    kept.push(chars[i]);
+                    i += 1;
+                    may_start_def = false;
+                    continue;
+                }
                 if may_start_def {
                     if let Some((label, url, title, end)) = try_parse_definition(&chars, i) {
                         definitions
@@ -1543,10 +1746,13 @@ impl Lexer {
         self.definitions = definitions;
     }
 
-    /// Parses the entire input string into a sequence of tokens for a given context.
-    /// Returns a Result containing either a Vec of parsed tokens or a LexerError.
-    /// Takes in a `ParseContext` that determines which tokens are valid in the current location.
-    pub fn parse_with_context(&mut self, ctx: ParseContext) -> Result<Vec<Token>, LexerError> {
+    /// Parses the input under a specific [`ParseContext`]. Used by
+    /// the lexer's own sub-lexers (blockquote, list item, table
+    /// cell, inline content). Consumers should call [`Lexer::parse`].
+    pub(crate) fn parse_with_context(
+        &mut self,
+        ctx: ParseContext,
+    ) -> Result<Vec<Token>, LexerError> {
         let mut tokens = Vec::new();
 
         while self.position < self.input.len() || !self.pending.is_empty() {
@@ -1758,6 +1964,16 @@ impl Lexer {
             }
         }
 
+        // PHP Markdown Extra-style definition lists: a non-marker term
+        // line followed immediately by a `: definition` line. Detection
+        // must run before the regular `parse_text` fallthrough so the
+        // term doesn't get glued into an adjacent paragraph.
+        if is_block_start && matches!(ctx, ParseContext::Root | ParseContext::BlockQuote) {
+            if let Some(tok) = self.try_parse_definition_list()? {
+                return Ok(Some(tok));
+            }
+        }
+
         let token = match current_char {
             '#' if is_block_start && allow_block_tokens(ctx) && self.is_atx_heading_start() => {
                 self.parse_heading()?
@@ -1817,7 +2033,7 @@ impl Lexer {
                     self.parse_text(ctx)?
                 }
             }
-            '[' => self.parse_link()?,
+            '[' => self.parse_bracket_dispatch(is_block_start)?,
             '!' => {
                 // Check if this is a valid image start (! followed by [)
                 if self.position + 1 < self.input.len() && self.input[self.position + 1] == '[' {
@@ -2563,6 +2779,278 @@ impl Lexer {
     /// `[text](url "title")`, full reference `[text][label]`, collapsed
     /// `[text][]`, and shortcut `[text]` (the last only when the label
     /// resolves; otherwise emits the brackets literally).
+    /// Dispatch `[` at the `next_token` level. Extracted as its own
+    /// method so `next_token` keeps a small stack frame — the
+    /// `parse_link` recursion path stresses frame budget on inputs
+    /// with hundreds of unclosed brackets.
+    #[inline(never)]
+    fn parse_bracket_dispatch(&mut self, is_block_start: bool) -> Result<Token, LexerError> {
+        // GFM footnote markers: `[^...]` discriminator on second char.
+        // Block-level definition (`[^id]: text`) only at line start.
+        if self.position + 1 < self.input.len()
+            && self.input[self.position + 1] == '^'
+        {
+            if is_block_start {
+                if let Some(tok) = self.try_parse_footnote_definition()? {
+                    return Ok(tok);
+                }
+            }
+            if let Some(tok) = self.try_parse_footnote_reference()? {
+                return Ok(tok);
+            }
+        }
+        self.parse_link()
+    }
+
+    /// Try to consume `[^label]` as a footnote reference. Returns
+    /// `Ok(None)` (restoring position) on any mismatch so the caller
+    /// can fall back to other `[...]` interpretations. Labels match
+    /// `[A-Za-z0-9_-]+`.
+    fn try_parse_footnote_reference(&mut self) -> Result<Option<Token>, LexerError> {
+        let start = self.position;
+        // Caller guarantees `self.input[start] == '['` and
+        // `self.input[start + 1] == '^'`.
+        let mut i = start + 2;
+        let label_start = i;
+        while i < self.input.len() {
+            let c = self.input[i];
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i == label_start || i >= self.input.len() || self.input[i] != ']' {
+            return Ok(None);
+        }
+        let label: String = self.input[label_start..i].iter().collect();
+        self.position = i + 1; // past the `]`
+        Ok(Some(Token::FootnoteReference(label)))
+    }
+
+    /// Try to consume `[^label]: rest-of-line` as a footnote
+    /// definition. Returns `Ok(None)` on any mismatch (position
+    /// restored). The content is the inline-tokenized remainder of
+    /// the line.
+    fn try_parse_footnote_definition(&mut self) -> Result<Option<Token>, LexerError> {
+        let start = self.position;
+        let mut i = start + 2;
+        let label_start = i;
+        while i < self.input.len() {
+            let c = self.input[i];
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i == label_start || i + 1 >= self.input.len() {
+            return Ok(None);
+        }
+        if self.input[i] != ']' || self.input[i + 1] != ':' {
+            return Ok(None);
+        }
+        let label: String = self.input[label_start..i].iter().collect();
+        // Skip over `]:` and any single space.
+        let mut content_start = i + 2;
+        if content_start < self.input.len() && self.input[content_start] == ' ' {
+            content_start += 1;
+        }
+        // Find the end of the first line (or input).
+        let mut content_end = content_start;
+        while content_end < self.input.len() && self.input[content_end] != '\n' {
+            content_end += 1;
+        }
+        let mut body: String = self.input[content_start..content_end].iter().collect();
+
+        // GFM multi-line continuation: after the first line, each
+        // 4-space- or tab-indented line that follows belongs to the
+        // same definition body. Stop at the first blank or
+        // non-indented line, or EOF. Continuation lines join with a
+        // single space (soft-break semantics inside an inline run).
+        let mut cursor = content_end;
+        while cursor < self.input.len() && self.input[cursor] == '\n' {
+            let line_start = cursor + 1;
+            if line_start >= self.input.len() {
+                break;
+            }
+            let indent_width = footnote_continuation_indent(&self.input, line_start);
+            let Some(indent_width) = indent_width else {
+                break;
+            };
+            let body_start = line_start + indent_width;
+            let mut line_end = body_start;
+            while line_end < self.input.len() && self.input[line_end] != '\n' {
+                line_end += 1;
+            }
+            // Skip purely-blank continuation lines (would otherwise
+            // collapse to nothing but signal "still in definition").
+            // We currently stop at any blank, so this is unreachable
+            // for v1; left as a guard for future paragraph support.
+            if line_end == body_start {
+                break;
+            }
+            body.push(' ');
+            body.extend(&self.input[body_start..line_end]);
+            cursor = line_end;
+            content_end = line_end;
+        }
+
+        let inner_tokens = if body.is_empty() {
+            Vec::new()
+        } else {
+            let mut sub = Lexer::new(body);
+            sub.parse_with_context(ParseContext::Inline)?
+        };
+
+        self.position = content_end;
+        Ok(Some(Token::FootnoteDefinition {
+            label,
+            content: inner_tokens,
+        }))
+    }
+
+    /// Try to consume one or more `Term\n: Definition` blocks as a
+    /// `Token::DefinitionList`. Returns `Ok(None)` (with position
+    /// preserved) unless the very next two lines satisfy the
+    /// term + colon-definition pattern.
+    ///
+    /// v1 captures term + definitions as raw text; inline markdown
+    /// inside (emphasis, code spans) is a follow-up.
+    #[inline(never)]
+    fn try_parse_definition_list(&mut self) -> Result<Option<Token>, LexerError> {
+        let start = self.position;
+
+        // Peek the first term line (no leading `:`).
+        let term_line_start = start;
+        let mut probe = start;
+        while probe < self.input.len() && self.input[probe] != '\n' {
+            probe += 1;
+        }
+        let term_line_end = probe;
+        if term_line_end == term_line_start {
+            return Ok(None);
+        }
+        let term_slice = &self.input[term_line_start..term_line_end];
+        if !term_slice.iter().any(|c| !c.is_whitespace()) {
+            return Ok(None);
+        }
+        // Don't pull list-marker / blockquote / fenced-code / ATX lines
+        // into a definition term — a stray `: text` on the next line
+        // shouldn't reinterpret them.
+        if line_starts_block_construct(term_slice) {
+            return Ok(None);
+        }
+        if probe >= self.input.len() || self.input[probe] != '\n' {
+            return Ok(None);
+        }
+        // The next line must be a definition marker line.
+        if !is_definition_marker_line(&self.input, probe + 1) {
+            return Ok(None);
+        }
+
+        // Detection confirmed; consume entries from `start`.
+        self.position = start;
+        let mut entries: Vec<DefinitionListEntry> = Vec::new();
+        loop {
+            let t_start = self.position;
+            while self.position < self.input.len() && self.current_char() != '\n' {
+                self.advance();
+            }
+            let term_text: String = self.input[t_start..self.position].iter().collect();
+            if self.position < self.input.len() {
+                self.advance(); // consume newline
+            }
+            let term_trimmed = term_text.trim();
+            let term_tokens = if term_trimmed.is_empty() {
+                Vec::new()
+            } else {
+                let mut sub = Lexer::new(term_trimmed.to_string());
+                sub.parse_with_context(ParseContext::Inline)?
+            };
+
+            let mut definitions: Vec<Vec<Token>> = Vec::new();
+            loop {
+                if !is_definition_marker_line(&self.input, self.position) {
+                    break;
+                }
+                let mut q = self.position;
+                let mut lead = 0;
+                while q < self.input.len() && self.input[q] == ' ' && lead < 3 {
+                    q += 1;
+                    lead += 1;
+                }
+                // Skip the `:` and the single mandatory space/tab.
+                q += 1;
+                if q < self.input.len() && (self.input[q] == ' ' || self.input[q] == '\t') {
+                    q += 1;
+                }
+                let d_start = q;
+                let mut d_end = q;
+                while d_end < self.input.len() && self.input[d_end] != '\n' {
+                    d_end += 1;
+                }
+                let def_text: String = self.input[d_start..d_end].iter().collect();
+                let def_trimmed = def_text.trim();
+                let def_tokens = if def_trimmed.is_empty() {
+                    Vec::new()
+                } else {
+                    let mut sub = Lexer::new(def_trimmed.to_string());
+                    sub.parse_with_context(ParseContext::Inline)?
+                };
+                definitions.push(def_tokens);
+                self.position = d_end;
+                if self.position < self.input.len() {
+                    self.advance(); // consume newline
+                }
+            }
+
+            entries.push(DefinitionListEntry {
+                term: term_tokens,
+                definitions,
+            });
+
+            // Optionally allow a single blank line, then look for
+            // another term + `:` pair.
+            let save = self.position;
+            let mut p = save;
+            if p < self.input.len() && self.input[p] == '\n' {
+                p += 1;
+            }
+            let next_term_start = p;
+            while p < self.input.len() && self.input[p] != '\n' {
+                p += 1;
+            }
+            if next_term_start == p {
+                break;
+            }
+            let candidate = &self.input[next_term_start..p];
+            if !candidate.iter().any(|c| !c.is_whitespace()) {
+                break;
+            }
+            if line_starts_block_construct(candidate) {
+                break;
+            }
+            if p >= self.input.len() || self.input[p] != '\n' {
+                break;
+            }
+            if !is_definition_marker_line(&self.input, p + 1) {
+                break;
+            }
+            self.position = save;
+            if self.position < self.input.len() && self.input[self.position] == '\n' {
+                self.advance();
+            }
+        }
+
+        if entries.is_empty() {
+            self.position = start;
+            return Ok(None);
+        }
+
+        Ok(Some(Token::DefinitionList { entries }))
+    }
+
     fn parse_link(&mut self) -> Result<Token, LexerError> {
         let bracket_pos = self.position;
         self.advance(); // skip '['
@@ -3539,11 +4027,12 @@ impl Lexer {
                 content.push(c);
                 self.advance();
             } else {
-                let (line, col) = self.pos_to_line_col(start_pos);
-                return Err(LexerError::UnknownToken(format!(
-                    "Unexpected character at line {}, column {}",
-                    line, col
-                )));
+                let (line, column) = self.pos_to_line_col(start_pos);
+                return Err(LexerError::UnknownToken {
+                    message: "Unexpected character".to_string(),
+                    line,
+                    column,
+                });
             }
         }
         Ok(Token::Text(content))
@@ -5264,16 +5753,16 @@ impl Lexer {
 
         // Parse alignment row
         let align_line = self.read_until_newline();
-        let aligns: Vec<Alignment> = align_line
+        let aligns: Vec<TableAlignment> = align_line
             .trim_matches('|')
             .split('|')
             .map(|s| {
                 let s = s.trim();
                 match (s.starts_with(':'), s.ends_with(':')) {
-                    (true, true) => Alignment::Center,
-                    (true, false) => Alignment::Left,
-                    (false, true) => Alignment::Right,
-                    _ => Alignment::Left,
+                    (true, true) => TableAlignment::Center,
+                    (true, false) => TableAlignment::Left,
+                    (false, true) => TableAlignment::Right,
+                    _ => TableAlignment::Left,
                 }
             })
             .collect();
@@ -5326,7 +5815,7 @@ impl Lexer {
         let mut aligns = aligns;
         match aligns.len().cmp(&headers.len()) {
             std::cmp::Ordering::Less => {
-                aligns.resize(headers.len(), Alignment::Left);
+                aligns.resize(headers.len(), TableAlignment::Left);
             }
             std::cmp::Ordering::Greater => {
                 aligns.truncate(headers.len());

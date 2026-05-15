@@ -1,0 +1,43 @@
+# Modern theme — clean sans, accent color on headings and links,
+# subtle backgrounds. Closest match to many SaaS docs styles.
+inherits = "default"
+
+[defaults]
+font_family = "Helvetica"
+font_size_pt = 10.5
+line_height = 1.6
+text_color = "#1B1F23"
+
+[headings.h1]
+font_size_pt = 24.0
+text_color = "#0B66B5"
+text_align = "left"
+margin_before_pt = 8.0
+margin_after_pt = 4.0
+[headings.h2]
+font_size_pt = 18.0
+text_color = "#0B66B5"
+[headings.h3]
+font_size_pt = 14.0
+text_color = "#1B1F23"
+
+[code_block]
+background_color = "#FAFBFC"
+text_color = "#1B1F23"
+padding = { top = 8.0, right = 12.0, bottom = 8.0, left = 12.0 }
+[code_block.border]
+all = { width_pt = 0.5, color = "#E1E4E8", style = "solid" }
+
+[code_inline]
+background_color = "#FAFBFC"
+
+[blockquote]
+font_style = "italic"
+text_color = "#1B1F23"
+background_color = "#FFFFFF"
+[blockquote.border]
+left = { width_pt = 4.0, color = "#0B66B5", style = "solid" }
+
+[link]
+text_color = "#0B66B5"
+underline = false

@@ -39,7 +39,7 @@ fn get_markdown_input(matches: &clap::ArgMatches) -> Result<String, AppError> {
         #[cfg(not(feature = "fetch"))]
         {
             Err(AppError::ConversionError(
-                "URL fetching is not enabled. Please rebuild with --features fetch or --features native-tls".to_string()
+                "URL fetching is not enabled. Please rebuild with --features fetch".to_string()
             ))
         }
     } else if let Some(markdown_string) = matches.get_one::<String>("string") {
@@ -70,6 +70,23 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
 
     // Check for dry-run mode
     let dry_run = matches.get_flag("dry-run");
+
+    // `--print-effective-config` resolves the style and dumps it as
+    // TOML; no markdown input required. Handled before any markdown
+    // I/O so users can inspect the effective config in isolation.
+    if matches.get_flag("print-effective-config") {
+        let config_source = match matches.get_one::<String>("config-path") {
+            Some(p) => markdown2pdf::config::ConfigSource::File(p.as_str()),
+            None => markdown2pdf::config::ConfigSource::Default,
+        };
+        let theme_override = matches.get_one::<String>("theme").map(|s| s.as_str());
+        let style = markdown2pdf::config::load_config_strict(config_source, theme_override)
+            .map_err(|e| AppError::ConversionError(e.to_string()))?;
+        let toml = toml::to_string_pretty(&style)
+            .map_err(|e| AppError::ConversionError(e.to_string()))?;
+        println!("{}", toml);
+        return Ok(());
+    }
 
     let markdown = get_markdown_input(&matches)?;
     let output_path = get_output_path(&matches)?;
@@ -148,10 +165,18 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         }
     }
 
-    markdown2pdf::parse_into_file(
+    let config_source = match matches.get_one::<String>("config-path") {
+        Some(p) => markdown2pdf::config::ConfigSource::File(p.as_str()),
+        None => markdown2pdf::config::ConfigSource::Default,
+    };
+    let theme_override = matches.get_one::<String>("theme").map(|s| s.as_str());
+    let resolved_style = markdown2pdf::config::load_config_strict(config_source, theme_override)
+        .map_err(|e| AppError::ConversionError(e.to_string()))?;
+
+    markdown2pdf::parse_into_file_with_style(
         markdown,
         output_path_str,
-        markdown2pdf::config::ConfigSource::Default,
+        resolved_style,
         font_config.as_ref(),
     )
     .map_err(|e| AppError::ConversionError(e.to_string()))?;
@@ -257,6 +282,25 @@ fn main() {
                 .long("dry-run")
                 .help("Validate input without generating PDF")
                 .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("config-path")
+                .short('c')
+                .long("config-path")
+                .value_name("FILE_PATH")
+                .help("Path to a markdown2pdf config.toml (overrides built-in defaults)"),
+        )
+        .arg(
+            Arg::new("theme")
+                .long("theme")
+                .value_name("NAME")
+                .help("Theme preset: default | github | academic | minimal | compact | modern"),
+        )
+        .arg(
+            Arg::new("print-effective-config")
+                .long("print-effective-config")
+                .help("Print the fully-resolved style as TOML and exit")
+                .action(clap::ArgAction::SetTrue),
         );
 
     let matches = cmd.clone().get_matches();
@@ -266,7 +310,12 @@ fn main() {
     #[cfg(not(feature = "fetch"))]
     let has_url = false;
 
-    if !matches.contains_id("path") && !matches.contains_id("string") && !has_url {
+    let only_printing_config = matches.get_flag("print-effective-config");
+    if !only_printing_config
+        && !matches.contains_id("path")
+        && !matches.contains_id("string")
+        && !has_url
+    {
         cmd.print_help().unwrap();
         println!();
         process::exit(1);

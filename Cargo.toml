@@ -1,7 +1,8 @@
 [package]
 name = "markdown2pdf"
 version = "0.4.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 authors = ["Ismael Sh <me@theiskaa.com>"]
 description = "Create PDF with Markdown files (a md to pdf transpiler)"
 readme = "README.md"
@@ -20,26 +21,41 @@ path = "src/bin/main.rs"
 
 [features]
 default = []
-fetch = ["dep:reqwest"]
-rustls-tls = ["fetch", "reqwest/rustls-tls"]
-native-tls = ["fetch", "reqwest/native-tls"]
+fetch = ["dep:reqwest", "reqwest/rustls"]
+svg = ["dep:resvg"]
 
 [dependencies]
 log = "0.4"
-genpdfi = "0.2.7"
-dirs = "4.0.0"
-toml = "0.8.19"
-rust-embed = "8.5.0"
-clap = { version = "4.0", features = ["derive"] }
-reqwest = { version = "0.12.9", features = [
+toml = "1.1"
+serde = { version = "1", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
+reqwest = { version = "0.13", features = [
     "blocking",
 ], default-features = false, optional = true }
-printpdf = "0.7.0"
-phf = "0.11"
+printpdf = { version = "0.9", default-features = false, features = [
+    "png",
+    "jpeg",
+] }
+phf = "0.13"
+
+# Foundation crates for the in-tree renderer (src/lib/render/).
+ttf-parser = "0.25"
+rustybuzz = "0.20"
+unicode-linebreak = "0.1"
+# default `variable-fonts` only subsets CFF2-variable; we don't use it.
+subsetter = { version = "0.2", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+hyphenation = { version = "0.8", default-features = false, features = ["embed_en-us"] }
+lopdf = { version = "0.39", default-features = false }
+resvg = { version = "0.47", default-features = false, optional = true }
 
 [build-dependencies]
-phf_codegen = "0.11"
+phf_codegen = "0.13"
 serde_json = "1"
+
+[dev-dependencies]
+lopdf = { version = "0.39", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [profile.release]
 lto = "thin"

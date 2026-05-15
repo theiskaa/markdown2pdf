@@ -1,3 +1,4 @@
+use crate::markdown;
 use crate::markdown::Token;
 
 impl Token {
@@ -264,9 +265,9 @@ impl Token {
                 result.push_str(&format!("{}\"aligns\": [\n", inner_indent));
                 for (i, align) in aligns.iter().enumerate() {
                     let align_str = match align {
-                        genpdfi::Alignment::Left => "Left",
-                        genpdfi::Alignment::Center => "Center",
-                        genpdfi::Alignment::Right => "Right",
+                        markdown::TableAlignment::Left => "Left",
+                        markdown::TableAlignment::Center => "Center",
+                        markdown::TableAlignment::Right => "Right",
                     };
                     result.push_str(&format!(
                         "{}\"{}\"",
@@ -312,9 +313,9 @@ impl Token {
 
             Token::TableAlignment(align) => {
                 let align_str = match align {
-                    genpdfi::Alignment::Left => "Left",
-                    genpdfi::Alignment::Center => "Center",
-                    genpdfi::Alignment::Right => "Right",
+                    markdown::TableAlignment::Left => "Left",
+                    markdown::TableAlignment::Center => "Center",
+                    markdown::TableAlignment::Right => "Right",
                 };
                 format!(
                     "{}{{\n{}\"type\": \"TableAlignment\",\n{}\"alignment\": \"{}\"\n{}}}",
@@ -380,6 +381,79 @@ impl Token {
                 for (i, token) in body.iter().enumerate() {
                     result.push_str(&token.to_readable_json(indent_level + 2));
                     if i < body.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}]\n", inner_indent));
+                result.push_str(&format!("{}}}", indent));
+                result
+            }
+            Token::FootnoteReference(label) => format!(
+                "{}{{\n{}\"type\": \"FootnoteReference\",\n{}\"label\": \"{}\"\n{}}}",
+                indent,
+                inner_indent,
+                inner_indent,
+                label.replace("\"", "\\\""),
+                indent
+            ),
+            Token::FootnoteDefinition { label, content } => {
+                let mut result = format!("{}{{\n", indent);
+                result.push_str(&format!(
+                    "{}\"type\": \"FootnoteDefinition\",\n",
+                    inner_indent
+                ));
+                result.push_str(&format!(
+                    "{}\"label\": \"{}\",\n",
+                    inner_indent,
+                    label.replace("\"", "\\\"")
+                ));
+                result.push_str(&format!("{}\"content\": [\n", inner_indent));
+                for (i, token) in content.iter().enumerate() {
+                    result.push_str(&token.to_readable_json(indent_level + 2));
+                    if i < content.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}]\n", inner_indent));
+                result.push_str(&format!("{}}}", indent));
+                result
+            }
+            Token::DefinitionList { entries } => {
+                let mut result = format!("{}{{\n", indent);
+                result.push_str(&format!("{}\"type\": \"DefinitionList\",\n", inner_indent));
+                result.push_str(&format!("{}\"entries\": [\n", inner_indent));
+                for (i, entry) in entries.iter().enumerate() {
+                    result.push_str(&format!("{}  {{\n", inner_indent));
+                    result.push_str(&format!("{}    \"term\": [\n", inner_indent));
+                    for (j, token) in entry.term.iter().enumerate() {
+                        result.push_str(&token.to_readable_json(indent_level + 3));
+                        if j < entry.term.len() - 1 {
+                            result.push(',');
+                        }
+                        result.push('\n');
+                    }
+                    result.push_str(&format!("{}    ],\n", inner_indent));
+                    result.push_str(&format!("{}    \"definitions\": [\n", inner_indent));
+                    for (j, def) in entry.definitions.iter().enumerate() {
+                        result.push_str(&format!("{}      [\n", inner_indent));
+                        for (k, token) in def.iter().enumerate() {
+                            result.push_str(&token.to_readable_json(indent_level + 4));
+                            if k < def.len() - 1 {
+                                result.push(',');
+                            }
+                            result.push('\n');
+                        }
+                        result.push_str(&format!("{}      ]", inner_indent));
+                        if j < entry.definitions.len() - 1 {
+                            result.push(',');
+                        }
+                        result.push('\n');
+                    }
+                    result.push_str(&format!("{}    ]\n", inner_indent));
+                    result.push_str(&format!("{}  }}", inner_indent));
+                    if i < entries.len() - 1 {
                         result.push(',');
                     }
                     result.push('\n');
@@ -480,6 +554,10 @@ impl Token {
                 };
                 format!("Image({}, {}, title={})", list(alt), quote(url), t)
             }
+            Token::FootnoteReference(label) => format!("FootnoteRef({})", quote(label)),
+            Token::FootnoteDefinition { label, content } => {
+                format!("FootnoteDef({}, {})", quote(label), list(content))
+            }
             Token::Text(s) => format!("Text({})", quote(s)),
             Token::DelimRun { ch, count } => {
                 format!("DelimRun({}{})", ch, count)
@@ -493,9 +571,9 @@ impl Token {
                 let aligns_s: Vec<&str> = aligns
                     .iter()
                     .map(|a| match a {
-                        genpdfi::Alignment::Left => "L",
-                        genpdfi::Alignment::Center => "C",
-                        genpdfi::Alignment::Right => "R",
+                        markdown::TableAlignment::Left => "L",
+                        markdown::TableAlignment::Center => "C",
+                        markdown::TableAlignment::Right => "R",
                     })
                     .collect();
                 let rs: Vec<String> = rows
@@ -514,9 +592,9 @@ impl Token {
             }
             Token::TableAlignment(a) => {
                 let s = match a {
-                    genpdfi::Alignment::Left => "L",
-                    genpdfi::Alignment::Center => "C",
-                    genpdfi::Alignment::Right => "R",
+                    markdown::TableAlignment::Left => "L",
+                    markdown::TableAlignment::Center => "C",
+                    markdown::TableAlignment::Right => "R",
                 };
                 format!("TableAlignment({})", s)
             }
@@ -527,6 +605,16 @@ impl Token {
             Token::HardBreak => "HardBreak".to_string(),
             Token::HorizontalRule => "HorizontalRule".to_string(),
             Token::Strikethrough(body) => format!("Strikethrough({})", list(body)),
+            Token::DefinitionList { entries } => {
+                let es: Vec<String> = entries
+                    .iter()
+                    .map(|e| {
+                        let defs: Vec<String> = e.definitions.iter().map(|d| list(d)).collect();
+                        format!("({} -> [{}])", list(&e.term), defs.join(", "))
+                    })
+                    .collect();
+                format!("DefinitionList([{}])", es.join(", "))
+            }
             Token::Unknown(s) => format!("Unknown({})", quote(s)),
         }
     }

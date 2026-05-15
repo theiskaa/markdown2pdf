@@ -50,6 +50,12 @@ mod fenced_code_extended_tests;
 #[path = "markdown/fenced_code_info_string_tests.rs"]
 mod fenced_code_info_string_tests;
 
+#[path = "markdown/definition_list_tests.rs"]
+mod definition_list_tests;
+
+#[path = "markdown/footnote_tests.rs"]
+mod footnote_tests;
+
 #[path = "markdown/gfm_trio_tests.rs"]
 mod gfm_trio_tests;
 

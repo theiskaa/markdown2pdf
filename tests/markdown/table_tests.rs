@@ -7,7 +7,7 @@ use markdown2pdf::markdown::*;
 use super::common::parse;
 
 
-fn first_table(tokens: &[Token]) -> (&Vec<Vec<Token>>, &Vec<genpdfi::Alignment>, &Vec<Vec<Vec<Token>>>) {
+fn first_table(tokens: &[Token]) -> (&Vec<Vec<Token>>, &Vec<markdown2pdf::markdown::TableAlignment>, &Vec<Vec<Vec<Token>>>) {
     let Some(Token::Table { headers, aligns, rows }) =
         tokens.iter().find(|t| matches!(t, Token::Table { .. }))
     else {
@@ -46,21 +46,21 @@ fn single_column_table() {
 fn alignment_left() {
     let tokens = parse("| a |\n| :--- |\n| x |\n");
     let (_, aligns, _) = first_table(&tokens);
-    assert!(matches!(aligns[0], genpdfi::Alignment::Left));
+    assert!(matches!(aligns[0], markdown2pdf::markdown::TableAlignment::Left));
 }
 
 #[test]
 fn alignment_right() {
     let tokens = parse("| a |\n| ---: |\n| x |\n");
     let (_, aligns, _) = first_table(&tokens);
-    assert!(matches!(aligns[0], genpdfi::Alignment::Right));
+    assert!(matches!(aligns[0], markdown2pdf::markdown::TableAlignment::Right));
 }
 
 #[test]
 fn alignment_center() {
     let tokens = parse("| a |\n| :---: |\n| x |\n");
     let (_, aligns, _) = first_table(&tokens);
-    assert!(matches!(aligns[0], genpdfi::Alignment::Center));
+    assert!(matches!(aligns[0], markdown2pdf::markdown::TableAlignment::Center));
 }
 
 #[test]

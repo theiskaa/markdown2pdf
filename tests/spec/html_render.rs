@@ -456,22 +456,50 @@ fn render_inline_token(t: &Token, out: &mut String) {
             render_blocks(std::slice::from_ref(t), out, false);
         }
         Token::Unknown(s) => out.push_str(&escape_text(s)),
+        Token::FootnoteReference(label) => {
+            out.push_str("<sup class=\"footnote-ref\">");
+            out.push_str(&escape_text(label));
+            out.push_str("</sup>");
+        }
+        Token::FootnoteDefinition { label, content } => {
+            // CommonMark HTML render emits these as a `<div class="footnote">`
+            // — for spec coverage we just escape the contents.
+            out.push_str("<div class=\"footnote\" id=\"");
+            out.push_str(&escape_text(label));
+            out.push_str("\">");
+            render_inlines(content, out);
+            out.push_str("</div>");
+        }
+        Token::DefinitionList { entries } => {
+            out.push_str("<dl>");
+            for entry in entries {
+                out.push_str("<dt>");
+                render_inlines(&entry.term, out);
+                out.push_str("</dt>");
+                for def in &entry.definitions {
+                    out.push_str("<dd>");
+                    render_inlines(def, out);
+                    out.push_str("</dd>");
+                }
+            }
+            out.push_str("</dl>");
+        }
     }
 }
 
 fn render_table(
     headers: &[Vec<Token>],
-    aligns: &[genpdfi::Alignment],
+    aligns: &[markdown2pdf::markdown::TableAlignment],
     rows: &[Vec<Vec<Token>>],
     out: &mut String,
 ) {
     out.push_str("<table>\n<thead>\n<tr>\n");
     for (i, cell) in headers.iter().enumerate() {
-        let align = aligns.get(i).copied().unwrap_or(genpdfi::Alignment::Left);
+        let align = aligns.get(i).copied().unwrap_or(markdown2pdf::markdown::TableAlignment::Left);
         let style = match align {
-            genpdfi::Alignment::Left => "",
-            genpdfi::Alignment::Center => " style=\"text-align: center\"",
-            genpdfi::Alignment::Right => " style=\"text-align: right\"",
+            markdown2pdf::markdown::TableAlignment::Left => "",
+            markdown2pdf::markdown::TableAlignment::Center => " style=\"text-align: center\"",
+            markdown2pdf::markdown::TableAlignment::Right => " style=\"text-align: right\"",
         };
         out.push_str(&format!("<th{}>", style));
         render_inlines(cell, out);
@@ -483,11 +511,11 @@ fn render_table(
         for row in rows {
             out.push_str("<tr>\n");
             for (i, cell) in row.iter().enumerate() {
-                let align = aligns.get(i).copied().unwrap_or(genpdfi::Alignment::Left);
+                let align = aligns.get(i).copied().unwrap_or(markdown2pdf::markdown::TableAlignment::Left);
                 let style = match align {
-                    genpdfi::Alignment::Left => "",
-                    genpdfi::Alignment::Center => " style=\"text-align: center\"",
-                    genpdfi::Alignment::Right => " style=\"text-align: right\"",
+                    markdown2pdf::markdown::TableAlignment::Left => "",
+                    markdown2pdf::markdown::TableAlignment::Center => " style=\"text-align: center\"",
+                    markdown2pdf::markdown::TableAlignment::Right => " style=\"text-align: right\"",
                 };
                 out.push_str(&format!("<td{}>", style));
                 render_inlines(cell, out);

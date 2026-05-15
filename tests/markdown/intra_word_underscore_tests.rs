@@ -103,9 +103,9 @@ fn underscore_emphasis_with_space_flank() {
     let tokens = parse("foo _bar_ baz");
     // foo_<space> Text, then _bar_ Emphasis, then baz Text
     // (existing whitespace handling collapses the space after closing `_`)
-    assert!(matches!(tokens[0], Token::Text(ref s) if s.starts_with("foo")));
+    assert!(matches!(&tokens[0], Token::Text(s) if s.starts_with("foo")));
     assert!(matches!(tokens[1], Token::Emphasis { level: 1, .. }));
-    assert!(matches!(tokens[2], Token::Text(ref s) if s.contains("baz")));
+    assert!(matches!(&tokens[2], Token::Text(s) if s.contains("baz")));
     if let Token::Emphasis { content, .. } = &tokens[1] {
         let inner = Token::collect_all_text(content);
         assert!(inner.contains("bar"));
@@ -115,9 +115,9 @@ fn underscore_emphasis_with_space_flank() {
 #[test]
 fn underscore_emphasis_in_parens() {
     let tokens = parse("(_foo_)");
-    assert!(matches!(tokens[0], Token::Text(ref s) if s == "("));
+    assert!(matches!(&tokens[0], Token::Text(s) if s == "("));
     assert!(matches!(tokens[1], Token::Emphasis { level: 1, .. }));
-    assert!(matches!(tokens[2], Token::Text(ref s) if s == ")"));
+    assert!(matches!(&tokens[2], Token::Text(s) if s == ")"));
 }
 
 // CommonMark-tricky: outer _ open/close, inner _ is intra-word
@@ -140,9 +140,9 @@ fn outer_emphasis_with_inner_intra_word_underscore() {
 fn star_emphasis_intra_word_still_emphasis() {
     // * is allowed intra-word
     let tokens = parse("a*b*c");
-    assert!(matches!(tokens[0], Token::Text(ref s) if s == "a"));
+    assert!(matches!(&tokens[0], Token::Text(s) if s == "a"));
     assert!(matches!(tokens[1], Token::Emphasis { level: 1, .. }));
-    assert!(matches!(tokens[2], Token::Text(ref s) if s == "c"));
+    assert!(matches!(&tokens[2], Token::Text(s) if s == "c"));
 }
 
 #[test]

@@ -9,11 +9,11 @@
 
 </p>
 
-markdown2pdf converts Markdown to PDF using a lexical analyzer and PDF rendering engine. The library tokenizes Markdown into semantic elements, applies styling rules from TOML configuration, and generates styled PDF output.
+markdown2pdf converts Markdown to PDF with a lexical analyzer and an in-tree rendering engine built directly on `printpdf`. The library tokenizes Markdown into semantic elements, resolves styling from a TOML configuration, and lays out the PDF itself — no third-party document engine in between.
 
-Both binary and library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
+Both a binary and a library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
 
-The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions and currently covers around 85% of the spec, including escapes, emphasis flanking, reference links, indented and fenced code blocks, blockquotes with nested blocks, lazy list continuation, autolinks, entities, hard breaks, GFM tables, task lists and strikethrough. See [Markdown coverage](#markdown-coverage) below for the full breakdown. Supports multiple input sources and outputs to files or bytes for in-memory processing.
+The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions and passes 100% of the CommonMark spec suite. The renderer covers headings with bookmarks and anchors, inline emphasis (bold, italic, monospace, strikethrough, underline, superscript, subscript, small-caps), ordered/unordered/task lists with arbitrary nesting, GFM tables with per-column alignment and header repeat, blockquotes, fenced and indented code, images (local, URL, and SVG), footnotes, definition lists, cross-references, and inline HTML. Document features include six bundled themes, per-block styling, configurable page setup, headers and footers, an auto-generated table of contents, a title page, YAML/TOML frontmatter, and PDF metadata. Multiple input sources; output to a file or to bytes for in-memory processing.
 
 ## Install binary
 
@@ -65,37 +65,38 @@ markdown2pdf = "0.4.0"
 
 ### Feature Flags
 
-The library provides optional feature flags to control dependencies:
+Two optional features. Both off by default.
 
-- **Default (no features)**: Core PDF generation from files and strings. No network dependencies.
-- **`fetch`**: Enables URL fetching support (requires one of the TLS features below).
-- **`native-tls`**: Enables URL fetching with native TLS/OpenSSL (recommended for most users).
-- **`rustls-tls`**: Enables URL fetching with pure-Rust TLS implementation (useful for static linking or avoiding OpenSSL).
+- **`fetch`** — URL fetching support for remote images and `-u` /
+  `--url` markdown input. Uses pure-Rust TLS (rustls), no
+  system-OpenSSL needed; works in `rust:slim` and Alpine. If you
+  need native-TLS for corporate certificate stores, depend on
+  `reqwest` directly with your preferred backend and Cargo will
+  unify.
+- **`svg`** — SVG image rasterization via `resvg`. Required for
+  README-style hero images and any SVG embedded via `![](path.svg)`
+  or `<img src="...svg">`.
 
 ```toml
-# Minimal installation (no network dependencies)
+# Minimal — local files only, no network, no SVG
 markdown2pdf = "0.4.0"
 ```
 
 ```toml
-# With URL fetching support (native TLS)
-markdown2pdf = { version = "0.4.0", features = ["native-tls"] }
-```
-```toml
-# With URL fetching support (rustls)
-markdown2pdf = { version = "0.4.0", features = ["rustls-tls"] }
+# Full library: URL fetching + SVG rasterization
+markdown2pdf = { version = "0.4.0", features = ["fetch", "svg"] }
 ```
 
-**Note**: Binary installations via cargo or prebuilt downloads do not include URL fetching by default. To build the binary with URL support:
+To build the binary with URL fetching:
 
-*Install with URL fetching support:*
 ```bash
-cargo install markdown2pdf --features native-tls
+cargo install markdown2pdf --features fetch
 ```
 
-*Or build from source:*
+Or from source:
+
 ```bash
-cargo build --release --features native-tls
+cargo build --release --features fetch,svg
 ```
 
 ## Usage
@@ -112,7 +113,7 @@ Convert string content:
 markdown2pdf -s "**bold text** *italic text*." -o "output.pdf"
 ```
 
-Convert from URL (requires `native-tls` or `rustls-tls` feature):
+Convert from URL (requires `fetch` feature):
 ```bash
 markdown2pdf -u "https://raw.githubusercontent.com/user/repo/main/README.md" -o "readme.pdf"
 ```
@@ -215,29 +216,36 @@ The library uses the [`log`](https://crates.io/crates/log) crate. No output by d
 
 ## Configuration
 
-TOML configuration customizes fonts, colors, spacing, and visual properties. Three loading methods: default styles, runtime files, or compile-time embedding.
+Every visual choice — fonts, colors, page setup, headers / footers,
+table of contents, title page, alignment, per-block typography — lives
+in a TOML configuration. Six bundled themes (`default`, `github`,
+`academic`, `minimal`, `compact`, `modern`) give one-line styling, and
+per-block overrides handle the long tail.
 
-For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the example configuration from `markdown2pdfrc.example.toml`. For library usage with embedded config, create your configuration file and embed it using `include_str!()`.
+Pick a theme:
+
+```sh
+markdown2pdf -p input.md --theme github -o out.pdf
+```
+
+Or pass your own config:
+
+```sh
+markdown2pdf -p input.md -c my-config.toml -o out.pdf
+```
+
+The full configuration guide with every field explained lives at
+**[`docs/Configuration.md`](docs/Configuration.md)**. The annotated
+reference config you can copy and tweak is at
+**[`docs/config.toml`](docs/config.toml)**.
+
+For library usage, pass a `ConfigSource::File(path)`,
+`ConfigSource::Embedded(toml_str)`, or `ConfigSource::Default` to
+`parse_into_bytes`.
 
 ## Markdown Coverage
 
-Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). CommonMark spec pass rate: **100% (652/652)** — every section passes. Backed by ~740 inline unit tests organized in `tests/markdown/`, the full spec runner in `tests/commonmark_spec.rs`, and a 36-test robustness suite in `tests/stress.rs`.
-
-| Block-level                          | Status  | Inline                               | Status  |
-|--------------------------------------|---------|--------------------------------------|---------|
-| ATX headings (`#` to `######`)       | Full    | Backslash escapes                    | Full    |
-| Setext headings (`===` / `---`)      | Full    | Entity / numeric references          | Full    |
-| Paragraphs                           | Full    | Code spans (single & multi-backtick) | Full    |
-| Thematic breaks (`---` `***` `___`)  | Full    | Emphasis & strong (`*` and `_`)      | Full    |
-| Indented code blocks (4-space)       | Full    | Inline links                         | Full    |
-| Fenced code blocks (`` ``` ``, `~~~`)| Full    | Reference links / images             | Full    |
-| Blockquotes                          | Full    | Autolinks (`<https://…>`, `<email>`) | Full    |
-| Bullet lists (`-` `+` `*`)           | Full    | Images (rendered as styled link)     | Partial |
-| Ordered lists (`1.` and `1)`)        | Full    | Strikethrough (`~~text~~`)           | Full    |
-| Tables (GFM)                         | Full    | Raw inline HTML                      | Full    |
-| Task list items (GFM)                | Full    | Hard / soft line breaks              | Full    |
-| Reference link definitions           | Full    |                                      |         |
-| HTML blocks (7 kinds)                | Full    |                                      |         |
+Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). CommonMark spec pass rate: **100% (652/652)** — every section passes. Backed by ~800 inline lexer unit tests in `tests/markdown/`, the full spec runner in `tests/commonmark_spec.rs`, a robustness suite in `tests/stress.rs`, and an adversarial / structural renderer test suite in `tests/render/` (object-graph validation, malformed input, image-pipeline, and config-validation cases).
 
 ## Contributing
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.
