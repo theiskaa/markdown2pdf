@@ -34,3 +34,6 @@ mod config_validation;
 
 #[path = "render/whitespace.rs"]
 mod whitespace;
+
+#[path = "render/image_pipeline.rs"]
+mod image_pipeline;

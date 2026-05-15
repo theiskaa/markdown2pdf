@@ -1330,6 +1330,37 @@ impl<'a> Engine<'a> {
             }
         };
 
+        // Degenerate dimensions: a 0-px image can't produce a valid
+        // XObject. Treat it like a decode failure.
+        if img.width() == 0 || img.height() == 0 {
+            log::warn!("image {:?} has zero dimension; skipping", path);
+            self.render_image_fallback(alt);
+            return;
+        }
+
+        // Bound decoded pixel dimensions. The URL fetch cap limits the
+        // *download* size, but a small compressed PNG can decompress
+        // to an enormous raster (memory + PDF-size blowup). Mirror the
+        // SVG ceiling: downscale so neither dimension exceeds
+        // `MAX_IMG_PX`, preserving aspect ratio.
+        const MAX_IMG_PX: u32 = 4000;
+        let img = if img.width() > MAX_IMG_PX || img.height() > MAX_IMG_PX {
+            log::warn!(
+                "image {:?} is {}x{}; downscaling to fit {}px",
+                path,
+                img.width(),
+                img.height(),
+                MAX_IMG_PX
+            );
+            img.resize(
+                MAX_IMG_PX,
+                MAX_IMG_PX,
+                image::imageops::FilterType::Triangle,
+            )
+        } else {
+            img
+        };
+
         let raw = match RawImage::from_dynamic_image(img) {
             Ok(r) => r,
             Err(e) => {
