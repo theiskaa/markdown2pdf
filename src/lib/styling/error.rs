@@ -10,6 +10,10 @@ pub enum ResolveError {
     /// field). Wraps `toml::de::Error` for span info.
     BadToml {
         source: toml::de::Error,
+        /// The original TOML text. `toml::de::Error::span()` gives a
+        /// byte offset but not the source, so we keep it here to
+        /// resolve that offset to a line/column.
+        input: String,
         file: Option<PathBuf>,
         suggestion: Option<String>,
     },
@@ -37,6 +41,7 @@ impl fmt::Display for ResolveError {
         match self {
             ResolveError::BadToml {
                 source,
+                input,
                 file,
                 suggestion,
             } => {
@@ -45,7 +50,7 @@ impl fmt::Display for ResolveError {
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| "<config>".to_string());
                 if let Some(span) = source.span() {
-                    let (line, col) = line_col_for(source, span.start);
+                    let (line, col) = line_col_in(input, span.start);
                     write!(f, "error in {} at line {}, column {}: {}", where_, line, col, source.message())?;
                 } else {
                     write!(f, "error in {}: {}", where_, source.message())?;
@@ -96,39 +101,24 @@ impl std::error::Error for ResolveError {
     }
 }
 
-/// `toml::de::Error::span()` returns the byte range; we lift that to a
-/// line / column pair by scanning the original source string. The
-/// source isn't always available, so this is a best-effort helper —
-/// when we can't find it, we fall back to printing the raw span.
-fn line_col_for(source: &toml::de::Error, byte_offset: usize) -> (usize, usize) {
-    if let Some(input) = source_input(source) {
-        let mut line = 1usize;
-        let mut col = 1usize;
-        for (i, ch) in input.char_indices() {
-            if i >= byte_offset {
-                break;
-            }
-            if ch == '\n' {
-                line += 1;
-                col = 1;
-            } else {
-                col += 1;
-            }
+/// Resolve a byte offset within the original TOML source to a 1-based
+/// line / column pair. `toml::de::Error::span()` gives the offset but
+/// not the text; the error carries the source so this can scan it.
+fn line_col_in(input: &str, byte_offset: usize) -> (usize, usize) {
+    let mut line = 1usize;
+    let mut col = 1usize;
+    for (i, ch) in input.char_indices() {
+        if i >= byte_offset {
+            break;
         }
-        (line, col)
-    } else {
-        (0, byte_offset)
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
     }
-}
-
-/// `toml::de::Error` keeps the source text internally for its own
-/// pretty-printed message; we don't have public access to it. We work
-/// around that by re-parsing nothing here — the wrapper that built the
-/// error already knows the input and can supply it via a side channel
-/// if desired. For now this returns None and the line/col fall back to
-/// raw byte offset.
-fn source_input(_err: &toml::de::Error) -> Option<&str> {
-    None
+    (line, col)
 }
 
 /// `serde(deny_unknown_fields)` produces messages shaped like:

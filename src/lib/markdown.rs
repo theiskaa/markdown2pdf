@@ -1541,6 +1541,21 @@ impl std::fmt::Display for LexerError {
 
 impl std::error::Error for LexerError {}
 
+/// Maximum recursion depth for nested constructs (blockquotes, lists,
+/// links/emphasis, headings, footnote/definition bodies, table cells).
+/// The recursive-descent lexer spawns a stack frame — and, for block
+/// constructs, a sub-`Lexer` — per nesting level. Without a bound, a
+/// deeply nested or hostile document (`>`×10000, `[`×10000) overflows
+/// the OS thread stack and aborts the whole process instead of
+/// returning an error. 64 is far beyond any legitimate document yet
+/// keeps the worst case within a standard 8 MiB main thread. The
+/// list path is the cost driver: every nested list level pushes
+/// several uncounted physical frames plus a sub-`Lexer`, so the
+/// guard must trip well before a legitimate-looking but pathological
+/// document can exhaust the stack. 32 is still 2–3× deeper than any
+/// real document nests.
+const MAX_PARSE_DEPTH: usize = 32;
+
 /// A lexical analyzer that converts Markdown text into a sequence of tokens.
 /// Handles nested structures and special Markdown syntax elements while maintaining
 /// proper context and state during parsing.
@@ -1586,6 +1601,12 @@ pub struct Lexer {
     /// rewinding (which would exponentially re-parse deeply-nested
     /// brackets like `[[[…]]]`).
     pending: std::collections::VecDeque<Token>,
+    /// Current recursion depth. The root lexer is 0; every sub-`Lexer`
+    /// (built via [`Lexer::sub_lexer`]) and every same-lexer nested
+    /// content scan ([`Lexer::parse_nested_content`]) is one level
+    /// deeper. Checked against [`MAX_PARSE_DEPTH`] so pathological
+    /// nesting fails with a [`LexerError`] instead of a stack overflow.
+    depth: usize,
 }
 
 impl Lexer {
@@ -1604,7 +1625,14 @@ impl Lexer {
         } else {
             input
         };
-        let normalized: String = input.replace("\r\n", "\n").replace('\r', "\n");
+        // CommonMark 0.31.2 §2.3: U+0000 must be replaced with the
+        // replacement character. This also disambiguates the lexer's
+        // EOF sentinel (`current_char()` returns '\0' past the end),
+        // so a real NUL can no longer be confused with end-of-input.
+        let normalized: String = input
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\u{0}', "\u{FFFD}");
         Lexer {
             input: normalized.chars().collect(),
             position: 0,
@@ -1615,6 +1643,28 @@ impl Lexer {
             definitions: HashMap::new(),
             suppress_setext: false,
             pending: std::collections::VecDeque::new(),
+            depth: 0,
+        }
+    }
+
+    /// Build a sub-`Lexer` for nested block/inline content (blockquote
+    /// body, list-item content, heading text, footnote / definition
+    /// bodies, image alt, table cells), carrying the recursion depth
+    /// across the sub-`Lexer` boundary so nesting stays bounded.
+    fn sub_lexer(&self, input: String) -> Lexer {
+        let mut l = Lexer::new(input);
+        l.depth = self.depth.saturating_add(1);
+        l
+    }
+
+    /// The typed error returned when nesting exceeds [`MAX_PARSE_DEPTH`],
+    /// located at the current scan position.
+    fn nesting_error(&self) -> LexerError {
+        let (line, column) = self.pos_to_line_col(self.position.min(self.input.len()));
+        LexerError::UnknownToken {
+            message: format!("maximum nesting depth ({}) exceeded", MAX_PARSE_DEPTH),
+            line,
+            column,
         }
     }
 
@@ -1753,6 +1803,9 @@ impl Lexer {
         &mut self,
         ctx: ParseContext,
     ) -> Result<Vec<Token>, LexerError> {
+        if self.depth > MAX_PARSE_DEPTH {
+            return Err(self.nesting_error());
+        }
         let mut tokens = Vec::new();
 
         while self.position < self.input.len() || !self.pending.is_empty() {
@@ -1804,9 +1857,32 @@ impl Lexer {
         Ok(tokens)
     }
 
-    /// Helper function to parse nested content until a delimiter is encountered.
-    /// Used for parsing content within emphasis, headings, and list items.
+    /// Parse nested content until a delimiter is encountered (emphasis,
+    /// link/image labels, headings, list items). This is the same-lexer
+    /// recursion driver — `[`/`*` nesting re-enters here per level — so
+    /// it carries the depth counter and fails with a [`LexerError`]
+    /// past [`MAX_PARSE_DEPTH`] rather than overflowing the stack. The
+    /// counter is restored on the way out so sibling constructs at the
+    /// same level don't accumulate depth.
     fn parse_nested_content<F>(
+        &mut self,
+        is_delimiter: F,
+        ctx: ParseContext,
+    ) -> Result<Vec<Token>, LexerError>
+    where
+        F: Fn(char) -> bool,
+    {
+        self.depth = self.depth.saturating_add(1);
+        if self.depth > MAX_PARSE_DEPTH {
+            self.depth -= 1;
+            return Err(self.nesting_error());
+        }
+        let result = self.parse_nested_content_inner(is_delimiter, ctx);
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_nested_content_inner<F>(
         &mut self,
         is_delimiter: F,
         ctx: ParseContext,
@@ -2147,7 +2223,7 @@ impl Lexer {
         }
         let raw_line: String = self.input[line_start..self.position].iter().collect();
         let stripped = strip_atx_trailing_hashes(&raw_line);
-        let mut sub = Lexer::new(stripped);
+        let mut sub = self.sub_lexer(stripped);
         sub.in_heading = true;
         sub.definitions = self.definitions.clone();
         let content = sub.parse_with_context(ParseContext::Inline)?;
@@ -2712,7 +2788,7 @@ impl Lexer {
         }
 
         let body_text = body_lines.join("\n");
-        let mut sub = Lexer::new(body_text);
+        let mut sub = self.sub_lexer(body_text);
         // Lazy continuation lines can't form a setext underline (CommonMark
         // example 93): if the blockquote pulled in any lazy line, suppress
         // setext detection during the sub-lex so the trailing `===`/`---`
@@ -2899,7 +2975,7 @@ impl Lexer {
         let inner_tokens = if body.is_empty() {
             Vec::new()
         } else {
-            let mut sub = Lexer::new(body);
+            let mut sub = self.sub_lexer(body);
             sub.parse_with_context(ParseContext::Inline)?
         };
 
@@ -2965,7 +3041,7 @@ impl Lexer {
             let term_tokens = if term_trimmed.is_empty() {
                 Vec::new()
             } else {
-                let mut sub = Lexer::new(term_trimmed.to_string());
+                let mut sub = self.sub_lexer(term_trimmed.to_string());
                 sub.parse_with_context(ParseContext::Inline)?
             };
 
@@ -2995,7 +3071,7 @@ impl Lexer {
                 let def_tokens = if def_trimmed.is_empty() {
                     Vec::new()
                 } else {
-                    let mut sub = Lexer::new(def_trimmed.to_string());
+                    let mut sub = self.sub_lexer(def_trimmed.to_string());
                     sub.parse_with_context(ParseContext::Inline)?
                 };
                 definitions.push(def_tokens);
@@ -3494,7 +3570,7 @@ impl Lexer {
             .copied()
             .collect();
         let alt_input: String = alt_chars.iter().collect();
-        let mut sub_alt = Lexer::new(alt_input);
+        let mut sub_alt = self.sub_lexer(alt_input);
         sub_alt.definitions = self.definitions.clone();
         let alt = sub_alt.parse_with_context(ParseContext::Inline)?;
         self.position = alt_text_end;
@@ -5043,7 +5119,7 @@ impl Lexer {
             }
         }
         let joined = content_lines.join("\n");
-        let mut sub = Lexer::new(joined.trim().to_string());
+        let mut sub = self.sub_lexer(joined.trim().to_string());
         sub.in_heading = true;
         sub.definitions = self.definitions.clone();
         let content = sub.parse_with_context(ParseContext::Inline)?;
@@ -5096,8 +5172,28 @@ impl Lexer {
         None
     }
 
-    /// Parses a list item, handling both ordered and unordered types
+    /// Parses a list item. Nested lists recurse here directly (same
+    /// lexer, no sub-`Lexer`), so this is the list recursion driver and
+    /// carries the depth counter: list nesting past [`MAX_PARSE_DEPTH`]
+    /// fails with a [`LexerError`] before the physical stack — many
+    /// uncounted frames per list level — is exhausted. Depth is
+    /// restored on the way out so sibling items don't accumulate it.
     fn parse_list_item(
+        &mut self,
+        ordered: bool,
+        parent_ctx: ParseContext,
+    ) -> Result<Token, LexerError> {
+        self.depth = self.depth.saturating_add(1);
+        if self.depth > MAX_PARSE_DEPTH {
+            self.depth -= 1;
+            return Err(self.nesting_error());
+        }
+        let result = self.parse_list_item_inner(ordered, parent_ctx);
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_list_item_inner(
         &mut self,
         ordered: bool,
         parent_ctx: ParseContext,
@@ -5257,7 +5353,7 @@ impl Lexer {
             }
             let stripped: String = expanded.chars().skip(separator).collect();
             self.position = line_end;
-            let mut sub = Lexer::new(stripped);
+            let mut sub = self.sub_lexer(stripped);
             let sub_tokens = sub.parse_with_context(ParseContext::Root)?;
             content.extend(sub_tokens);
         }
@@ -5303,7 +5399,7 @@ impl Lexer {
                 } else {
                     format!("{}\n{}", first_line, rest)
                 };
-                let mut sub = Lexer::new(full);
+                let mut sub = self.sub_lexer(full);
                 let sub_tokens = sub.parse_with_context(ParseContext::Root)?;
                 content.extend(sub_tokens);
                 first_line_handled = true;
@@ -5375,7 +5471,7 @@ impl Lexer {
                         lz_end
                     };
                 }
-                let mut sub = Lexer::new(full);
+                let mut sub = self.sub_lexer(full);
                 let sub_tokens = sub.parse_with_context(ParseContext::Root)?;
                 content.extend(sub_tokens);
                 first_line_handled = true;
@@ -5543,7 +5639,7 @@ impl Lexer {
                 // the item's content.
                 let raw = self.collect_list_item_block_content(content_offset);
                 if !raw.is_empty() {
-                    let mut sub = Lexer::new(raw);
+                    let mut sub = self.sub_lexer(raw);
                     // Use Root context so indented-code, fenced-code,
                     // blockquote, and nested list parsing fire correctly.
                     // The sub-lexer's output will be a mix of block + inline
@@ -5620,7 +5716,7 @@ impl Lexer {
                 if !is_marker_line && starts_block {
                     let rest = self.collect_list_item_block_content(content_offset);
                     if !rest.is_empty() {
-                        let mut sub = Lexer::new(rest);
+                        let mut sub = self.sub_lexer(rest);
                         let sub_tokens =
                             sub.parse_with_context(ParseContext::Root)?;
                         content.extend(sub_tokens);
@@ -5725,16 +5821,31 @@ impl Lexer {
         }
     }
 
-    /// Checks if the current posisiton is the start of a table
+    /// Checks if the current position is the start of a table: the
+    /// line after the current one must contain a `-` (the delimiter
+    /// row). Scans indices directly — collecting the remaining input
+    /// into a `String` here was O(n) per call and, since the
+    /// dispatcher calls this for every line-leading `|`, O(n²) on
+    /// pipe-heavy input.
     fn is_table_start(&self) -> bool {
-        let rest: String = self.input[self.position..].iter().collect();
-        // Next line with --- or :---
-        if let Some(pos) = rest.find('\n') {
-            let next_line = rest[pos + 1..].lines().next().unwrap_or("");
-            next_line.contains('-')
-        } else {
-            false
+        let n = self.input.len();
+        // End of the current line.
+        let mut i = self.position;
+        while i < n && self.input[i] != '\n' {
+            i += 1;
         }
+        if i >= n {
+            return false; // no newline ⇒ no delimiter row
+        }
+        // Scan the next line for a `-`.
+        let mut j = i + 1;
+        while j < n && self.input[j] != '\n' {
+            if self.input[j] == '-' {
+                return true;
+            }
+            j += 1;
+        }
+        false
     }
 
     /// Parses a table, handling column alignment
@@ -5774,7 +5885,7 @@ impl Lexer {
         // Convert header strings to token vectors
         let mut headers = Vec::new();
         for cell in header_cells {
-            let mut cell_lexer = Lexer::new(cell);
+            let mut cell_lexer = self.sub_lexer(cell);
             let parsed = cell_lexer.parse_with_context(ParseContext::TableCell)?;
             headers.push(parsed);
         }
@@ -5796,7 +5907,7 @@ impl Lexer {
             let mut row_tokens = Vec::new();
             for cell in cell_texts {
                 // FIX: large unbreakable words don't fit in cells
-                let mut cell_lexer = Lexer::new(cell);
+                let mut cell_lexer = self.sub_lexer(cell);
                 let parsed = cell_lexer.parse_with_context(ParseContext::TableCell)?;
                 row_tokens.push(parsed);
             }

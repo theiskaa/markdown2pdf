@@ -63,18 +63,28 @@ impl Frontmatter {
 /// markdown body starts. On no-match returns `None` and the caller
 /// passes `input` through unchanged.
 pub fn extract(input: &str) -> Option<(Frontmatter, usize)> {
-    let bytes = input.as_bytes();
+    // A leading UTF-8 BOM is stripped everywhere else in the pipeline
+    // (`Lexer::new`); tolerate it here too, or a BOM-prefixed document
+    // would have its frontmatter silently skipped. Offsets returned to
+    // the caller are relative to the original `input`.
+    let bom = if input.starts_with('\u{FEFF}') {
+        '\u{FEFF}'.len_utf8()
+    } else {
+        0
+    };
+    let src = &input[bom..];
+    let bytes = src.as_bytes();
     if bytes.starts_with(b"---\n") || bytes.starts_with(b"---\r\n") {
         let after_open = if bytes.starts_with(b"---\r\n") { 5 } else { 4 };
-        find_close(input, after_open, "---").map(|(end, body_start)| {
-            let body = &input[after_open..end];
-            (parse_yaml(body), body_start)
+        find_close(src, after_open, "---").map(|(end, body_start)| {
+            let body = &src[after_open..end];
+            (parse_yaml(body), bom + body_start)
         })
     } else if bytes.starts_with(b"+++\n") || bytes.starts_with(b"+++\r\n") {
         let after_open = if bytes.starts_with(b"+++\r\n") { 5 } else { 4 };
-        find_close(input, after_open, "+++").map(|(end, body_start)| {
-            let body = &input[after_open..end];
-            (parse_toml(body), body_start)
+        find_close(src, after_open, "+++").map(|(end, body_start)| {
+            let body = &src[after_open..end];
+            (parse_toml(body), bom + body_start)
         })
     } else {
         None
@@ -234,6 +244,21 @@ mod tests {
         assert_eq!(fm.title.as_deref(), Some("My Document"));
         assert_eq!(fm.author.as_deref(), Some("Jane Doe"));
         assert_eq!(&src[off..], "# Body");
+    }
+
+    #[test]
+    fn leading_bom_does_not_skip_frontmatter() {
+        // A UTF-8 BOM is stripped elsewhere in the pipeline; a
+        // BOM-prefixed document must still get its frontmatter.
+        let src = "\u{FEFF}---\ntitle: Hi\n---\nbody text";
+        let (fm, off) = extract(src).expect("frontmatter parsed past BOM");
+        assert_eq!(fm.title.as_deref(), Some("Hi"));
+        assert_eq!(&src[off..], "body text");
+    }
+
+    #[test]
+    fn bom_without_frontmatter_is_still_none() {
+        assert!(extract("\u{FEFF}# Just a heading").is_none());
     }
 
     #[test]

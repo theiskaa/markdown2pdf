@@ -41,6 +41,9 @@ mod emphasis_flanking_tests;
 #[path = "markdown/entity_reference_tests.rs"]
 mod entity_reference_tests;
 
+#[path = "markdown/eof_unterminated_tests.rs"]
+mod eof_unterminated_tests;
+
 #[path = "markdown/error_position_tests.rs"]
 mod error_position_tests;
 

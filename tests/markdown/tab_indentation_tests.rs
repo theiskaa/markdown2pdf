@@ -124,3 +124,57 @@ fn tab_inside_paragraph_preserved() {
     assert!(text.contains("a"), "got {:?}", text);
     assert!(text.contains("b"), "got {:?}", text);
 }
+
+// Tab-expansion edge cases (T10): each must parse without error
+// (the `parse` helper unwraps) and produce the expected structure.
+
+#[test]
+fn tab_as_unordered_list_marker_separator() {
+    let tokens = parse("-\tcode line");
+    assert!(
+        matches!(tokens[0], Token::ListItem { ordered: false, .. }),
+        "got {:?}",
+        tokens
+    );
+}
+
+#[test]
+fn tab_as_ordered_list_marker_separator() {
+    let tokens = parse("1.\titem");
+    if let Token::ListItem { ordered, number, .. } = &tokens[0] {
+        assert!(*ordered);
+        assert_eq!(*number, Some(1));
+    } else {
+        panic!("got {:?}", tokens);
+    }
+}
+
+#[test]
+fn tab_after_blockquote_marker() {
+    let tokens = parse(">\tquoted");
+    assert!(
+        matches!(tokens[0], Token::BlockQuote(_)),
+        "got {:?}",
+        tokens
+    );
+    assert!(Token::collect_all_text(&tokens).contains("quoted"));
+}
+
+#[test]
+fn lone_tab_indent_is_code_block() {
+    let tokens = parse("\tcode");
+    assert!(
+        matches!(tokens[0], Token::Code { block: true, .. }),
+        "got {:?}",
+        tokens
+    );
+}
+
+#[test]
+fn mixed_tab_and_space_list_continuation() {
+    // Must not error; the continuation line is folded into the item.
+    let tokens = parse("- a\n \tb");
+    assert!(matches!(tokens[0], Token::ListItem { .. }), "got {:?}", tokens);
+    let text = Token::collect_all_text(&tokens);
+    assert!(text.contains("a") && text.contains("b"), "got {text:?}");
+}

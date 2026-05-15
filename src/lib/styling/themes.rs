@@ -46,6 +46,7 @@ fn load_with_chain(name: &str, chain: &mut Vec<String>) -> Result<DocumentConfig
 
     let cfg: DocumentConfig = toml::from_str(raw).map_err(|e| ResolveError::BadToml {
         source: e,
+        input: raw.to_string(),
         file: None,
         suggestion: Some(format!("bundled theme `{}` failed to parse — this is a bug, please file an issue", name)),
     })?;

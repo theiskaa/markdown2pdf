@@ -353,6 +353,39 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
     })
 }
 
+/// Clamp a font size to a finite, strictly-positive value. A
+/// non-positive or non-finite size makes glyph advances zero or NaN,
+/// so the greedy line-wrap loop never makes forward progress and the
+/// renderer hangs. Applied to both block and inline lowering so a
+/// hostile config can never reach layout with a poisoned size.
+fn safe_font_size(pt: f32) -> f32 {
+    if pt.is_finite() && pt > 0.0 {
+        pt.min(1000.0)
+    } else {
+        1.0
+    }
+}
+
+/// Line height is a multiple of the font size. Non-finite or
+/// non-positive collapses vertical advance (the page cursor stalls);
+/// an enormous value (e.g. `1e30`) overflows the f32 page math into
+/// inf/NaN. Clamp into a sane, renderable range.
+fn safe_line_height(lh: f32) -> f32 {
+    if lh.is_finite() && lh > 0.0 {
+        lh.min(100.0)
+    } else {
+        0.1
+    }
+}
+
+/// Letter spacing (tracking). Negative tracking is a legitimate
+/// typographic choice, so any finite value — including a negative
+/// one — is preserved. Only a non-finite value (NaN / inf), which
+/// would poison every layout comparison, is neutralised to zero.
+fn safe_letter_spacing(pt: f32) -> f32 {
+    if pt.is_finite() { pt } else { 0.0 }
+}
+
 fn lower_block(
     theme: &str,
     where_: &str,
@@ -364,23 +397,14 @@ fn lower_block(
         .font_size_pt
         .ok_or_else(|| missing(theme, &format!("{}.font_size_pt", where_)))?;
     // Hostile / mistaken config must never crash or hang the renderer.
-    // A non-positive font size makes glyph advances zero — the greedy
-    // wrap loop would never make progress (hang). A non-positive line
-    // height collapses leading and can stall vertical advance.
-    // Negative spacing moves the layout cursor backwards and can loop
-    // the page-break logic forever. Clamp these to safe minimums
-    // (graceful degradation; we log nothing — the output is still a
-    // valid, if ugly, PDF). `letter_spacing_pt` is intentionally NOT
-    // clamped: negative tracking is a legitimate typographic choice.
-    let font_size_pt = if font_size_pt.is_finite() && font_size_pt > 0.0 {
-        font_size_pt
-    } else {
-        1.0
-    };
-    let line_height = {
-        let lh = merged.line_height.unwrap_or(1.4);
-        if lh.is_finite() && lh > 0.0 { lh } else { 0.1 }
-    };
+    // A non-positive or enormous font size / line height makes glyph
+    // advances zero or overflows the f32 page math, so the wrap and
+    // page-break loops never progress. Clamp into a renderable range
+    // (graceful degradation; the output is still a valid, if ugly,
+    // PDF). `letter_spacing_pt` keeps negative values (legitimate
+    // tracking) but drops non-finite ones.
+    let font_size_pt = safe_font_size(font_size_pt);
+    let line_height = safe_line_height(merged.line_height.unwrap_or(1.4));
     let clamp_nonneg = |v: f32| if v.is_finite() && v > 0.0 { v } else { 0.0 };
     let pad = merged.padding.unwrap_or_else(|| Sides::uniform(0.0));
     let padding = Sides {
@@ -403,7 +427,7 @@ fn lower_block(
         margin_before_pt: clamp_nonneg(merged.margin_before_pt.unwrap_or(0.0)),
         margin_after_pt: clamp_nonneg(merged.margin_after_pt.unwrap_or(0.0)),
         indent_pt: clamp_nonneg(merged.indent_pt.unwrap_or(0.0)),
-        letter_spacing_pt: merged.letter_spacing_pt.unwrap_or(0.0),
+        letter_spacing_pt: safe_letter_spacing(merged.letter_spacing_pt.unwrap_or(0.0)),
         strikethrough: merged.strikethrough.unwrap_or(false),
         underline: merged.underline.unwrap_or(false),
         small_caps: merged.small_caps.unwrap_or(false),
@@ -421,6 +445,7 @@ fn lower_inline(
         .font_size_pt
         .or(defaults.font_size_pt)
         .ok_or_else(|| missing(theme, &format!("{}.font_size_pt", where_)))?;
+    let font_size_pt = safe_font_size(font_size_pt);
     Ok(ResolvedInline {
         font_family: raw.font_family.or_else(|| defaults.font_family.clone()),
         font_size_pt,

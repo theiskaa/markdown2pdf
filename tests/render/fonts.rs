@@ -5,7 +5,7 @@
 //! filter), so byte-level scans against it are cheap and stable.
 
 use markdown2pdf::config::ConfigSource;
-use markdown2pdf::fonts::FontConfig;
+use markdown2pdf::fonts::{FontConfig, FontSource};
 use markdown2pdf::parse_into_bytes;
 
 use super::common::any_system_font;
@@ -162,4 +162,55 @@ fn ascent_and_descent_normalize_for_a_second_unrelated_font() {
             a
         );
     }
+}
+
+// T18 — a user-supplied font that can't be used must degrade to the
+// built-in font, never panic. (The bundled subset's `Face::parse`
+// `.expect` in font.rs is a build invariant — bundled bytes are
+// always valid — and is not reachable from user input.)
+
+#[test]
+fn garbage_font_bytes_fall_back_to_builtin() {
+    let cfg = FontConfig::new().with_default_font_source(FontSource::bytes(&[0, 1, 2, 3, 4, 5]));
+    let bytes = parse_into_bytes(
+        "# Title\n\nBody text here.".to_string(),
+        ConfigSource::Default,
+        Some(&cfg),
+    )
+    .expect("garbage font must fall back, not error");
+    assert!(bytes.starts_with(b"%PDF-"));
+}
+
+#[test]
+fn empty_font_bytes_fall_back_to_builtin() {
+    let cfg = FontConfig::new().with_default_font_source(FontSource::bytes(&[]));
+    let bytes = parse_into_bytes(
+        "Body text.".to_string(),
+        ConfigSource::Default,
+        Some(&cfg),
+    )
+    .expect("empty font must fall back, not error");
+    assert!(bytes.starts_with(b"%PDF-"));
+}
+
+#[test]
+fn nonexistent_font_path_falls_back_to_builtin() {
+    let cfg = FontConfig::new().with_default_font("/no/such/font-file.ttf");
+    let bytes = parse_into_bytes(
+        "Body text.".to_string(),
+        ConfigSource::Default,
+        Some(&cfg),
+    )
+    .expect("missing font path must fall back, not error");
+    assert!(bytes.starts_with(b"%PDF-"));
+}
+
+#[test]
+fn non_ascii_with_builtin_font_does_not_panic() {
+    // Built-in Helvetica can't cover CJK/emoji/RTL; the win1252
+    // fallback must keep it a valid PDF rather than panic or empty.
+    let md = "# 日本語 タイトル\n\nemoji 😀 Ω, مرحبا بالعالم.".to_string();
+    let bytes =
+        parse_into_bytes(md, ConfigSource::Default, None).expect("render must not error");
+    assert!(bytes.starts_with(b"%PDF-"));
 }

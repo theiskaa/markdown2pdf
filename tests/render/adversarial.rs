@@ -144,6 +144,36 @@ mod massive_inputs {
         let bytes = render_must_not_panic(&s);
         assert!(page_count(&bytes) >= 2);
     }
+
+    #[test]
+    fn single_word_one_hundred_thousand_chars() {
+        // split_long_words is per-candidate measure; verify a 100k
+        // unbreakable word stays linear/bounded (release ~13ms).
+        let start = std::time::Instant::now();
+        let bytes = render_must_not_panic(&"x".repeat(100_000));
+        assert!(page_count(&bytes) >= 2);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(20),
+            "100k-char word render is pathologically slow"
+        );
+    }
+
+    #[test]
+    fn very_large_document_is_bounded() {
+        // 20k blocks: output and time must stay linear in input
+        // (raw_pages is fully in-RAM, no page cap).
+        let mut s = String::new();
+        for i in 0..20_000 {
+            s.push_str(&format!("Paragraph {i} with a few words.\n\n"));
+        }
+        let start = std::time::Instant::now();
+        let bytes = render_must_not_panic(&s);
+        assert!(page_count(&bytes) >= 2);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(30),
+            "large document render is pathologically slow"
+        );
+    }
 }
 
 mod headings {
@@ -294,6 +324,43 @@ mod tables {
             md.push_str(&format!("| {} | {} |\n", i, i * 2));
         }
         render_must_not_panic(&md);
+    }
+
+    fn wide_table_md(cols: usize, rows: usize) -> String {
+        let join = |f: &dyn Fn(usize) -> String| {
+            (0..cols).map(|i| f(i)).collect::<Vec<_>>().join(" | ")
+        };
+        let mut md = format!(
+            "| {} |\n| {} |\n",
+            join(&|i| format!("col {i} alpha")),
+            join(&|_| "---".to_string()),
+        );
+        for r in 0..rows {
+            md.push_str(&format!("| {} |\n", join(&|i| format!("r{r} c{i} beta"))));
+        }
+        md
+    }
+
+    #[test]
+    fn table_with_five_hundred_columns() {
+        // Even-split column width fell below the cell padding, making
+        // the cell box invert and row height explode. Floored now.
+        let start = std::time::Instant::now();
+        render_must_not_panic(&wide_table_md(500, 20));
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(20),
+            "500-column table render is pathologically slow"
+        );
+    }
+
+    #[test]
+    fn table_with_two_thousand_columns() {
+        let start = std::time::Instant::now();
+        render_must_not_panic(&wide_table_md(2_000, 5));
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(20),
+            "2000-column table render is pathologically slow"
+        );
     }
 }
 

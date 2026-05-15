@@ -32,7 +32,24 @@ pub(crate) fn page_dimensions_mm(page: &ResolvedPage) -> (f32, f32) {
         PageSize::Legal => (216.0, 355.6),
         PageSize::A3 => (297.0, 420.0),
         PageSize::A5 => (148.0, 210.0),
-        PageSize::Custom { width_mm, height_mm } => (width_mm, height_mm),
+        PageSize::Custom { width_mm, height_mm } => {
+            // A hostile config can set a custom size to 0, negative,
+            // NaN, inf, or an absurd magnitude. NaN is the worst: it
+            // makes every downstream page-break comparison false (the
+            // break never fires), so a degenerate size must fall back
+            // rather than propagate. A valid-but-extreme size is
+            // clamped into PDF's renderable range (~10mm .. 5080mm,
+            // the spec's 200in maximum) so page math can't overflow.
+            if width_mm.is_finite()
+                && height_mm.is_finite()
+                && width_mm > 0.0
+                && height_mm > 0.0
+            {
+                (width_mm.clamp(10.0, 5080.0), height_mm.clamp(10.0, 5080.0))
+            } else {
+                (210.0, 297.0)
+            }
+        }
     };
     match page.orientation {
         Orientation::Portrait => (w, h),
@@ -1480,7 +1497,14 @@ impl<'a> Engine<'a> {
 
         let col_count = headers.len();
         let total_width = self.content_width_pt();
-        let col_width = total_width / col_count as f32;
+        // A very wide table (hundreds of columns) drives the even split
+        // below the cell padding, making `col_width - pad` negative:
+        // every word then "overflows" and row height explodes, and the
+        // cell box (left+pad .. right-pad) inverts. Floor the column so
+        // geometry stays positive — the table overflows the right
+        // margin (ugly) instead of degenerating.
+        const MIN_COL_WIDTH_PT: f32 = 24.0;
+        let col_width = (total_width / col_count as f32).max(MIN_COL_WIDTH_PT);
 
         // Header row.
         let header_height = self.measure_row_height(

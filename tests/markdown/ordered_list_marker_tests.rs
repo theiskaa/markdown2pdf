@@ -34,3 +34,36 @@ fn dot_marker_still_works() {
         panic!("expected ordered list item, got {:?}", tokens);
     }
 }
+
+// CommonMark caps an ordered-list marker at 9 digits.
+
+#[test]
+fn nine_digit_start_is_accepted() {
+    let tokens = parse("999999999. item");
+    if let Token::ListItem { ordered, number, .. } = &tokens[0] {
+        assert!(*ordered);
+        assert_eq!(*number, Some(999_999_999));
+    } else {
+        panic!("expected ordered list item, got {:?}", tokens);
+    }
+}
+
+#[test]
+fn ten_digit_start_falls_back_to_paragraph_text() {
+    let tokens = parse("9999999999. item");
+    assert!(
+        matches!(tokens[0], Token::Text(_)),
+        "10-digit marker must not be an ordered list, got {:?}",
+        tokens
+    );
+}
+
+#[test]
+fn zero_start_is_accepted() {
+    let tokens = parse("0. item");
+    if let Token::ListItem { number, .. } = &tokens[0] {
+        assert_eq!(*number, Some(0));
+    } else {
+        panic!("expected ordered list item, got {:?}", tokens);
+    }
+}
