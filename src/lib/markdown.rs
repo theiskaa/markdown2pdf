@@ -82,9 +82,10 @@ const BLOCK_ELEMENT_TAG_NAMES: &[&str] = &[
     "thead", "title", "tr", "track", "ul",
 ];
 
-/// Parsing context — determines which tokens are valid in the current location.
+/// Internal parsing-state context — which tokens are valid where.
+/// Not exposed: consumers use [`Lexer::parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParseContext {
+pub(crate) enum ParseContext {
     Root,       // top-level document
     ListItem,   // inside a list item (block context)
     TableCell,  // inside a table cell (restrict block-level tokens)
@@ -177,10 +178,13 @@ pub enum Token {
     },
     /// Plain text content
     Text(String),
-    /// Internal: a run of `*` or `_` delimiter characters before emphasis
-    /// matching. After `resolve_emphasis` runs, unmatched runs are flattened
-    /// into `Text` and matched runs become `Emphasis`. Should never escape
-    /// the lexer to consumers.
+    /// Internal lexer state — a run of `*` or `_` delimiter characters
+    /// awaiting emphasis matching. After `resolve_emphasis` runs,
+    /// unmatched runs flatten to `Text` and matched runs become
+    /// `Emphasis`. **Never appears in [`Lexer::parse`] output**; listed
+    /// only because Rust requires public enum variants to be public.
+    /// Hidden from rustdoc.
+    #[doc(hidden)]
     DelimRun {
         ch: char,
         count: usize,
@@ -1677,10 +1681,13 @@ impl Lexer {
         self.definitions = definitions;
     }
 
-    /// Parses the entire input string into a sequence of tokens for a given context.
-    /// Returns a Result containing either a Vec of parsed tokens or a LexerError.
-    /// Takes in a `ParseContext` that determines which tokens are valid in the current location.
-    pub fn parse_with_context(&mut self, ctx: ParseContext) -> Result<Vec<Token>, LexerError> {
+    /// Parses the input under a specific [`ParseContext`]. Used by
+    /// the lexer's own sub-lexers (blockquote, list item, table
+    /// cell, inline content). Consumers should call [`Lexer::parse`].
+    pub(crate) fn parse_with_context(
+        &mut self,
+        ctx: ParseContext,
+    ) -> Result<Vec<Token>, LexerError> {
         let mut tokens = Vec::new();
 
         while self.position < self.input.len() || !self.pending.is_empty() {

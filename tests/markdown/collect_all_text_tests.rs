@@ -10,12 +10,6 @@ fn plain_text() {
 }
 
 #[test]
-fn delim_run_reproduces_chars() {
-    let tokens = vec![Token::DelimRun { ch: '*', count: 3 }];
-    assert_eq!(Token::collect_all_text(&tokens), "***");
-}
-
-#[test]
 fn heading_descends_into_children() {
     let tokens = parse("# Hello *world*\n");
     assert!(Token::collect_all_text(&tokens).contains("Hello"));
