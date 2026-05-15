@@ -1760,27 +1760,88 @@ impl<'a> Engine<'a> {
             }
             let bullet_x = saved_left;
             let bullet_y = self.y_from_top_pt + size_pt;
-            self.close_text_section();
-            self.ensure_text_section();
-            self.move_cursor_to(bullet_x, bullet_y);
-            self.page_ops.push(Op::SetFont {
-                font: self.font_set.handle(bullet_flags),
-                size: Pt(size_pt),
-            });
-            self.page_ops.push(Op::SetLineHeight {
-                lh: Pt(size_pt * line_height.max(0.5)),
-            });
-            self.page_ops.push(Op::SetFillColor {
-                col: rgb_color(s.text_color_rgb()),
-            });
-            let bullet_emit = if self.font_set.needs_transliteration(bullet_flags) {
-                to_win1252(&bullet_text)
-            } else {
-                bullet_text.clone()
-            };
-            self.page_ops.push(Op::ShowText {
-                items: vec![TextItem::Text(bullet_emit)],
-            });
+            // An unordered bullet whose configured glyph the active
+            // font can't represent (the default `•` under built-in
+            // Helvetica) would otherwise transliterate to `*`. Draw
+            // it as a disc instead. A configured ASCII bullet (`-`)
+            // or any glyph the font *can* render is still emitted as
+            // text, so user config is respected. Task items always
+            // get a real checkbox rather than literal `[ ]`/`[x]`.
+            let needs_xlit = self.font_set.needs_transliteration(bullet_flags);
+            let glyph_unrepresentable =
+                needs_xlit && to_win1252(&bullet_text) != bullet_text;
+            let bullet_col = rgb_color(s.text_color_rgb());
+            let page_h = self.page_height_pt();
+            // Vertical centre of the lowercase text the bullet sits
+            // beside (baseline is `bullet_y`).
+            let mid_y = bullet_y - size_pt * 0.30;
+            match entry.bullet {
+                ListBullet::TaskChecked | ListBullet::TaskUnchecked => {
+                    self.close_text_section();
+                    let side = size_pt * 0.62;
+                    let x0 = bullet_x;
+                    let y_top = mid_y - side / 2.0;
+                    let y_bot = mid_y + side / 2.0;
+                    let x1 = x0 + side;
+                    draw_stroked_path(
+                        &mut self.page_ops,
+                        &[(x0, y_top), (x1, y_top), (x1, y_bot), (x0, y_bot)],
+                        bullet_col.clone(),
+                        0.8,
+                        true,
+                        page_h,
+                    );
+                    if matches!(entry.bullet, ListBullet::TaskChecked) {
+                        // A tick from the lower-left through to the
+                        // upper-right of the box.
+                        draw_stroked_path(
+                            &mut self.page_ops,
+                            &[
+                                (x0 + side * 0.18, mid_y + side * 0.05),
+                                (x0 + side * 0.42, y_bot - side * 0.16),
+                                (x1 - side * 0.12, y_top + side * 0.14),
+                            ],
+                            bullet_col,
+                            1.1,
+                            false,
+                            page_h,
+                        );
+                    }
+                }
+                ListBullet::Unordered(_) if glyph_unrepresentable => {
+                    self.close_text_section();
+                    let r = size_pt * 0.13;
+                    draw_filled_disc(
+                        &mut self.page_ops,
+                        bullet_x + r,
+                        mid_y,
+                        r,
+                        bullet_col,
+                        page_h,
+                    );
+                }
+                _ => {
+                    self.close_text_section();
+                    self.ensure_text_section();
+                    self.move_cursor_to(bullet_x, bullet_y);
+                    self.page_ops.push(Op::SetFont {
+                        font: self.font_set.handle(bullet_flags),
+                        size: Pt(size_pt),
+                    });
+                    self.page_ops.push(Op::SetLineHeight {
+                        lh: Pt(size_pt * line_height.max(0.5)),
+                    });
+                    self.page_ops.push(Op::SetFillColor { col: bullet_col });
+                    let bullet_emit = if needs_xlit {
+                        to_win1252(&bullet_text)
+                    } else {
+                        bullet_text.clone()
+                    };
+                    self.page_ops.push(Op::ShowText {
+                        items: vec![TextItem::Text(bullet_emit)],
+                    });
+                }
+            }
 
             self.indent_left_pt = (saved_left + bullet_width + bullet_gap_pt)
                 .min(self.indent_right_pt - 10.0);
@@ -2288,14 +2349,18 @@ impl<'a> Engine<'a> {
         for d in pending {
             match d.kind {
                 DecorationKind::Underline | DecorationKind::Strike => {
-                    let col = link_color.clone().unwrap_or_else(|| rgb_color((80, 80, 80)));
+                    // Near-text-black at ~1pt so the rule reads as
+                    // clearly as the glyph stems; links keep link
+                    // colour. (Was (80,80,80) @ 0.6pt — barely
+                    // visible next to the text.)
+                    let col = link_color.clone().unwrap_or_else(|| rgb_color((45, 45, 45)));
                     draw_horizontal_line(
                         &mut self.page_ops,
                         d.x0_pt,
                         d.x1_pt,
                         d.y_pt,
                         col,
-                        0.6,
+                        1.0,
                         page_h_pt,
                     );
                 }
@@ -2755,6 +2820,84 @@ fn draw_horizontal_line(
                 },
             ],
             is_closed: false,
+        },
+    });
+    ops.push(Op::RestoreGraphicsState);
+}
+
+/// Filled disc (≈16-gon) for a list bullet the active font can't
+/// render — drawn as a path so it never depends on a glyph being
+/// present. Centre is given in top-down coordinates.
+fn draw_filled_disc(
+    ops: &mut Vec<Op>,
+    cx_pt: f32,
+    cy_top_pt: f32,
+    r_pt: f32,
+    fill: Color,
+    page_height_pt: f32,
+) {
+    if r_pt <= 0.0 {
+        return;
+    }
+    let n = 16;
+    let points: Vec<LinePoint> = (0..n)
+        .map(|i| {
+            let a = std::f32::consts::TAU * (i as f32) / (n as f32);
+            LinePoint {
+                p: Point {
+                    x: Pt(cx_pt + r_pt * a.cos()),
+                    y: Pt(page_height_pt - (cy_top_pt + r_pt * a.sin())),
+                },
+                bezier: false,
+            }
+        })
+        .collect();
+    ops.push(Op::SaveGraphicsState);
+    ops.push(Op::SetFillColor { col: fill });
+    ops.push(Op::DrawPolygon {
+        polygon: Polygon {
+            rings: vec![PolygonRing { points }],
+            mode: PaintMode::Fill,
+            winding_order: WindingOrder::NonZero,
+        },
+    });
+    ops.push(Op::RestoreGraphicsState);
+}
+
+/// Stroked polyline through top-down points (optionally closed) —
+/// used for the task-list checkbox outline and tick.
+fn draw_stroked_path(
+    ops: &mut Vec<Op>,
+    pts_top: &[(f32, f32)],
+    col: Color,
+    thickness_pt: f32,
+    closed: bool,
+    page_height_pt: f32,
+) {
+    if pts_top.len() < 2 {
+        return;
+    }
+    ops.push(Op::SaveGraphicsState);
+    ops.push(Op::SetOutlineColor { col });
+    ops.push(Op::SetOutlineThickness {
+        pt: Pt(thickness_pt),
+    });
+    ops.push(Op::SetLineDashPattern {
+        dash: LineDashPattern::default(),
+    });
+    ops.push(Op::DrawLine {
+        line: printpdf::Line {
+            points: pts_top
+                .iter()
+                .map(|&(x, yt)| LinePoint {
+                    p: Point {
+                        x: Pt(x),
+                        y: Pt(page_height_pt - yt),
+                    },
+                    bezier: false,
+                })
+                .collect(),
+            is_closed: closed,
         },
     });
     ops.push(Op::RestoreGraphicsState);

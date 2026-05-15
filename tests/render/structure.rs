@@ -398,6 +398,36 @@ mod config_variations {
         .expect("render");
         validate(&bytes);
     }
+
+    fn theme_validates(name: &str) {
+        let md = "# Heading\n\nParagraph with **bold** and `code`.\n\n\
+                  - item one\n- item two\n\n> a quote\n\n\
+                  | A | B |\n|---|---|\n| 1 | 2 |\n";
+        let bytes = markdown2pdf::parse_into_bytes(
+            md.to_string(),
+            markdown2pdf::config::ConfigSource::Theme(name),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("{name} theme failed to render: {e}"));
+        let pages = validate(&bytes);
+        assert!(pages >= 1, "{name} theme produced no pages");
+    }
+
+    // The three bundled themes that had no correctness coverage.
+    #[test]
+    fn minimal_theme_renders_valid_structure() {
+        theme_validates("minimal");
+    }
+
+    #[test]
+    fn compact_theme_renders_valid_structure() {
+        theme_validates("compact");
+    }
+
+    #[test]
+    fn modern_theme_renders_valid_structure() {
+        theme_validates("modern");
+    }
 }
 
 mod feature_rich_document {

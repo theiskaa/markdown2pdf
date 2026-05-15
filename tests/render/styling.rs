@@ -1288,3 +1288,218 @@ fn colored_paragraph_spanning_pages_paints_per_page() {
         rects
     );
 }
+
+/// Correctness of inline run-style flags and a few features that
+/// previously only had "renders / tag consumed" coverage. Every
+/// assertion targets a specific content-stream operator, with a
+/// plain-text negative control so it can't pass vacuously.
+mod inline_style_application {
+    use super::*;
+
+    /// Largest `x` operand across all `… Td` text-position ops.
+    fn max_td_x(bytes: &[u8]) -> f32 {
+        let s = String::from_utf8_lossy(bytes);
+        let mut m = 0.0f32;
+        for line in s.lines() {
+            let l = line.trim();
+            if let Some(p) = l.strip_suffix(" Td") {
+                if let Some(x) = p.split_whitespace().next() {
+                    if let Ok(v) = x.parse::<f32>() {
+                        if v > m {
+                            m = v;
+                        }
+                    }
+                }
+            }
+        }
+        m
+    }
+
+    #[test]
+    fn html_underline_emits_stroke_decoration() {
+        let plain = render("before under after", "");
+        assert!(
+            !bytes_have_stroke_op(&plain),
+            "plain paragraph must not emit a stroke (negative control)"
+        );
+        let u = render("before <u>under</u> after", "");
+        assert!(
+            bytes_have_stroke_op(&u),
+            "<u> must draw an underline stroke"
+        );
+    }
+
+    #[test]
+    fn strike_del_and_tilde_emit_stroke_decoration() {
+        for md in [
+            "x <s>struck</s> y",
+            "x <del>deleted</del> y",
+            "x ~~struck~~ y",
+        ] {
+            assert!(
+                bytes_have_stroke_op(&render(md, "")),
+                "{md:?} must draw a strikethrough stroke"
+            );
+        }
+    }
+
+    #[test]
+    fn html_small_tag_shrinks_font_to_085x() {
+        // Default paragraph size is 8pt; <small> → 0.85× = 6.8pt.
+        let plain = render("just regular sized text", "");
+        assert!(
+            !contains(&plain, b"6.8 Tf"),
+            "plain text must not emit the small (6.8pt) size"
+        );
+        let small = render("regular <small>tiny words</small> regular", "");
+        assert!(
+            contains(&small, b"6.8 Tf"),
+            "<small> must shrink the run to 0.85× (6.8pt Tf)"
+        );
+    }
+
+    #[test]
+    fn html_kbd_tag_switches_to_monospace() {
+        let plain = render("press the key now", "");
+        assert!(
+            !contains(&plain, b"Courier"),
+            "plain prose must not pull in a monospace font"
+        );
+        let kbd = render("press <kbd>Ctrl</kbd> now", "");
+        assert!(
+            contains(&kbd, b"Courier"),
+            "<kbd> must switch the run to the monospace font"
+        );
+    }
+
+    #[test]
+    fn superscript_and_subscript_shrink_font_to_070x() {
+        // <sup>/<sub> → 0.70× of 8pt = 5.6pt.
+        let plain = render("E equals m c squared", "");
+        assert!(!contains(&plain, b"5.6 Tf"));
+        assert!(
+            contains(&render("E = mc<sup>2</sup>", ""), b"5.6 Tf"),
+            "<sup> must render at 0.70× size"
+        );
+        assert!(
+            contains(&render("H<sub>2</sub>O", ""), b"5.6 Tf"),
+            "<sub> must render at 0.70× size"
+        );
+    }
+
+    #[test]
+    fn ordered_list_emits_visible_numbers() {
+        let b = render("1. alpha\n2. bravo\n3. charlie\n", "");
+        for marker in [&b"(1."[..], b"(2.", b"(3."] {
+            assert!(
+                contains(&b, marker),
+                "ordered list must render the {:?} marker",
+                std::str::from_utf8(marker).unwrap()
+            );
+        }
+        assert!(contains_text(&b, "alpha") && contains_text(&b, "charlie"));
+    }
+
+    #[test]
+    fn multiline_footnote_definition_includes_continuation() {
+        let md = "Text with note[^a].\n\n[^a]: first line\n    continued second line\n";
+        let b = render(md, "");
+        assert!(
+            contains_text(&b, "first line"),
+            "footnote definition first line missing"
+        );
+        assert!(
+            contains_text(&b, "continued second line"),
+            "4-space indented footnote continuation was dropped"
+        );
+    }
+
+    #[test]
+    fn indented_code_block_renders_content() {
+        let b = render("para before\n\n    let x = 42;\n\npara after\n", "");
+        assert!(
+            contains_text(&b, "let x = 42;"),
+            "indented (4-space) code block content missing"
+        );
+    }
+
+    #[test]
+    fn table_column_alignment_shifts_text_position() {
+        // Same one-cell table, right- vs left-aligned: the right
+        // column must place its text at a larger x.
+        let right = render("| H |\n|--:|\n| Z |\n", "");
+        let left = render("| H |\n|:--|\n| Z |\n", "");
+        assert!(
+            max_td_x(&right) > max_td_x(&left) + 50.0,
+            "right-aligned cell text ({:.0}) should sit well right of \
+             left-aligned ({:.0})",
+            max_td_x(&right),
+            max_td_x(&left)
+        );
+    }
+
+    #[test]
+    fn task_list_draws_a_checkbox_not_literal_brackets() {
+        let b = render("- [ ] open task\n- [x] done task\n", "");
+        assert!(
+            !contains(&b, b"[ ]") && !contains(&b, b"[x]"),
+            "task markers leaked as literal text instead of a drawn box"
+        );
+        assert!(
+            bytes_have_stroke_op(&b),
+            "task checkbox outline (a stroked path) was not drawn"
+        );
+        assert!(contains_text(&b, "open task") && contains_text(&b, "done task"));
+    }
+
+    #[test]
+    fn checked_and_unchecked_tasks_render_differently() {
+        // The checked box additionally draws a tick, so the streams
+        // must differ — proves the checked state is visualised.
+        let done = render("- [x] a\n", "");
+        let open = render("- [ ] a\n", "");
+        assert!(bytes_have_stroke_op(&done) && bytes_have_stroke_op(&open));
+        assert_ne!(
+            done, open,
+            "checked vs unchecked task produced identical output"
+        );
+        assert!(done.len() > open.len(), "checked box should add a tick path");
+    }
+
+    #[test]
+    fn default_unordered_bullet_is_a_drawn_disc_not_asterisk() {
+        // Built-in Helvetica lacks `•`; it must be a filled disc
+        // (a polygon fill op), never the `*` win1252 fallback.
+        let list = render("- alpha\n- bravo\n", "");
+        let plain = render("alpha bravo just a paragraph", "");
+        assert!(
+            count_rect_ops(&list) >= 2,
+            "expected ≥1 filled disc per item, got {} fill ops",
+            count_rect_ops(&list)
+        );
+        assert_eq!(
+            count_rect_ops(&plain),
+            0,
+            "a plain paragraph must not emit any fill ops (control)"
+        );
+        assert!(contains_text(&list, "alpha") && contains_text(&list, "bravo"));
+    }
+
+    #[test]
+    fn table_header_repeats_across_page_breaks() {
+        let mut md = String::from("| HDRMARK | C2 |\n|---|---|\n");
+        for i in 0..150 {
+            md.push_str(&format!("| row{i} body | val{i} |\n"));
+        }
+        let b = render(&md, "");
+        let pages = page_count(&b);
+        assert!(pages >= 2, "expected a multi-page table, got {pages}");
+        assert!(
+            count_substr(&b, b"HDRMARK") >= pages,
+            "table header appeared {} times across {} pages — \
+             not repeated per page",
+            count_substr(&b, b"HDRMARK"),
+            pages
+        );
+    }
+}
