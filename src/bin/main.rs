@@ -39,7 +39,7 @@ fn get_markdown_input(matches: &clap::ArgMatches) -> Result<String, AppError> {
         #[cfg(not(feature = "fetch"))]
         {
             Err(AppError::ConversionError(
-                "URL fetching is not enabled. Please rebuild with --features fetch or --features native-tls".to_string()
+                "URL fetching is not enabled. Please rebuild with --features fetch".to_string()
             ))
         }
     } else if let Some(markdown_string) = matches.get_one::<String>("string") {

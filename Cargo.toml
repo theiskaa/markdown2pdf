@@ -20,10 +20,8 @@ name = "markdown2pdf"
 path = "src/bin/main.rs"
 
 [features]
-default = ["svg"]
-fetch = ["dep:reqwest"]
-rustls-tls = ["fetch", "reqwest/rustls"]
-native-tls = ["fetch", "reqwest/native-tls"]
+default = []
+fetch = ["dep:reqwest", "reqwest/rustls"]
 svg = ["dep:resvg"]
 
 [dependencies]

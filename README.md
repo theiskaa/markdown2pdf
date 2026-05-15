@@ -65,37 +65,38 @@ markdown2pdf = "0.4.0"
 
 ### Feature Flags
 
-The library provides optional feature flags to control dependencies:
+Two optional features. Both off by default.
 
-- **Default (no features)**: Core PDF generation from files and strings. No network dependencies.
-- **`fetch`**: Enables URL fetching support (requires one of the TLS features below).
-- **`native-tls`**: Enables URL fetching with native TLS/OpenSSL (recommended for most users).
-- **`rustls-tls`**: Enables URL fetching with pure-Rust TLS implementation (useful for static linking or avoiding OpenSSL).
+- **`fetch`** — URL fetching support for remote images and `-u` /
+  `--url` markdown input. Uses pure-Rust TLS (rustls), no
+  system-OpenSSL needed; works in `rust:slim` and Alpine. If you
+  need native-TLS for corporate certificate stores, depend on
+  `reqwest` directly with your preferred backend and Cargo will
+  unify.
+- **`svg`** — SVG image rasterization via `resvg`. Required for
+  README-style hero images and any SVG embedded via `![](path.svg)`
+  or `<img src="...svg">`.
 
 ```toml
-# Minimal installation (no network dependencies)
+# Minimal — local files only, no network, no SVG
 markdown2pdf = "0.4.0"
 ```
 
 ```toml
-# With URL fetching support (native TLS)
-markdown2pdf = { version = "0.4.0", features = ["native-tls"] }
-```
-```toml
-# With URL fetching support (rustls)
-markdown2pdf = { version = "0.4.0", features = ["rustls-tls"] }
+# Full library: URL fetching + SVG rasterization
+markdown2pdf = { version = "0.4.0", features = ["fetch", "svg"] }
 ```
 
-**Note**: Binary installations via cargo or prebuilt downloads do not include URL fetching by default. To build the binary with URL support:
+To build the binary with URL fetching:
 
-*Install with URL fetching support:*
 ```bash
-cargo install markdown2pdf --features native-tls
+cargo install markdown2pdf --features fetch
 ```
 
-*Or build from source:*
+Or from source:
+
 ```bash
-cargo build --release --features native-tls
+cargo build --release --features fetch,svg
 ```
 
 ## Usage
@@ -112,7 +113,7 @@ Convert string content:
 markdown2pdf -s "**bold text** *italic text*." -o "output.pdf"
 ```
 
-Convert from URL (requires `native-tls` or `rustls-tls` feature):
+Convert from URL (requires `fetch` feature):
 ```bash
 markdown2pdf -u "https://raw.githubusercontent.com/user/repo/main/README.md" -o "readme.pdf"
 ```
@@ -234,7 +235,7 @@ markdown2pdf -p input.md -c my-config.toml -o out.pdf
 ```
 
 The full configuration guide with every field explained lives at
-**[`docs/configuration.md`](docs/configuration.md)**. The annotated
+**[`docs/Configuration.md`](docs/Configuration.md)**. The annotated
 reference config you can copy and tweak is at
 **[`docs/config.toml`](docs/config.toml)**.
 

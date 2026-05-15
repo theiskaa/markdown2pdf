@@ -258,9 +258,12 @@ margin_after_pt = 4.0
 Images support:
 - **Local files** — PNG and JPEG via the bundled `image` crate.
 - **URL fetching** — `![alt](https://...)` works when compiled with
-  `--features rustls-tls` (or `--features native-tls`). The fetch
-  has a 5-second timeout and 10 MB cap; failures degrade to italic
-  alt text.
+  `--features fetch`. Uses rustls (pure-Rust TLS). The fetch has a
+  5-second timeout and 10 MB cap; failures degrade to italic alt
+  text.
+- **SVG** — vector images (`.svg`) rasterize via `resvg` when
+  compiled with `--features svg`. Useful for README hero images
+  served by GitHub.
 - **Captions** — `![alt](url "Caption text")` renders the title as a
   small italic caption beneath the image, wrap-constrained to the
   image's width when the image is narrower than the column.
