@@ -9,11 +9,11 @@
 
 </p>
 
-markdown2pdf converts Markdown to PDF using a lexical analyzer and PDF rendering engine. The library tokenizes Markdown into semantic elements, applies styling rules from TOML configuration, and generates styled PDF output.
+markdown2pdf converts Markdown to PDF with a lexical analyzer and an in-tree rendering engine built directly on `printpdf`. The library tokenizes Markdown into semantic elements, resolves styling from a TOML configuration, and lays out the PDF itself — no third-party document engine in between.
 
-Both binary and library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
+Both a binary and a library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
 
-The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions and currently covers around 85% of the spec, including escapes, emphasis flanking, reference links, indented and fenced code blocks, blockquotes with nested blocks, lazy list continuation, autolinks, entities, hard breaks, GFM tables, task lists and strikethrough. See [Markdown coverage](#markdown-coverage) below for the full breakdown. Supports multiple input sources and outputs to files or bytes for in-memory processing.
+The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions and passes 100% of the CommonMark spec suite. The renderer covers headings with bookmarks and anchors, inline emphasis (bold, italic, monospace, strikethrough, underline, superscript, subscript, small-caps), ordered/unordered/task lists with arbitrary nesting, GFM tables with per-column alignment and header repeat, blockquotes, fenced and indented code, images (local, URL, and SVG), footnotes, definition lists, cross-references, and inline HTML. Document features include six bundled themes, per-block styling, configurable page setup, headers and footers, an auto-generated table of contents, a title page, YAML/TOML frontmatter, and PDF metadata. Multiple input sources; output to a file or to bytes for in-memory processing.
 
 ## Install binary
 
@@ -37,6 +37,13 @@ For the latest git version:
 cargo install --git https://github.com/theiskaa/markdown2pdf
 ```
 
+URL input (`-u`) and SVG images are behind optional features; pass
+them to `cargo install` (see [Feature flags](#feature-flags)):
+
+```bash
+cargo install markdown2pdf --features fetch,svg
+```
+
 ### Prebuilt binaries
 
 Prebuilt versions are available in our [GitHub releases](https://github.com/theiskaa/markdown2pdf/releases/latest):
@@ -51,193 +58,102 @@ Prebuilt versions are available in our [GitHub releases](https://github.com/thei
 
 ## Install as library
 
-Add to your project:
+Add the crate to your project:
 
 ```bash
 cargo add markdown2pdf
 ```
 
-Or add to your Cargo.toml:
+Or, in `Cargo.toml`:
 
 ```toml
-markdown2pdf = "0.4.0"
+# Minimal — local files only, no network, no SVG
+markdown2pdf = "1.0.0"
+
+# Or with URL fetching + SVG rasterization
+markdown2pdf = { version = "1.0.0", features = ["fetch", "svg"] }
 ```
 
-### Feature Flags
+See [docs/Library.md](docs/Library.md) for the programmatic API.
 
-The library provides optional feature flags to control dependencies:
+## Feature flags
 
-- **Default (no features)**: Core PDF generation from files and strings. No network dependencies.
-- **`fetch`**: Enables URL fetching support (requires one of the TLS features below).
-- **`native-tls`**: Enables URL fetching with native TLS/OpenSSL (recommended for most users).
-- **`rustls-tls`**: Enables URL fetching with pure-Rust TLS implementation (useful for static linking or avoiding OpenSSL).
+Two optional features, both off by default and shared by the binary
+and the library. The library enables them in `Cargo.toml`
+(`features = [...]`); the binary enables them at install or build
+time (`cargo install markdown2pdf --features fetch,svg`).
 
-```toml
-# Minimal installation (no network dependencies)
-markdown2pdf = "0.4.0"
-```
-
-```toml
-# With URL fetching support (native TLS)
-markdown2pdf = { version = "0.4.0", features = ["native-tls"] }
-```
-```toml
-# With URL fetching support (rustls)
-markdown2pdf = { version = "0.4.0", features = ["rustls-tls"] }
-```
-
-**Note**: Binary installations via cargo or prebuilt downloads do not include URL fetching by default. To build the binary with URL support:
-
-*Install with URL fetching support:*
-```bash
-cargo install markdown2pdf --features native-tls
-```
-
-*Or build from source:*
-```bash
-cargo build --release --features native-tls
-```
-
-## Usage
-
-The tool accepts file paths (`-p`), string content (`-s`), or URLs (`-u`) as input. Output path is specified with `-o`. Input precedence: path > url > string. Defaults to 'output.pdf'.
-
-Convert a Markdown file:
-```bash
-markdown2pdf -p "docs/resume.md" -o "resume.pdf"
-```
-
-Convert string content:
-```bash
-markdown2pdf -s "**bold text** *italic text*." -o "output.pdf"
-```
-
-Convert from URL (requires `native-tls` or `rustls-tls` feature):
-```bash
-markdown2pdf -u "https://raw.githubusercontent.com/user/repo/main/README.md" -o "readme.pdf"
-```
-
-Use `--verbose` for detailed output, `--quiet` for CI/CD pipelines, or `--dry-run` to validate syntax without generating PDF.
-
-## Fonts
-
-The font system supports four modes:
-
-- **Built-in fonts**: Helvetica, Times, Courier (fastest, no file I/O, works everywhere including Docker/CI with no system fonts)
-- **System fonts**: Searches standard OS font directories
-- **File paths**: Load directly from a TTF/OTF file
-- **Embedded bytes**: Load from compile-time included font data (great for GUI apps)
-
-```bash
-# Use built-in font (fastest)
-markdown2pdf -p document.md -o output.pdf
-```
-
-```bash
-# Use system font
-markdown2pdf -p document.md --default-font Georgia -o output.pdf
-```
-
-```bash
-# Use specific font file
-markdown2pdf -p document.md --default-font "/path/to/font.ttf" -o output.pdf
-```
-
-Font subsetting is enabled by default, reducing PDF size by embedding only the glyphs used in the document. A Unicode document with Arial Unicode MS produces ~45KB instead of 23MB.
-
-Built-in fonts work out of the box in any environment, including minimal Docker images (`rust:slim`, `debian:slim`, Alpine) and CI runners with no fonts installed. The library ships with embedded font metrics so no external font files are needed for Helvetica, Times, or Courier.
-
-Performance is ~20ms for standard documents with built-in fonts.
-
-## Library Usage
-
-Two main functions: `parse_into_file()` saves PDF to disk, `parse_into_bytes()` returns bytes for web services. Both parse Markdown, apply styling, and render output.
-
-Configuration uses `ConfigSource`: `Default` for built-in styling, `File("path")` for runtime loading, or `Embedded(content)` for compile-time embedding.
-
-
-```rust
-// Default styling
-parse_into_file(markdown, "output.pdf", ConfigSource::Default, None)?;
-```
-
-```rust
-// File-based configuration
-parse_into_file(markdown, "output.pdf", ConfigSource::File("config.toml"), None)?;
-```
-
-```rust
-// Embedded configuration
-const CONFIG: &str = include_str!("../config.toml");
-parse_into_file(markdown, "output.pdf", ConfigSource::Embedded(CONFIG), None)?;
-```
-
-Font configuration uses `FontConfig` for programmatic control:
-
-```rust
-use markdown2pdf::{parse_into_file, config::ConfigSource, fonts::FontConfig};
-
-let font_config = FontConfig::new()
-    .with_default_font("Georgia")
-    .with_code_font("Courier");
-
-parse_into_file(
-    markdown,
-    "output.pdf",
-    ConfigSource::Default,
-    Some(&font_config),
-)?;
-```
-
-You can also load fonts directly from embedded bytes using `FontSource`, which is useful for GUI applications or environments without filesystem access:
-
-```rust
-use markdown2pdf::{parse_into_file, config::ConfigSource, fonts::{FontConfig, FontSource}};
-
-static BODY_FONT: &[u8] = include_bytes!("path/to/body_font.ttf");
-static CODE_FONT: &[u8] = include_bytes!("path/to/code_font.ttf");
-
-let font_config = FontConfig::new()
-    .with_default_font_source(FontSource::bytes(BODY_FONT))
-    .with_code_font_source(FontSource::bytes(CODE_FONT));
-
-parse_into_file(
-    markdown,
-    "output.pdf",
-    ConfigSource::Default,
-    Some(&font_config),
-)?;
-```
-
-## Logging
-
-The library uses the [`log`](https://crates.io/crates/log) crate. No output by default. Enable with any `log`-compatible backend (e.g., `env_logger`) and set `RUST_LOG=markdown2pdf=info` or `debug` for diagnostics.
+- **`fetch`** — URL input (the `-u`/`--url` flag) and remote images.
+  Uses pure-Rust TLS (rustls), so no system OpenSSL is needed; works
+  in `rust:slim` and Alpine. If you need native TLS for corporate
+  certificate stores, depend on `reqwest` directly with your
+  preferred backend and Cargo will unify the features.
+- **`svg`** — SVG image rasterization via `resvg`, for SVG embedded
+  through `![](path.svg)` or `<img src="...svg">`.
 
 ## Configuration
 
-TOML configuration customizes fonts, colors, spacing, and visual properties. Three loading methods: default styles, runtime files, or compile-time embedding.
+Every visual choice — fonts, colors, page setup, headers / footers,
+table of contents, title page, alignment, per-block typography — lives
+in a TOML configuration. Six bundled themes (`default`, `github`,
+`academic`, `minimal`, `compact`, `modern`) give one-line styling;
+per-block overrides handle the long tail; and **any value can be
+overridden per-run from the command line**, winning over the config
+file and theme.
 
-For binary usage, create a config file at `~/markdown2pdfrc.toml` and copy the example configuration from `markdown2pdfrc.example.toml`. For library usage with embedded config, create your configuration file and embed it using `include_str!()`.
+```sh
+# A theme
+markdown2pdf -p input.md --theme github -o out.pdf
+
+# Your own config file
+markdown2pdf -p input.md -c my-config.toml -o out.pdf
+
+# Override individual values at runtime (highest priority)
+markdown2pdf -p input.md --title "Report" --font-size 11 --margin 2.5cm \
+  --page-numbers -V headings.h1.font_size_pt=28 -o out.pdf
+```
+
+The full schema with every field explained is in
+**[`docs/Configuration.md`](docs/Configuration.md)**; an annotated,
+copy-and-tweak reference config is **[`docs/config.toml`](docs/config.toml)**.
+
+## Usage
+
+`markdown2pdf` converts a file (`-p`), a string (`-s`), or a URL
+(`-u`, requires the `fetch` build feature) to a PDF (`-o`, default
+`./output.pdf`).
+
+```bash
+markdown2pdf -p docs/resume.md -o resume.pdf
+markdown2pdf -s "**bold** *italic*." -o out.pdf
+markdown2pdf -p doc.md --theme academic --page-numbers -o out.pdf
+```
+
+`--verbose` / `--quiet` control output; `--dry-run` validates
+without writing; `--print-effective-config` prints the resolved
+style as TOML. Full flag reference, the config-override system, and
+font selection: **[`docs/CLI.md`](docs/CLI.md)**.
+
+## Library Usage
+
+`parse_into_file` writes a PDF; `parse_into_bytes` returns a
+`Vec<u8>` for web services. `ConfigSource` selects styling
+(`Default`, `Theme("github")`, `File(path)`, `Embedded(toml)`).
+
+```rust
+use markdown2pdf::{parse_into_file, config::ConfigSource};
+
+parse_into_file("# Hello".into(), "out.pdf", ConfigSource::Default, None)?;
+parse_into_file("# Doc".into(), "out.pdf", ConfigSource::Theme("academic"), None)?;
+```
+
+Pre-resolved styles + runtime overrides, fonts (name / path /
+embedded bytes), frontmatter, and the error model are covered in
+**[`docs/Library.md`](docs/Library.md)**.
 
 ## Markdown Coverage
 
-Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). CommonMark spec pass rate: **100% (652/652)** — every section passes. Backed by ~740 inline unit tests organized in `tests/markdown/`, the full spec runner in `tests/commonmark_spec.rs`, and a 36-test robustness suite in `tests/stress.rs`.
-
-| Block-level                          | Status  | Inline                               | Status  |
-|--------------------------------------|---------|--------------------------------------|---------|
-| ATX headings (`#` to `######`)       | Full    | Backslash escapes                    | Full    |
-| Setext headings (`===` / `---`)      | Full    | Entity / numeric references          | Full    |
-| Paragraphs                           | Full    | Code spans (single & multi-backtick) | Full    |
-| Thematic breaks (`---` `***` `___`)  | Full    | Emphasis & strong (`*` and `_`)      | Full    |
-| Indented code blocks (4-space)       | Full    | Inline links                         | Full    |
-| Fenced code blocks (`` ``` ``, `~~~`)| Full    | Reference links / images             | Full    |
-| Blockquotes                          | Full    | Autolinks (`<https://…>`, `<email>`) | Full    |
-| Bullet lists (`-` `+` `*`)           | Full    | Images (rendered as styled link)     | Partial |
-| Ordered lists (`1.` and `1)`)        | Full    | Strikethrough (`~~text~~`)           | Full    |
-| Tables (GFM)                         | Full    | Raw inline HTML                      | Full    |
-| Task list items (GFM)                | Full    | Hard / soft line breaks              | Full    |
-| Reference link definitions           | Full    |                                      |         |
-| HTML blocks (7 kinds)                | Full    |                                      |         |
+Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). CommonMark spec pass rate: **100% (652/652)** — every section passes. Backed by ~800 inline lexer unit tests in `tests/markdown/`, the full spec runner in `tests/commonmark_spec.rs`, a robustness suite in `tests/stress.rs`, and an adversarial / structural renderer test suite in `tests/render/` (object-graph validation, malformed input, image-pipeline, and config-validation cases).
 
 ## Contributing
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.

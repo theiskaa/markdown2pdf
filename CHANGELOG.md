@@ -1,462 +1,283 @@
+# Changelog
+
+All notable changes to **markdown2pdf** are documented here.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Each release section below is what ships as the GitHub Release notes.
+
+## [1.0.0] - 2026-05-15
+
+First stable release. The dependency on `genpdfi` (a `genpdf` fork) is
+**completely removed** and the old `genpdfi`-backed `pdf` module is
+replaced by a fully rewritten, in-tree rendering engine built directly
+on `printpdf 0.9`. The library now owns the entire path from the
+lexer's token stream to PDF bytes — no third-party layout engine sits
+between the library and the PDF backend. Alongside the engine rewrite
+this release adds a complete TOML configuration system with six bundled
+themes, a redesigned public API, and frontmatter support.
+
+Resolves [#12](https://github.com/theiskaa/markdown2pdf/issues/12), [#13](https://github.com/theiskaa/markdown2pdf/issues/13), and [#31](https://github.com/theiskaa/markdown2pdf/issues/31).
+
+### Breaking changes
+
+- `pub mod pdf` is removed; rendering is internal behind
+  `parse_into_*` / `render_to_*`.
+- `MdpError::ParseError` field shape changed: a raw byte `position`
+  became structured `line` + `column`.
+- The `fetch` feature no longer needs a separate TLS feature;
+  `rustls-tls` / `native-tls` were removed and `svg` is now opt-in.
+- Crate modernized to **edition 2024** with an **MSRV of 1.85**.
+
+### Added
+
+- **In-tree rendering engine** (`src/lib/render/`) — a four-stage
+  pipeline: token stream → block IR → positioned page op-streams →
+  `printpdf 0.9` → an `lopdf` post-process pass for features printpdf
+  does not expose (link tooltips, Catalog `/Lang`).
+- **Markdown rendering:** headings (1–6) with anchors and PDF
+  bookmarks; glyph-accurate line wrapping; inline bold / italic /
+  monospace / strikethrough / underline / superscript / subscript /
+  small-caps / small; ordered, unordered and GFM task lists with
+  arbitrary nesting and loose/tight spacing; GFM tables with
+  per-column alignment and header repeat across page breaks;
+  blockquotes with configurable borders and cross-page backgrounds;
+  fenced and indented code blocks; images (local PNG/JPEG, URL fetch
+  and SVG rasterization behind features, HTML `<img>`, alignment,
+  max-width, captions); GFM footnotes with bidirectional clickable
+  anchors and multi-line definition bodies; definition lists;
+  cross-references (`[text](#slug)`); inline HTML mapped to run styles
+  (`<sup>` `<sub>` `<u>` `<s>` `<del>` `<small>` `<kbd>`), framing
+  tags dropped, unknown tags passed through; hyphenation for overflow
+  words; non-breaking spaces (U+00A0/U+202F/U+2007) respected by the
+  wrapper.
+- **Document features:** configurable page size and orientation,
+  manual page breaks; headers/footers with page-number substitution
+  and per-piece gap control; auto-generated table of contents with
+  clickable entries and convergent page numbering; title page
+  (title / subtitle / author / date); PDF metadata
+  (title/author/subject/keywords/creator) and Catalog `/Lang` for
+  accessibility; inline link tooltips.
+- **Configuration system** (`styling/` module): a serde-derived,
+  `deny_unknown_fields` TOML schema with typo suggestions on unknown
+  keys; a cascade resolver (default theme → `inherits` chain →
+  `[defaults]` → per-block → `--theme`); six bundled themes —
+  `default`, `github`, `academic`, `minimal`, `compact`, `modern`.
+  Every visual choice is user-overridable. A prose configuration
+  guide and an annotated reference config ship under `docs/`.
+- **YAML / TOML frontmatter** parsed into document metadata.
+- **Public API:** `parse_into_file`, `parse_into_bytes`, and the
+  symmetric `parse_into_file_with_style` / `parse_into_bytes_with_style`;
+  path arguments now accept `impl AsRef<Path>`; `ConfigSource`
+  (`Default` / `Theme(&str)` / `File` / `Embedded`) lets callers pick
+  a bundled theme by name; `MdpError::ParseError` carries structured
+  `line` + `column`.
+- Page size is now configurable from the TOML config
+  ([#12](https://github.com/theiskaa/markdown2pdf/issues/12)) and
+  images are embedded into the PDF
+  ([#13](https://github.com/theiskaa/markdown2pdf/issues/13)).
+
+### Changed
+
+- All dependencies bumped to current versions; added
+  `printpdf 0.9`, `lopdf`, `hyphenation`, `image`, and `resvg`
+  (optional).
+- The confusing `fetch` + `rustls-tls` + `native-tls` feature triple
+  is replaced by a single `fetch` feature that bundles rustls; `svg`
+  is opt-in.
+- Internal lexer types (`ParseContext`, `DelimRun`) are hidden from
+  the public surface.
+
+### Removed
+
+- The `genpdfi` dependency and the old `pub mod pdf`.
+- The `rustls-tls` and `native-tls` features (folded into `fetch`).
+
+### Fixed
+
+- Hostile or mistaken numeric config (zero/negative/NaN font size,
+  line height, margins, custom page size) is clamped so the renderer
+  never hangs or crashes.
+- Renderer robustness pass: bounded parser recursion so deeply nested
+  input returns a typed error instead of overflowing the stack;
+  linear-time table-start scan; U+0000 normalized to U+FFFD per
+  CommonMark; real line/column in config errors; frontmatter tolerates
+  a leading UTF-8 BOM.
+- List bullets and task checkboxes are drawn as font-independent
+  vector paths (no more `*`/`[ ]` fallback under the built-in font);
+  underline/strike decorations are darkened for legibility.
+
+### Security
+
+- Removing `genpdfi` eliminates the unmaintained transitive crates
+  reported in [#31](https://github.com/theiskaa/markdown2pdf/issues/31):
+  `encoding` (RUSTSEC-2021-0153), `lzw` (RUSTSEC-2020-0144),
+  `rusttype` (RUSTSEC-2021-0140) and `stb_truetype`
+  (RUSTSEC-2020-0020) are no longer anywhere in the dependency graph.
+  Font handling now uses `ttf-parser`; downstream consumers can drop
+  the corresponding `cargo-deny` exclusions.
+
 ## [0.4.0] - 2026-05-13
 
-### Features
+Major lexer overhaul toward full CommonMark + GFM compliance.
 
-- *(lexer)* Parse inline raw-html edges
-- *(lexer)* Parse block-element HTML blocks (<div>, <table>, <p>, etc.)
-- *(lexer)* Parse standalone HTML tag blocks (any complete tag on its own line)
-- *(lexer)* Parse raw-content HTML blocks (<script>/<pre>/<style>/<textarea>)
-- *(lexer)* Parse block-level HTML comments (<!--…-->) as block tokens
-- *(lexer)* Parse processing instructions (<?…?>) as block tokens
-- *(lexer)* Parse CDATA sections (<![CDATA[…]]>) as block tokens
-- *(lexer)* Parse HTML declarations (<!DOCTYPE>, <!ELEMENT>, etc.) as block tokens
-- *(lexer)* Replace greedy emphasis with stack-based algorithm (84.0% → 89.0%)
-- *(lexer)* Close 84 CommonMark spec gaps (60.6% → 73.5%) + spec test harness
-- *(lexer)* Widen Link/Image AST + parse inline content + preserve titles
-- *(lexer)* Detect loose vs tight lists
-- *(lexer)* Decode entities in link text, URL, image alt + reference labels
-- *(lexer)* Blockquote lazy continuation
-- *(lexer)* Full HTML5 named-entity table and proper numeric fallbacks
+### Added
 
-### Bug Fixes
+- Full inline and block HTML handling: raw inline HTML, block-element
+  blocks (`<div>`/`<table>`/`<p>`), standalone-tag blocks,
+  raw-content blocks (`<script>`/`<pre>`/`<style>`/`<textarea>`),
+  block comments, processing instructions, CDATA, and declarations.
+- Stack-based emphasis resolution, wider Link/Image AST with parsed
+  inline content and preserved titles, loose-vs-tight list detection,
+  blockquote lazy continuation, entity decoding in link text/URL/alt
+  and reference labels, and a complete HTML5 named-entity table.
 
-- *(lexer)* Linear-time emphasis + BOM stripping + table invariant
-- *(lexer)* Close 40 more spec gaps across tabs, lists, links, refs (77.9% → 84.0%)
-- *(lexer)* Close 29 more CommonMark spec gaps (73.5% → 77.9%)
-- *(lexer)* Tab-aware block-marker detection + leading-space tolerance
-- *(build)* Add missing build.rs and entities.json
+### Fixed
 
+- Linear-time emphasis, BOM stripping, tab-aware block-marker
+  detection, and a large number of CommonMark spec gaps closed
+  (60.6% → 89.0% spec pass rate).
+- Missing `build.rs` / `entities.json` added to the package.
 
-### Performance
+### Changed
 
-- *(lexer)* O(n) is_html_comment_start; stress guards for HTML edges
-
-### Testing
-
-- *(markdown)* Move tests to tests/markdown/, add ~250 coverage tests
-- *(lexer)* CommonMark spec runner + stress suite
-- *(lexer)* Regression guards for backslash escapes
-
-### Miscellaneous Tasks
-
-- Drop macos runner from test workflow
-- Run cargo test on every PR (ubuntu + macos)
+- Tests reorganized under `tests/markdown/` (~250 new cases) with a
+  CommonMark spec runner and a stress suite; CI runs `cargo test` on
+  every PR.
 
 ## [0.3.0] - 2026-05-10
 
-### Features
+### Added
 
-- *(pdf)* Inline images as links, real strikethrough, html-tag styling, soft-break newlines
-- *(pdf)* Render blockquotes, task checkboxes, and strikethrough
+- Renderer support for inline images as links, real strikethrough,
+  HTML-tag styling, soft-break newlines, blockquotes, and task-list
+  checkboxes.
 
-### Bug Fixes
+### Fixed
 
-- *(lexer)* Tighten heading rules, add lazy continuation, escapes, blockquote blocks
-- *(lexer)* Broaden CommonMark coverage — CRLF, hard breaks, entities, titles, ref links
-- *(lexer)* Broaden CommonMark/GFM coverage with six targeted fixes
-- *(lexer)* Handle mid-paragraph # and intra-word _ correctly
-- *(docs)* Update the version number in readme
-
-### Documentation
-
-- *(readme)* Remove GitHub Stars badge
-- *(readme)* Add markdown coverage section and tidy code blocks
-
-### Miscellaneous Tasks
-
-- *(debug)* Update JSON formatter for new token shapes
+- Broader CommonMark/GFM coverage: stricter heading rules, lazy
+  continuation, escapes, blockquote blocks, CRLF, hard breaks,
+  entities, titles, reference links, mid-paragraph `#`, and
+  intra-word `_`.
 
 ## [0.2.2] - 2026-02-27
 
-### Features
+### Added
 
-- *(fonts)* Embed minimal TrueType font for built-in metrics fallback
-- *(fonts)* Add FontSource::bytes() constructor and document priority behavior
+- Embedded minimal TrueType font for built-in metric fallback;
+  `FontSource::bytes()` constructor with documented priority.
 
-### Bug Fixes
+### Fixed
 
-- *(lib)* Propagate Pdf::new errors in parse_into_file and parse_into_bytes
-- *(pdf)* Replace .expect() with graceful fallback on font source loading
-
-### Other
-
-- Don't check builtinfirst if providing font source
-- Allow loading a font as bytes
-
-### Refactor
-
-- *(pdf)* Replace .expect() panics with Result propagation in Pdf::new
-- *(fonts)* Remove section separator comments
-
-
-### Documentation
-
-- *(readme)* Note that built-in fonts work without system fonts installed
-- *(readme)* Add embedded bytes font loading mode and usage example
+- `Pdf::new` errors are propagated through `parse_into_file` /
+  `parse_into_bytes`; graceful fallback (no panics) on font-source
+  loading.
 
 ## [0.2.1] - 2026-01-27
 
-### Features
+### Added
 
-- *(pdf)* Apply bold/italic/underline/strikethrough styles to links
-
-### Testing
-
-- *(lib)* Add link styling tests for underline and strikethrough
-
-### Miscellaneous Tasks
-
-- *(cargo)* Update version to v0.2.1 and use genpdfi v0.2.7
-- *(docs)* Remove donation information and related funding references
+- Bold / italic / underline / strikethrough styles applied to links.
 
 ## [0.2.0] - 2026-01-27
 
-### Features
+### Added
 
-- *(dependencies)* Use new genpdfi version 0.2.6
-- *(styling,config)* Add basic styling config to table header rows and cells
-- *(pdf)* Implement table rendering
-- *(debug)* Add table debug
-- *(markdown)* Support tables
+- GFM table parsing and rendering with per-cell/header styling.
 
-### Bug Fixes
+### Changed
 
-- *(ci)* Allow dirty workflow for manual trigger support
-- *(ci)* Workflow_dispatch to run in plan mode
-- *(markdown)* Only use text tokens in table cells
-- *(markdown)* Ignore `>` again in parse_text
-
-### Refactor
-
-- *(fonts)* Simplify font system and remove fontdb dependency
-- *(bin)* Update argument conflict handling for markdown options
-- *(fonts)* Implement global cached font database
-- *(logging)* Replace eprintln! with log macros for improved logging
-- *(markdown)* Intruduce ParseContext for context-aware parsing
-
-### Documentation
-
-- *(README)* Update Markdown features and font handling details
-- *(readme)* Add logging section to documentation for log crate integration
-
-### Performance
-
-- *(pdf)* Reduce overhead in rendering
-- *(fonts)* Speed up font loading
-
-### Testing
-
-- *(markdown)* Add test for table parsing
-
-### Miscellaneous Tasks
-
-- *(ci)* Add manual workflow trigger
-- *(ci)* Update macos runner version to 14
-- *(release)* Update cargo-dist version to 0.30.3 in configuration and CI workflow
-- *(dependendies)* Update cargo lock
-- *(release)* Update version to v0.2.0
-- *(dependencies)* Add log:0.4 dependency to cargo
+- Font system simplified (removed `fontdb`) with a global cached font
+  database; logging moved to the `log` crate; context-aware parsing
+  via `ParseContext`; rendering and font-loading performance improved.
 
 ## [0.1.9] - 2025-11-14
 
-### Features
+### Added
 
-- _(fonts)_ Improve font loading by adding validation for font data and handling of .ttc files
-- _(pdf)_ Improve font loading by applying subsetting to fallback chains based on character usage
-- _(fonts)_ Add font subsetting functionality to reduce PDF file size by analyzing character usage in fallback chains
-- _(pdf)_ Improve font loading with automatic fallback chains and improved handling for missing fonts
-- _(fonts)_ Improve font loading with fallback chains and improved error reporting for missing fonts
-- _(cli)_ Add verbosity levels and dry-run option for enhanced user feedback during PDF generation
-- _(errors)_ Improve MdpError handling with detailed error structures and suggestions for better debugging
-- _(fonts)_ Improve font loading with aliases and variant support for better fallback handling
-- _(validation)_ Implement a validation system for markdown conversion with warnings for missing fonts, images, and syntax issues
-- _(pdf)_ Enhance font loading with optional text extraction for improved fallback handling
-- _(markdown)_ Add recursive text extraction method for tokens
-- _(fonts)_ Add font subsetting support
-- _(lib)_ Update parse_into_file and parse_into_bytes to support optional font configuration
-- _(pdf)_ Improve pdf creation with optional font configuration for custom and default fonts
-- _(fonts)_ Implement custom font loading with configuration options
-- _(bin)_ Add font configuration options for custom and default fonts
-
-### Bug Fixes
-
-- _(pdf)_ Change default behavior of font subsetting to true for improved text extraction
-
-### Documentation
-
-- _(readme)_ Update feature flag section
-- _(readme)_ Simplfiy readme to make it more pleasant to read
-
-### Miscellaneous Tasks
-
-- _(cargo)_ Add feature flags to control the lib by preference
-- _(.gitignore)_ Add pattern to ignore test markdown files
-- _(dependencies)_ Update dependencies in Cargo.lock and Cargo.toml, including version bump for markdown2pdf to 0.1.9 and switching genpdfi to a git source for font subsetting feature
-- _(docs)_ Update README to improve docs on cli options, font handling, and Unicode support
+- Custom font loading with configuration options, alias/variant
+  fallback chains, `.ttc` handling, and font subsetting (smaller
+  PDFs); optional per-call font configuration on `parse_into_*`;
+  a markdown-conversion validation system; richer `MdpError`
+  diagnostics; CLI verbosity levels and `--dry-run`.
 
 ## [0.1.8] - 2025-10-07
 
-### Features
+### Added
 
-- _(markdown)_ Improve list parsing and add is_list_marker method for better list item handling
-- _(debug)_ Add functionality to save tokens as JSON for visualization
-
-### Bug Fixes
-
-- _(markdown)_ Remove the token visualization json generator call
-
-### Other
-
-- Version v0.1.8
-
-### Documentation
-
-- _(changelog)_ Update changelog with 0.1.7 commits
-- _(readme)_ Update readme to include homebrew and prebuilt install variants
-
-### Miscellaneous Tasks
-
-- Release 0.1.8 version
+- Improved list parsing; JSON token-dump for debugging.
 
 ## [0.1.7] - 2025-09-21
 
-### Other
+### Changed
 
-- Version 0.1.7
-
-### Documentation
-
-- _(funding)_ Add github funding file
-- _(donate)_ Add donation information and link to DONATE.md in README
-
-### Miscellaneous Tasks
-
-- _(ci)_ Add GitHub Actions workflow for release automation and configure dist settings in Cargo.toml and new dist-workspace.toml
+- Release automation (cargo-dist) and project housekeeping.
 
 ## [0.1.6] - 2025-07-21
 
-### Features
+### Added
 
-- _(config)_ Add ConfigSource enum and refactor configuration loading functions to support default, file, and embedded sources
-
-### Bug Fixes
-
-- _(main)_ Update parse_into_file call to use ConfigSource::Default for improved configuration handling
-
-### Refactor
-
-- _(lib)_ Update parse_into_file and parse_into_bytes functions to use ConfigSource for configuration handling
-
-### Documentation
-
-- _(readme)_ Add new logo and some cool badges
-- _(readme)_ Revise README for clarity and update configuration handling details, including embedded support and usage examples
-
-### Miscellaneous Tasks
-
-- _(cargo)_ Update version to 0.1.6 and reflect changes in Cargo.toml, Cargo.lock, CHANGELOG.md, and README.md
+- `ConfigSource` enum with default / file / embedded configuration
+  sources.
 
 ## [0.1.5] - 2025-07-16
 
-### Features
+### Added
 
-- _(lib)_ Rename parse function to parse_into_file and add parse_into_bytes for in-memory PDF generation
-- _(pdf)_ Add render_to_bytes method for in-memory PDF generation and corresponding tests
-
-### Documentation
-
-- _(readme)_ Update documentation to reflect new parse_into_file and parse_into_bytes functions for PDF generation
-- _(readme)_ Update version from 0.1.3 to 0.1.4 in readme
-
-### Miscellaneous Tasks
-
-- _(cargo)_ Update version to 0.1.5 and reflect version changes in other files
-- _(app)_ Remove Makefile at all
+- `parse_into_bytes` for in-memory PDF generation; `parse` renamed to
+  `parse_into_file`.
 
 ## [0.1.4] - 2025-07-09
 
-### Features
+### Added
 
-- _(fonts)_ Add comprehensive font loading functionality with built-in and system font support
-- _(fonts)_ Implement ultra-minimal font loading with caching and variant analysis
+- Comprehensive built-in and system font loading with caching and
+  variant analysis.
 
-### Bug Fixes
+### Changed
 
-- _(main)_ Update error handling to provide clearer user guidance for markdown input requirements
-
-### Other
-
-- _(cargo)_ Remove thiserror module
-
-### Refactor
-
-- _(lib)_ Update parse function to accept an optional configuration path for improved flexibility
-- _(main)_ Improve command handling and error messaging for markdown input
-- _(lib)_ Remove commented sections and unused font loading logic
-- _(styling)_ Remove unused font references and optimize font loading logic for efficiency
-- _(pdf)_ Enhance font loading logic to support system fonts and fallback options
-- _(pdf)_ Replace font loading methods with minimal variants for improved efficiency
-
-### Documentation
-
-- _(readme)_ Enhance configuration section to include custom config file path and error handling details
-
-### Miscellaneous Tasks
-
-- _(dependencies)_ Update Cargo.lock
-- _(cargo)_ Update version from v0.1.3 to v0.1.4
-- _(dependencies)_ Update genpdfi source from github to registry (version 0.2.3 )
-- _(dependencies)_ Update package versions and add new dependencies for font handling and PDF generation
-- _(lib)_ Remove embedded assets including help text and Roboto font files to streamline the project and reduce binary size.
-- Fix some advisory issues
-- Make it possible to compile without openssl
-- _(dependencies)_ Bump genpdfi version to 0.2.2 in Cargo.toml and Cargo.lock
+- OpenSSL made optional; clearer CLI error guidance; assorted
+  advisory cleanups.
 
 ## [0.1.3] - 2025-03-31
 
-### Features
+### Added
 
-- _(assets)_ Move default implementation to [Default] trait
-- _(pdf)_ Implement before_spacing as breaks
-- _(config)_ Parse before_spacing and add in the example file
-- _(styling)_ Add before_spacing field to BasicTextStyle
-
-### Bug Fixes
-
-- _(markdown)_ Enhance image parsing to handle invalid syntax gracefully
-- _(lib/markdown)_ Improve example doc codes
-- _(markdown)_ Use shorthanded struct initialization for emphasis init
-
-### Documentation
-
-- _(changelog)_ Update CHANGELOG.md for version 0.1.3 with new features, bug fixes, documentation updates, and tests
-- _(readme)_ Expand library integration guide
-
-### Testing
-
-- _(markdown)_ Add tests for standalone exclamation and image parsing
-- _(lib)_ Covert both success and error cases
-- _(pdf)_ Cover most cases except 'genpdfi' imports
-- _(markdown)_ Cover all possible cases of lexer
-- _(styling)_ Cover all cases in styling
-- _(config)_ Add tests for each method except reading from config file
-
-### Miscellaneous Tasks
-
-- _(lib)_ Update markdown2pdf version to 0.1.3 in Cargo.toml and Cargo.lock
+- `before_spacing` text style; graceful handling of invalid image
+  syntax; broader lexer/styling/config test coverage.
 
 ## [0.1.2] - 2024-12-01
 
-### Features
+### Added
 
-- _(cli)_ Add URL input support for remote markdown files
-- _(assets)_ Embed the help text file to assets
-
-### Bug Fixes
-
-- _(markdown)_ Remove the token printing in markdown parser
-
-### Refactor
-
-- _(bin)_ Re-implement the structure of cli
-
-### Miscellaneous Tasks
-
-- _(release)_ Bump version to 0.1.2
+- URL input support for remote markdown files; CLI restructured.
 
 ## [0.1.1] - 2024-11-29
 
-### Features
+### Added
 
-- _(lib)_ Bump new version v0.1.1
-- _(pdf)_ Implement hierarchical list rendering with proper indentation
-- _(markdown)_ Support mixed ordered/unordered nested lists
-- _(lib)_ Load embedded fonts from assets
-- _(lib)_ Include assets in lib
-- _(lib)_ Add asset embedding
-
-### Bug Fixes
-
-- _(markdown)_ Ensure proper spacing after emphasized text
-- _(pdf)_ Set correct before and after settings
-- _(markdown)_ Handling space between tokens
-
-### Refactor
-
-- _(pdf)_ Restructure PDF generation implementation
-- _(pdf)_ Improve the structure of pdf implementation
-
-### Documentation
-
-- _(readme)_ Update the readme to have more technical info
-- _(lib)_ Improve code documentation
-
-### Miscellaneous Tasks
-
-- _(changelog)_ Add "New Contributors" header to cliff
-- _(cargo)_ Add Cargo.lock
+- Hierarchical list rendering with proper indentation and mixed
+  ordered/unordered nesting; embedded asset fonts.
 
 ## [0.1.0] - 2024-11-17
 
-### Features
+Initial release: a Markdown lexer and a `genpdfi`-backed PDF
+converter with basic styling, configuration via `mdprc`, code blocks,
+emphasis, links, and nested tokens.
 
-- _(docs)_ Update readme
-- _(docs)_ Add contributing document
-- _(base)_ Use genpdfi instead of genpdf
-- _(cargo)_ Add version to genpdf package
-- _(base)_ Rename project to markdown2pdf
-- _(bin)_ Set lto to 'thin' and enable strip
-- _(bin)_ Handle the response result of parse
-- _(pdf)_ Improve error returning from Pdf
-- _(pdf)_ Handle code blocks in pdf converter
-- _(markdown)_ Parse multiline code blocks and code snippet language
-- _(lib)_ Improve documentation comments
-- _(docs)_ Add configuration header to readme
-- _(config)_ Read mdprc from the root directory
-- _(lib)_ Implement config parsing into library
-- _(config)_ Add module for parsing toml into StyleMatch
-- _(config)_ Add configuration toml example
-- _(lib)_ Add documentation comments & improve lib public methods
-- _(pdf)_ Call add_link for Link elements
-- _(cargo)_ Use fork of genpdf-rs-improved
-- _(styling)_ Add new roboto font & change the fonts structure
-- _(styling)_ Implement styling on pdf, to create pdfs based on style match
-- _(styling)_ Improve styling & add new paramethers and styles
-- _(bin)_ Add makefile for easy build
-- _(styling)_ Add basic styling structure
-- _(bin)_ Remove help.txt & add to main.rs
-- _(bin)_ Update both package names to mdp
-- _(bin)_ Update binary name to mpd
-- _(bin)_ Improve cli & add docummentation
-- _(pdf)_ Improve transforming lexer output to pdf
-- _(markdown)_ Make Token cloneable
-- _(pdf)_ Add basic logic for token to PDF element conversion
-- _(pdf)_ Add pdf class to convert markdown to pdf
-- _(markdown)_ Refactor text parsing to correctly handle special characters
-- _(markdown)_ Update emphasis structure to level based
-- _(markdown)_ Parse emphasis level correctly
-- _(markdown)_ Implement parsing nested tokens functionality
-- _(markdown)_ Bring back markdown lexer
-- _(assets)_ Remove test_data and move testing markdowns on local only
-- _(lib)_ Remove markdown lexer
-- _(lexer)_ Add simple lexer to parse markdown
-- _(cargo)_ Update the structure of cargo
-- _(docs)_ Add README.md
-- Init cargo project
-
-### Bug Fixes
-
-- _(config)_ Remove config path printing
-- _(markdown)_ Single line code block handling
-- _(bin)_ Update the mdp caller in main
-- _(styling)_ Add cross platform font path generation
-- _(pdf)_ Missing space after hyper links
-- _(markdown)_ Link item parsing
-
-### Documentation
-
-- _(changelog)_ Add changelog generator
-
-### Miscellaneous Tasks
-
-- _(base)_ Rename project to mdp
+[1.0.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.0.0
+[0.4.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.4.0
+[0.3.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.3.0
+[0.2.2]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.2.2
+[0.2.1]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.2.1
+[0.2.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.2.0
+[0.1.9]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.1.9
+[0.1.8]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.1.8
+[0.1.7]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.1.7
+[0.1.6]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.1.6
+[0.1.5]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.1.5
+[0.1.4]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.1.4
+[0.1.3]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.1.3
+[0.1.2]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.1.2
+[0.1.1]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.1.1
+[0.1.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.1.0

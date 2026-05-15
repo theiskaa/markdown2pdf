@@ -40,7 +40,7 @@ fn escape_bang_blocks_image() {
     let tokens = parse(r"\![not an image](x)");
     // \! becomes literal !, then the [ ... ](x) gets parsed as a regular link.
     // Important: this must NOT crash with "Malformed image".
-    assert!(matches!(tokens[0], Token::Text(ref s) if s == "!"));
+    assert!(matches!(&tokens[0], Token::Text(s) if s == "!"));
     assert!(matches!(tokens[1], Token::Link { .. }));
 }
 
@@ -207,7 +207,7 @@ fn escape_mixed_with_real_emphasis() {
     // followed by a genuine *real* emphasis pair.
     let tokens = parse(r"\*literal\* and *real*");
     // -> Text("*literal* and ") + Emphasis(real)
-    assert!(matches!(tokens[0], Token::Text(ref s) if s.contains("*literal*")));
+    assert!(matches!(&tokens[0], Token::Text(s) if s.contains("*literal*")));
     let last = tokens.last().unwrap();
     assert!(matches!(last, Token::Emphasis { .. }));
 }
@@ -217,9 +217,9 @@ fn escape_does_not_consume_newline() {
     // a lone trailing backslash before a newline
     // is a hard line break — produces Text("foo") + HardBreak + Text("bar").
     let tokens = parse("foo\\\nbar");
-    assert!(matches!(tokens[0], Token::Text(ref s) if s == "foo"));
+    assert!(matches!(&tokens[0], Token::Text(s) if s == "foo"));
     assert!(tokens.iter().any(|t| matches!(t, Token::HardBreak)));
-    assert!(tokens.iter().any(|t| matches!(t, Token::Text(ref s) if s == "bar")));
+    assert!(tokens.iter().any(|t| matches!(t, Token::Text(s) if s == "bar")));
 }
 
 #[test]

@@ -1,0 +1,33 @@
+# Compact theme — small margins, tight spacing, smaller fonts.
+# Good for reference cards and dense tables.
+inherits = "default"
+
+[page]
+margins = { top = 12.0, right = 12.0, bottom = 12.0, left = 12.0 }
+
+[defaults]
+font_size_pt = 9.0
+line_height = 1.25
+
+[paragraph]
+margin_after_pt = 2.0
+
+[headings.h1]
+font_size_pt = 13.0
+margin_before_pt = 1.4
+margin_after_pt = 0.8
+[headings.h2]
+font_size_pt = 11.0
+margin_before_pt = 1.2
+margin_after_pt = 0.6
+[headings.h3]
+font_size_pt = 9.5
+margin_before_pt = 1.0
+margin_after_pt = 0.5
+
+[code_block]
+padding = 2.0
+
+[table]
+row_gap_pt = 1.0
+cell_padding = { top = 1.5, right = 3.0, bottom = 1.5, left = 3.0 }

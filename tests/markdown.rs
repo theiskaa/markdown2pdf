@@ -41,6 +41,9 @@ mod emphasis_flanking_tests;
 #[path = "markdown/entity_reference_tests.rs"]
 mod entity_reference_tests;
 
+#[path = "markdown/eof_unterminated_tests.rs"]
+mod eof_unterminated_tests;
+
 #[path = "markdown/error_position_tests.rs"]
 mod error_position_tests;
 
@@ -49,6 +52,12 @@ mod fenced_code_extended_tests;
 
 #[path = "markdown/fenced_code_info_string_tests.rs"]
 mod fenced_code_info_string_tests;
+
+#[path = "markdown/definition_list_tests.rs"]
+mod definition_list_tests;
+
+#[path = "markdown/footnote_tests.rs"]
+mod footnote_tests;
 
 #[path = "markdown/gfm_trio_tests.rs"]
 mod gfm_trio_tests;

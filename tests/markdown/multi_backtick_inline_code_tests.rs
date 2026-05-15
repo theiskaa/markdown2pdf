@@ -16,7 +16,7 @@ fn double_backtick_inline_with_single_backtick_inside() {
 fn triple_backtick_inline_when_not_at_line_start() {
     let tokens = parse("inline ```code with `` inside``` here");
     // First Text("inline "), then Code, then Text(" here").
-    assert!(matches!(tokens[0], Token::Text(ref s) if s.contains("inline")));
+    assert!(matches!(&tokens[0], Token::Text(s) if s.contains("inline")));
     assert!(matches!(tokens[1], Token::Code { ref content, .. } if content.contains("``")));
 }
 
@@ -88,7 +88,7 @@ fn unclosed_inline_code_falls_back_to_text() {
     // No matching closer (EOF reached) — the opener run
     // becomes literal text so the body chars still render normally.
     let tokens = parse("``never closes");
-    assert!(matches!(tokens[0], Token::Text(ref s) if s == "``"));
+    assert!(matches!(&tokens[0], Token::Text(s) if s == "``"));
     let body = Token::collect_all_text(&tokens);
     assert!(body.contains("never closes"), "got {:?}", body);
 }
