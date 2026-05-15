@@ -121,10 +121,13 @@ use std::fmt;
 /// This includes both parsing failures and PDF generation issues.
 #[derive(Debug)]
 pub enum MdpError {
-    /// Indicates an error occurred while parsing the Markdown content
+    /// Indicates an error occurred while parsing the Markdown content.
+    /// `line` and `column` are 1-based when present and point at the
+    /// source character that triggered the lexer failure.
     ParseError {
         message: String,
-        position: Option<usize>,
+        line: Option<usize>,
+        column: Option<usize>,
         suggestion: Option<String>,
     },
     /// Indicates an error occurred during PDF file generation
@@ -155,12 +158,15 @@ impl fmt::Display for MdpError {
         match self {
             MdpError::ParseError {
                 message,
-                position,
+                line,
+                column,
                 suggestion,
             } => {
                 write!(f, "❌ Markdown Parsing Error: {}", message)?;
-                if let Some(pos) = position {
-                    write!(f, " (at position {})", pos)?;
+                if let (Some(l), Some(c)) = (line, column) {
+                    write!(f, " (at line {}, column {})", l, c)?;
+                } else if let Some(l) = line {
+                    write!(f, " (at line {})", l)?;
                 }
                 if let Some(hint) = suggestion {
                     write!(f, "\n💡 Suggestion: {}", hint)?;
@@ -218,7 +224,8 @@ impl MdpError {
     pub fn parse_error(message: impl Into<String>) -> Self {
         MdpError::ParseError {
             message: message.into(),
-            position: None,
+            line: None,
+            column: None,
             suggestion: Some(
                 "Check your Markdown syntax for unclosed brackets, quotes, or code blocks"
                     .to_string(),
@@ -335,16 +342,23 @@ pub fn parse_into_file(
 fn parse_markdown(markdown: String) -> Result<Vec<markdown::Token>, MdpError> {
     let mut lexer = Lexer::new(markdown);
     lexer.parse().map_err(|e| {
-        let msg = format!("{:?}", e);
-        MdpError::ParseError {
-            message: msg.clone(),
-            position: None,
-            suggestion: Some(if msg.contains("UnexpectedEndOfInput") {
-                "Check for unclosed code blocks (```), links, or image tags".to_string()
-            } else {
+        let (line, column) = e.position();
+        let (message, suggestion) = match &e {
+            markdown::LexerError::UnexpectedEndOfInput { .. } => (
+                "Unexpected end of input".to_string(),
+                "Check for unclosed code blocks (```), links, or image tags".to_string(),
+            ),
+            markdown::LexerError::UnknownToken { message, .. } => (
+                message.clone(),
                 "Verify your Markdown syntax is valid. Try testing with a simpler document first."
-                    .to_string()
-            }),
+                    .to_string(),
+            ),
+        };
+        MdpError::ParseError {
+            message,
+            line: Some(line),
+            column: Some(column),
+            suggestion: Some(suggestion),
         }
     })
 }
@@ -483,6 +497,34 @@ mod tests {
         let style = styling::ResolvedStyle::default();
         let bytes = parse_into_bytes_with_style(markdown, style, None).expect("render");
         assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn parse_error_display_includes_line_and_column_when_present() {
+        let err = MdpError::ParseError {
+            message: "Bad token".to_string(),
+            line: Some(7),
+            column: Some(3),
+            suggestion: None,
+        };
+        let s = format!("{}", err);
+        assert!(
+            s.contains("line 7") && s.contains("column 3"),
+            "expected line/column in display, got: {}",
+            s
+        );
+    }
+
+    #[test]
+    fn parse_error_display_omits_position_when_absent() {
+        let err = MdpError::ParseError {
+            message: "Bad token".to_string(),
+            line: None,
+            column: None,
+            suggestion: None,
+        };
+        let s = format!("{}", err);
+        assert!(!s.contains("line"), "unexpected position in display: {}", s);
     }
 
     #[test]

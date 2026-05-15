@@ -19,9 +19,27 @@ fn error_reports_correct_line() {
 
 #[test]
 fn lexer_error_variants_exist() {
-    // Smoke-test that the LexerError enum still has its variants —
-    // future code may surface `UnexpectedEndOfInput` for other inputs
-    // even though the unclosed HTML comment now falls back to text.
-    let _ = LexerError::UnexpectedEndOfInput;
-    let _ = LexerError::UnknownToken("x".to_string());
+    let eof = LexerError::UnexpectedEndOfInput { line: 1, column: 1 };
+    let unk = LexerError::UnknownToken {
+        message: "x".to_string(),
+        line: 2,
+        column: 3,
+    };
+    assert_eq!(eof.position(), (1, 1));
+    assert_eq!(unk.position(), (2, 3));
+}
+
+#[test]
+fn lexer_error_display_includes_line_col() {
+    let unk = LexerError::UnknownToken {
+        message: "Unexpected character".to_string(),
+        line: 5,
+        column: 12,
+    };
+    let s = format!("{}", unk);
+    assert!(
+        s.contains("line 5") && s.contains("column 12"),
+        "display string missing line/column: {}",
+        s
+    );
 }

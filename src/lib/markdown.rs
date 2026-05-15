@@ -1467,14 +1467,49 @@ fn is_ascii_punctuation(c: char) -> bool {
     )
 }
 
-/// Error types that can occur during lexical analysis
+/// Error types that can occur during lexical analysis. `line` and
+/// `column` are 1-based and point at the source character that
+/// triggered the failure.
 #[derive(Debug)]
 pub enum LexerError {
-    /// Input ended unexpectedly while parsing a token
-    UnexpectedEndOfInput,
-    /// Encountered an invalid or malformed token
-    UnknownToken(String),
+    /// Input ended unexpectedly while parsing a token.
+    UnexpectedEndOfInput { line: usize, column: usize },
+    /// Encountered an invalid or malformed token.
+    UnknownToken {
+        message: String,
+        line: usize,
+        column: usize,
+    },
 }
+
+impl LexerError {
+    /// Returns the 1-based (line, column) where the failure occurred.
+    pub fn position(&self) -> (usize, usize) {
+        match self {
+            LexerError::UnexpectedEndOfInput { line, column } => (*line, *column),
+            LexerError::UnknownToken { line, column, .. } => (*line, *column),
+        }
+    }
+}
+
+impl std::fmt::Display for LexerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LexerError::UnexpectedEndOfInput { line, column } => write!(
+                f,
+                "unexpected end of input at line {}, column {}",
+                line, column
+            ),
+            LexerError::UnknownToken {
+                message,
+                line,
+                column,
+            } => write!(f, "{} (line {}, column {})", message, line, column),
+        }
+    }
+}
+
+impl std::error::Error for LexerError {}
 
 /// A lexical analyzer that converts Markdown text into a sequence of tokens.
 /// Handles nested structures and special Markdown syntax elements while maintaining
@@ -3929,11 +3964,12 @@ impl Lexer {
                 content.push(c);
                 self.advance();
             } else {
-                let (line, col) = self.pos_to_line_col(start_pos);
-                return Err(LexerError::UnknownToken(format!(
-                    "Unexpected character at line {}, column {}",
-                    line, col
-                )));
+                let (line, column) = self.pos_to_line_col(start_pos);
+                return Err(LexerError::UnknownToken {
+                    message: "Unexpected character".to_string(),
+                    line,
+                    column,
+                });
             }
         }
         Ok(Token::Text(content))
