@@ -108,6 +108,7 @@
 pub mod config;
 mod debug;
 pub mod fonts;
+pub mod frontmatter;
 pub mod markdown;
 pub mod render;
 pub mod styling;
@@ -311,7 +312,12 @@ pub fn parse_into_file_with_style(
         }
     }
 
-    let tokens = parse_markdown(markdown)?;
+    let (body, fm) = split_frontmatter(markdown);
+    let tokens = parse_markdown(body)?;
+    let mut style = style;
+    if let Some(fm) = fm {
+        fm.apply(&mut style.metadata);
+    }
     render::render_to_file(tokens, style, font_config, path)
 }
 
@@ -332,9 +338,25 @@ pub fn parse_into_file(
         }
     }
 
-    let tokens = parse_markdown(markdown)?;
-    let style = config::load_config_from_source(config);
+    let (body, fm) = split_frontmatter(markdown);
+    let tokens = parse_markdown(body)?;
+    let mut style = config::load_config_from_source(config);
+    if let Some(fm) = fm {
+        fm.apply(&mut style.metadata);
+    }
     render::render_to_file(tokens, style, font_config, path)
+}
+
+/// Pull the YAML/TOML frontmatter (if any) off the input. Returns
+/// `(body, frontmatter)` where `body` is the markdown stripped of the
+/// frontmatter block.
+fn split_frontmatter(markdown: String) -> (String, Option<frontmatter::Frontmatter>) {
+    if let Some((fm, body_start)) = frontmatter::extract(&markdown) {
+        let body = markdown[body_start..].to_string();
+        (body, Some(fm))
+    } else {
+        (markdown, None)
+    }
 }
 
 /// Lex markdown and map lexer errors to `MdpError::ParseError`. Used
@@ -407,8 +429,12 @@ pub fn parse_into_bytes(
     config: config::ConfigSource,
     font_config: Option<&fonts::FontConfig>,
 ) -> Result<Vec<u8>, MdpError> {
-    let tokens = parse_markdown(markdown)?;
-    let style = config::load_config_from_source(config);
+    let (body, fm) = split_frontmatter(markdown);
+    let tokens = parse_markdown(body)?;
+    let mut style = config::load_config_from_source(config);
+    if let Some(fm) = fm {
+        fm.apply(&mut style.metadata);
+    }
     render::render_to_bytes(tokens, style, font_config)
 }
 
@@ -421,7 +447,12 @@ pub fn parse_into_bytes_with_style(
     style: styling::ResolvedStyle,
     font_config: Option<&fonts::FontConfig>,
 ) -> Result<Vec<u8>, MdpError> {
-    let tokens = parse_markdown(markdown)?;
+    let (body, fm) = split_frontmatter(markdown);
+    let tokens = parse_markdown(body)?;
+    let mut style = style;
+    if let Some(fm) = fm {
+        fm.apply(&mut style.metadata);
+    }
     render::render_to_bytes(tokens, style, font_config)
 }
 
