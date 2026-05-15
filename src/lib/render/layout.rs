@@ -7,8 +7,8 @@
 
 use printpdf::{
     Actions, BorderArray, ColorArray, Destination, LineDashPattern, LinePoint, LinkAnnotation,
-    Mm, Op, PdfDocument, PdfPage, Point, Pt, RawImage, Rect, Rgb, TextItem, XObjectId,
-    XObjectTransform,
+    Mm, Op, PaintMode, PdfDocument, PdfPage, Point, Polygon, PolygonRing, Pt, RawImage, Rect, Rgb,
+    TextItem, WindingOrder, XObjectId, XObjectTransform,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -112,6 +112,26 @@ struct Engine<'a> {
     url_image_cache: HashMap<String, Vec<u8>>,
     /// Whether a text section is currently open.
     in_text_section: bool,
+    /// Stack of block backgrounds currently open (LIFO — matches the
+    /// nesting of `begin_block` / `end_block`). When a page break
+    /// happens mid-block, [`start_new_page`] paints the fragment that
+    /// fit on the outgoing page and resets each entry to continue on
+    /// the next page. Empty when no background-bearing block is open.
+    open_bg: Vec<OpenBlockBg>,
+}
+
+/// One background-bearing block that is currently open. Tracks the
+/// rect to paint *for the current page fragment*; cross-page blocks
+/// produce one rect per page they touch.
+struct OpenBlockBg {
+    x_left: f32,
+    x_right: f32,
+    /// Top of the fragment on the *current* page, y-from-top points.
+    top_y: f32,
+    color: (u8, u8, u8),
+    /// Splice index into `page_ops` for the current page so the fill
+    /// lands *under* the text drawn afterward.
+    marker: usize,
 }
 
 impl<'a> Engine<'a> {
@@ -138,6 +158,7 @@ impl<'a> Engine<'a> {
             current_text_align: TextAlignment::Left,
             url_image_cache: HashMap::new(),
             in_text_section: false,
+            open_bg: Vec::new(),
         }
     }
 
@@ -794,8 +815,53 @@ impl<'a> Engine<'a> {
 
     fn start_new_page(&mut self) {
         self.close_text_section();
+        self.paint_open_bg_fragments();
         self.push_current_page();
         self.y_from_top_pt = self.top_margin_pt();
+        // Each still-open background continues at the top of the new
+        // page; its fill on this page starts at the top content edge
+        // and its splice marker resets to the (now empty) op buffer.
+        let new_top = self.top_margin_pt();
+        for ob in self.open_bg.iter_mut() {
+            ob.top_y = new_top;
+            ob.marker = 0;
+        }
+    }
+
+    /// Paint the portion of each open block background that fits on
+    /// the current page, splicing the fill *under* the page's text.
+    /// Called right before the page is flushed. Deepest-nested block
+    /// is spliced first so shallower blocks' (smaller) markers stay
+    /// valid.
+    fn paint_open_bg_fragments(&mut self) {
+        if self.open_bg.is_empty() {
+            return;
+        }
+        let page_h = self.page_height_pt();
+        let frag_bottom = page_h - self.bottom_margin_pt();
+        // Snapshot to avoid borrow conflict with `self.page_ops`.
+        let frags: Vec<(usize, f32, f32, f32, (u8, u8, u8))> = self
+            .open_bg
+            .iter()
+            .map(|ob| (ob.marker, ob.x_left, ob.x_right, ob.top_y, ob.color))
+            .collect();
+        for (marker, x_left, x_right, top_y, color) in frags.into_iter().rev() {
+            if frag_bottom <= top_y {
+                continue;
+            }
+            let mut bg_ops: Vec<Op> = Vec::new();
+            draw_filled_rect(
+                &mut bg_ops,
+                x_left,
+                top_y,
+                x_right,
+                frag_bottom,
+                rgb_color(color),
+                page_h,
+            );
+            let at = marker.min(self.page_ops.len());
+            self.page_ops.splice(at..at, bg_ops);
+        }
     }
 
     fn ensure_text_section(&mut self) {
@@ -846,13 +912,22 @@ impl<'a> Engine<'a> {
         self.close_text_section();
         let marker = self.page_ops.len();
 
+        if let Some(bg) = style.background_color {
+            self.open_bg.push(OpenBlockBg {
+                x_left: outer_x_left,
+                x_right: outer_x_right,
+                top_y: outer_y_top,
+                color: (bg.r, bg.g, bg.b),
+                marker,
+            });
+        }
+
         BlockPaintCtx {
             saved_left: outer_x_left,
             saved_right: outer_x_right,
             outer_x_left,
             outer_x_right,
             outer_y_top,
-            marker,
             background_color: style.background_color,
             border: style.border.clone(),
             padding_bottom: style.padding.bottom,
@@ -861,43 +936,51 @@ impl<'a> Engine<'a> {
     }
 
     /// Close a block opened by [`begin_block`]. Paints the background
-    /// at the captured marker (so text draws on top) and the border at
-    /// the end (so it doesn't get covered by the fill). If the block
-    /// spilled across a page break the paint is skipped — cross-page
-    /// fragments are a known limitation.
+    /// fragment for the final page the block touches (earlier
+    /// fragments were already painted by [`start_new_page`]), then the
+    /// border. Borders on a block that spanned a page break are still
+    /// skipped — a partial box looks worse than none.
     fn end_block(&mut self, ctx: BlockPaintCtx) {
         self.close_text_section();
         self.advance_y(ctx.padding_bottom);
         let outer_y_bottom = self.y_from_top_pt;
 
-        let stayed_on_page = outer_y_bottom >= ctx.outer_y_top;
-        if stayed_on_page {
-            let page_h = self.page_height_pt();
-            if let Some(bg) = ctx.background_color {
-                let mut bg_ops: Vec<Op> = Vec::new();
-                draw_filled_rect(
-                    &mut bg_ops,
-                    ctx.outer_x_left,
-                    ctx.outer_y_top,
-                    ctx.outer_x_right,
-                    outer_y_bottom,
-                    rgb_color((bg.r, bg.g, bg.b)),
-                    page_h,
-                );
-                let insert_at = ctx.marker.min(self.page_ops.len());
-                self.page_ops.splice(insert_at..insert_at, bg_ops);
+        let spanned_page = outer_y_bottom < ctx.outer_y_top;
+        let page_h = self.page_height_pt();
+
+        if ctx.background_color.is_some() {
+            // The open-bg entry's top_y / marker were reset by
+            // start_new_page on every page break, so they describe
+            // the *final* fragment regardless of how many pages the
+            // block crossed.
+            if let Some(ob) = self.open_bg.pop() {
+                if outer_y_bottom > ob.top_y {
+                    let mut bg_ops: Vec<Op> = Vec::new();
+                    draw_filled_rect(
+                        &mut bg_ops,
+                        ob.x_left,
+                        ob.top_y,
+                        ob.x_right,
+                        outer_y_bottom,
+                        rgb_color(ob.color),
+                        page_h,
+                    );
+                    let insert_at = ob.marker.min(self.page_ops.len());
+                    self.page_ops.splice(insert_at..insert_at, bg_ops);
+                }
             }
-            if has_any_border(&ctx.border) {
-                draw_outlined_rect(
-                    &mut self.page_ops,
-                    ctx.outer_x_left,
-                    ctx.outer_y_top,
-                    ctx.outer_x_right,
-                    outer_y_bottom,
-                    &ctx.border,
-                    page_h,
-                );
-            }
+        }
+
+        if has_any_border(&ctx.border) && !spanned_page {
+            draw_outlined_rect(
+                &mut self.page_ops,
+                ctx.outer_x_left,
+                ctx.outer_y_top,
+                ctx.outer_x_right,
+                outer_y_bottom,
+                &ctx.border,
+                page_h,
+            );
         }
 
         self.indent_left_pt = ctx.saved_left;
@@ -2233,7 +2316,6 @@ struct BlockPaintCtx {
     outer_x_left: f32,
     outer_x_right: f32,
     outer_y_top: f32,
-    marker: usize,
     background_color: Option<crate::styling::Color>,
     border: ResolvedBorder,
     padding_bottom: f32,
@@ -2413,19 +2495,37 @@ fn draw_filled_rect(
     if width_pt <= 0.0 || height_pt <= 0.0 {
         return;
     }
+    // printpdf 0.9's `Op::DrawRectangle` is broken — its serializer
+    // emits `re` then `n` (end-path-no-paint), so the fill is
+    // discarded regardless of `PaintMode`. We build the rectangle as
+    // a 4-corner `Op::DrawPolygon` instead, whose serializer honors
+    // `PaintMode::Fill` and emits the `f` operator.
+    //
     // PDF y origin is bottom-left; our y is top-down.
-    let y_pdf = page_height_pt - y_bot_pt;
-    let rect = Rect {
-        x: Pt(x0_pt),
-        y: Pt(y_pdf),
-        width: Pt(width_pt),
-        height: Pt(height_pt),
-        mode: Some(printpdf::PaintMode::Fill),
-        winding_order: None,
+    let y_bottom = page_height_pt - y_bot_pt;
+    let y_top = page_height_pt - y_top_pt;
+    let corner = |x: f32, y: f32| LinePoint {
+        p: Point {
+            x: Pt(x),
+            y: Pt(y),
+        },
+        bezier: false,
+    };
+    let polygon = Polygon {
+        rings: vec![PolygonRing {
+            points: vec![
+                corner(x0_pt, y_bottom),
+                corner(x1_pt, y_bottom),
+                corner(x1_pt, y_top),
+                corner(x0_pt, y_top),
+            ],
+        }],
+        mode: PaintMode::Fill,
+        winding_order: WindingOrder::NonZero,
     };
     ops.push(Op::SaveGraphicsState);
     ops.push(Op::SetFillColor { col: fill });
-    ops.push(Op::DrawRectangle { rectangle: rect });
+    ops.push(Op::DrawPolygon { polygon });
     ops.push(Op::RestoreGraphicsState);
 }
 

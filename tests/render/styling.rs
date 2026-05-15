@@ -1117,3 +1117,174 @@ fn unknown_html_block_still_renders_as_text() {
     assert!(bytes.starts_with(b"%PDF-"));
     // Doesn't matter how it appears visually — just shouldn't panic.
 }
+
+// --- Cross-page block backgrounds (W5b) ---
+
+#[test]
+fn single_page_background_still_emits_one_rect() {
+    // Regression guard: the common single-page case is unchanged —
+    // a colored paragraph emits at least one background rectangle.
+    let baseline = render("Plain paragraph.", "");
+    let styled = render(
+        "Plain paragraph.",
+        r##"
+        [paragraph]
+        background_color = "#FFCC00"
+        "##,
+    );
+    assert!(
+        count_rect_ops(&styled) > count_rect_ops(&baseline),
+        "single-page background must still emit a fill rect"
+    );
+}
+
+/// Build a quoted block long enough to span several pages: many
+/// quoted paragraphs separated by blank `>` lines.
+fn long_quote(n: usize) -> String {
+    let mut body = String::new();
+    for i in 0..n {
+        body.push_str(&format!(
+            "> Paragraph {} of a long quoted block. {}\n>\n",
+            i,
+            "Filler sentence to consume vertical space. ".repeat(3)
+        ));
+    }
+    body
+}
+
+#[test]
+fn background_spanning_pages_paints_a_fragment_per_page() {
+    // A colored blockquote that spans several page breaks must paint
+    // one background fragment PER page it touches. Before W5b the
+    // paint was skipped when the block spanned pages (so only ~1
+    // rect total, or 0); now it's one per page. We assert the fill
+    // rect count is at least the page count.
+    let body = long_quote(90);
+    let bytes = render(
+        &body,
+        r##"
+        [blockquote]
+        background_color = "#E0E0FF"
+        "##,
+    );
+    let pages = page_count(&bytes);
+    assert!(
+        pages >= 3,
+        "test setup expected a multi-page quote, got {} pages",
+        pages
+    );
+    let rects = count_rect_ops(&bytes);
+    assert!(
+        rects >= pages,
+        "expected ≥ one background fragment per page ({} pages) but \
+         found only {} fill-rect ops — cross-page paint regressed",
+        pages,
+        rects
+    );
+}
+
+#[test]
+fn single_page_colored_blockquote_emits_exactly_one_fragment() {
+    // Regression guard for the non-spanning case: a short colored
+    // quote should still paint exactly one background rect, not one
+    // per (nonexistent) page break.
+    let bytes = render(
+        "> short colored quote\n",
+        r##"
+        [blockquote]
+        background_color = "#E0E0FF"
+        "##,
+    );
+    assert_eq!(page_count(&bytes), 1);
+    assert_eq!(
+        count_rect_ops(&bytes),
+        1,
+        "single-page colored quote should emit exactly one bg rect"
+    );
+}
+
+#[test]
+fn background_spanning_pages_produces_valid_pdf() {
+    let bytes = render(
+        &long_quote(90),
+        r##"
+        [blockquote]
+        background_color = "#FFEEDD"
+        "##,
+    );
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(contains(&bytes, b"%%EOF"));
+    assert!(page_count(&bytes) >= 3);
+}
+
+#[test]
+fn nested_colored_blocks_spanning_pages_do_not_crash() {
+    // Blockquote with a background containing paragraphs that also
+    // have a background; the whole thing spills across pages. Tests
+    // the open-bg LIFO stack with >1 entry live at a page break.
+    let bytes = render(
+        &long_quote(90),
+        r##"
+        [blockquote]
+        background_color = "#EEEEEE"
+
+        [paragraph]
+        background_color = "#FFFFCC"
+        "##,
+    );
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(contains(&bytes, b"%%EOF"));
+    assert!(page_count(&bytes) >= 3);
+}
+
+#[test]
+fn uncolored_paragraphs_spanning_pages_emit_no_background_rects() {
+    // Paragraphs have NO default background (unlike blockquotes,
+    // which the default theme tints grey). A long run of plain
+    // paragraphs that spans pages must therefore emit ZERO fill
+    // rects — proving the cross-page machinery only paints when a
+    // background is actually configured.
+    let mut md = String::new();
+    for i in 0..120 {
+        md.push_str(&format!(
+            "Paragraph {}. {}\n\n",
+            i,
+            "Filler sentence to consume space. ".repeat(3)
+        ));
+    }
+    let bytes = render(&md, "");
+    assert!(page_count(&bytes) >= 3, "setup must span pages");
+    assert_eq!(
+        count_rect_ops(&bytes),
+        0,
+        "uncolored paragraphs must not emit any background fill rects"
+    );
+}
+
+#[test]
+fn colored_paragraph_spanning_pages_paints_per_page() {
+    // The other half: a *paragraph* with an explicit background that
+    // spans pages should now paint one fragment per page (paragraph
+    // has no default bg, so every rect here is from our config).
+    let big = format!(
+        "{}",
+        "word ".repeat(12_000)
+    );
+    let bytes = render(
+        &big,
+        r##"
+        [paragraph]
+        background_color = "#FFEECC"
+        "##,
+    );
+    let pages = page_count(&bytes);
+    assert!(pages >= 2, "setup must span pages, got {}", pages);
+    let rects = count_rect_ops(&bytes);
+    assert!(
+        rects >= pages,
+        "colored paragraph spanning {} pages emitted only {} fill \
+         rects (expected ≥ one per page)",
+        pages,
+        rects
+    );
+}

@@ -20,15 +20,28 @@ pub fn contains(bytes: &[u8], needle: &[u8]) -> bool {
     bytes.windows(needle.len()).any(|w| w == needle)
 }
 
-/// Count how many `re` (PDF rectangle path) operators appear in the
-/// content stream. Each background or filled rect emits one.
+/// Count filled rectangles in the content stream. Block backgrounds
+/// are emitted as a closed 4-corner polygon path terminated by the
+/// PDF fill operator `f` on its own line (printpdf 0.9's
+/// `Op::DrawRectangle` is broken — it discards the path with `n` —
+/// so the renderer uses `Op::DrawPolygon`, whose serializer ends a
+/// non-zero-winding fill with `h` then `f`). We count standalone
+/// `f` fill ops, which only the background-rect path emits.
 pub fn count_rect_ops(bytes: &[u8]) -> usize {
     let mut hits = 0usize;
     let mut i = 0usize;
-    while i + 4 <= bytes.len() {
-        if &bytes[i..i + 3] == b" re" && matches!(bytes[i + 3], b'\n' | b' ' | b'\r') {
+    // Match a line that is exactly `f` (preceded and followed by a
+    // line break). Text/`Tf`/`rg` never produce a bare `f` line.
+    while i + 3 <= bytes.len() {
+        let prev = bytes[i];
+        let mid = bytes[i + 1];
+        let next = bytes[i + 2];
+        if matches!(prev, b'\n' | b'\r')
+            && mid == b'f'
+            && matches!(next, b'\n' | b'\r')
+        {
             hits += 1;
-            i += 3;
+            i += 2;
         } else {
             i += 1;
         }
