@@ -53,6 +53,9 @@ resvg = { version = "0.47", default-features = false, optional = true }
 phf_codegen = "0.13"
 serde_json = "1"
 
+[dev-dependencies]
+lopdf = { version = "0.39", default-features = false }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

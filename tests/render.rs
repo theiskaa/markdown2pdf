@@ -25,3 +25,6 @@ mod golden;
 
 #[path = "render/adversarial.rs"]
 mod adversarial;
+
+#[path = "render/structure.rs"]
+mod structure;
