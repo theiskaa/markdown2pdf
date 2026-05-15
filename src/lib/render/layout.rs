@@ -2720,9 +2720,9 @@ fn words_from_runs(runs: &[InlineRun]) -> Vec<InlineRun> {
         let chars: Vec<(usize, char)> = run.text.char_indices().collect();
         let mut i = 0;
         while i < chars.len() {
-            let is_space = chars[i].1.is_whitespace();
+            let is_space = is_breaking_space(chars[i].1);
             let mut j = i + 1;
-            while j < chars.len() && chars[j].1.is_whitespace() == is_space {
+            while j < chars.len() && is_breaking_space(chars[j].1) == is_space {
                 j += 1;
             }
             let end_byte = if j < chars.len() {
@@ -2742,6 +2742,16 @@ fn words_from_runs(runs: &[InlineRun]) -> Vec<InlineRun> {
         }
     }
     out
+}
+
+/// True for whitespace that is a *line-break opportunity*. Excludes
+/// the non-breaking space family: U+00A0 (NBSP), U+202F (narrow
+/// NBSP), U+2007 (figure space). Those render with space advance but
+/// must keep their neighbors on the same line, so `words_from_runs`
+/// keeps them inside the word token rather than emitting them as a
+/// breakable gap.
+fn is_breaking_space(c: char) -> bool {
+    c.is_whitespace() && !matches!(c, '\u{00A0}' | '\u{202F}' | '\u{2007}')
 }
 
 /// 1 inch = 72 pt; 1 inch = 25.4 mm; so 1 mm = 72/25.4 ≈ 2.8346 pt.

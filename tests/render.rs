@@ -31,3 +31,6 @@ mod structure;
 
 #[path = "render/config_validation.rs"]
 mod config_validation;
+
+#[path = "render/whitespace.rs"]
+mod whitespace;
