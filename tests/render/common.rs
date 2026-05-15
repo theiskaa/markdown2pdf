@@ -140,3 +140,53 @@ pub fn page_count(bytes: &[u8]) -> usize {
 pub fn contains_text(bytes: &[u8], needle: &str) -> bool {
     String::from_utf8_lossy(bytes).contains(needle)
 }
+
+/// First installed system font from a cross-platform candidate list,
+/// or `None` if the host has none (some minimal CI images). Tests
+/// that exercise the *external font* path use this instead of
+/// hardcoding `"Georgia"` (which only exists on macOS/Windows) so
+/// they run on Linux CI too and skip cleanly only when truly no
+/// system font is available.
+pub fn any_system_font() -> Option<String> {
+    const CANDIDATES: &[&str] = &[
+        "Georgia",
+        "DejaVu Sans",
+        "DejaVuSans",
+        "Liberation Sans",
+        "LiberationSans",
+        "Noto Sans",
+        "NotoSans",
+        "Arial",
+        "Helvetica",
+        "Verdana",
+        "FreeSans",
+    ];
+    CANDIDATES
+        .iter()
+        .find(|name| markdown2pdf::fonts::find_system_font(name).is_some())
+        .map(|s| s.to_string())
+}
+
+/// Path to a small real JPEG generated on demand in the system temp
+/// dir. Image tests use this instead of an `examples/` fixture so
+/// they have no dependency on an uncommitted file — CI checkouts
+/// don't carry the untracked `examples/` directory.
+pub fn temp_jpeg_path() -> String {
+    use image::{DynamicImage, ImageFormat, RgbImage};
+    // Wide enough that a short caption renders on one line — captions
+    // are wrap-constrained to the rendered image width, so a narrow
+    // fixture would split `(This is a caption)` across multiple `Tj`
+    // operands and break caption tests. Always (re)written so a
+    // dimension change here can't be masked by a stale temp file.
+    let path = std::env::temp_dir().join("m2p_test_fixture_image.jpg");
+    let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
+        1400,
+        900,
+        image::Rgb([88, 110, 150]),
+    ));
+    let mut buf = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Jpeg)
+        .expect("encode fixture jpeg");
+    std::fs::write(&path, buf).expect("write fixture jpeg");
+    path.to_string_lossy().to_string()
+}

@@ -9,11 +9,11 @@
 
 </p>
 
-markdown2pdf converts Markdown to PDF using a lexical analyzer and PDF rendering engine. The library tokenizes Markdown into semantic elements, applies styling rules from TOML configuration, and generates styled PDF output.
+markdown2pdf converts Markdown to PDF with a lexical analyzer and an in-tree rendering engine built directly on `printpdf`. The library tokenizes Markdown into semantic elements, resolves styling from a TOML configuration, and lays out the PDF itself — no third-party document engine in between.
 
-Both binary and library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
+Both a binary and a library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
 
-The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions and currently covers around 85% of the spec, including escapes, emphasis flanking, reference links, indented and fenced code blocks, blockquotes with nested blocks, lazy list continuation, autolinks, entities, hard breaks, GFM tables, task lists and strikethrough. See [Markdown coverage](#markdown-coverage) below for the full breakdown. Supports multiple input sources and outputs to files or bytes for in-memory processing.
+The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions and passes 100% of the CommonMark spec suite. The renderer covers headings with bookmarks and anchors, inline emphasis (bold, italic, monospace, strikethrough, underline, superscript, subscript, small-caps), ordered/unordered/task lists with arbitrary nesting, GFM tables with per-column alignment and header repeat, blockquotes, fenced and indented code, images (local, URL, and SVG), footnotes, definition lists, cross-references, and inline HTML. Document features include six bundled themes, per-block styling, configurable page setup, headers and footers, an auto-generated table of contents, a title page, YAML/TOML frontmatter, and PDF metadata. Multiple input sources; output to a file or to bytes for in-memory processing.
 
 ## Install binary
 
@@ -245,23 +245,7 @@ For library usage, pass a `ConfigSource::File(path)`,
 
 ## Markdown Coverage
 
-Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). CommonMark spec pass rate: **100% (652/652)** — every section passes. Backed by ~740 inline unit tests organized in `tests/markdown/`, the full spec runner in `tests/commonmark_spec.rs`, and a 36-test robustness suite in `tests/stress.rs`.
-
-| Block-level                          | Status  | Inline                               | Status  |
-|--------------------------------------|---------|--------------------------------------|---------|
-| ATX headings (`#` to `######`)       | Full    | Backslash escapes                    | Full    |
-| Setext headings (`===` / `---`)      | Full    | Entity / numeric references          | Full    |
-| Paragraphs                           | Full    | Code spans (single & multi-backtick) | Full    |
-| Thematic breaks (`---` `***` `___`)  | Full    | Emphasis & strong (`*` and `_`)      | Full    |
-| Indented code blocks (4-space)       | Full    | Inline links                         | Full    |
-| Fenced code blocks (`` ``` ``, `~~~`)| Full    | Reference links / images             | Full    |
-| Blockquotes                          | Full    | Autolinks (`<https://…>`, `<email>`) | Full    |
-| Bullet lists (`-` `+` `*`)           | Full    | Images (rendered as styled link)     | Partial |
-| Ordered lists (`1.` and `1)`)        | Full    | Strikethrough (`~~text~~`)           | Full    |
-| Tables (GFM)                         | Full    | Raw inline HTML                      | Full    |
-| Task list items (GFM)                | Full    | Hard / soft line breaks              | Full    |
-| Reference link definitions           | Full    |                                      |         |
-| HTML blocks (7 kinds)                | Full    |                                      |         |
+Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). CommonMark spec pass rate: **100% (652/652)** — every section passes. Backed by ~800 inline lexer unit tests in `tests/markdown/`, the full spec runner in `tests/commonmark_spec.rs`, a robustness suite in `tests/stress.rs`, and an adversarial / structural renderer test suite in `tests/render/` (object-graph validation, malformed input, image-pipeline, and config-validation cases).
 
 ## Contributing
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.

@@ -701,7 +701,7 @@ fn url_image_with_invalid_url_does_not_crash() {
 
 #[test]
 fn image_caption_renders_when_title_attribute_present() {
-    let img = "examples/showcase_image.jpg";
+    let img = temp_jpeg_path();
     let md = format!("![alt]({} \"This is a caption\")\n", img);
     let bytes = render(&md, "");
     let s = String::from_utf8_lossy(&bytes);
@@ -713,7 +713,7 @@ fn image_caption_renders_when_title_attribute_present() {
 
 #[test]
 fn image_with_no_title_renders_without_caption() {
-    let img = "examples/showcase_image.jpg";
+    let img = temp_jpeg_path();
     let md = format!("![alt]({})\n", img);
     let bytes = render(&md, "");
     let s = String::from_utf8_lossy(&bytes);
@@ -722,7 +722,7 @@ fn image_with_no_title_renders_without_caption() {
 
 #[test]
 fn image_right_align_changes_xobject_translation() {
-    let img = "examples/showcase_image.jpg";
+    let img = temp_jpeg_path();
     let md = format!("![alt]({})\n", img);
     let cfg_left = "[image]\nalign = \"left\"\n";
     let cfg_right = "[image]\nalign = \"right\"\n";
@@ -736,7 +736,7 @@ fn image_right_align_changes_xobject_translation() {
 
 #[test]
 fn image_max_width_pct_shrinks_image() {
-    let img = "examples/showcase_image.jpg";
+    let img = temp_jpeg_path();
     let md = format!("![alt]({})\n", img);
     let cfg_full = "[image]\nmax_width_pct = 100.0\n";
     let cfg_half = "[image]\nmax_width_pct = 50.0\n";

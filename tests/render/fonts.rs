@@ -8,6 +8,8 @@ use markdown2pdf::config::ConfigSource;
 use markdown2pdf::fonts::FontConfig;
 use markdown2pdf::parse_into_bytes;
 
+use super::common::any_system_font;
+
 /// Read every `/Ascent <number>` value emitted in the PDF.
 ///
 /// printpdf serializes FontDescriptor entries as `/Ascent 916\n` (one
@@ -48,10 +50,14 @@ fn ascent_and_descent_are_normalized_to_1000_em() {
     // 8pt Georgia paragraph used to emit /Ascent 1878 /Descent -449
     // (raw 2048-UPEM units) which made viewer selection rects
     // ~2× too tall.
-    let md = "Body text in Georgia for the ascent test.".to_string();
-    let cfg = FontConfig::new().with_default_font("Georgia");
+    let Some(font) = any_system_font() else {
+        eprintln!("skip: no system font available to exercise external-font path");
+        return;
+    };
+    let md = format!("Body text in {} for the ascent test.", font);
+    let cfg = FontConfig::new().with_default_font(&font);
     let bytes = parse_into_bytes(md, ConfigSource::Default, Some(&cfg))
-        .expect("render must succeed when Georgia is present");
+        .expect("render must succeed when an external font is present");
 
     let ascent_values = ascents(&bytes);
     let descent_values = descents(&bytes);
@@ -88,10 +94,14 @@ fn inline_code_does_not_fall_back_to_builtin_courier_when_external_body_is_loade
     // created a visible gap at every font transition. With an external
     // body font configured, the renderer should auto-pick a system
     // monospace so both paths stay external Unicode.
+    let Some(font) = any_system_font() else {
+        eprintln!("skip: no system font available to exercise external-font path");
+        return;
+    };
     let md = "Body text with `inline code` between words.".to_string();
-    let cfg = FontConfig::new().with_default_font("Georgia");
+    let cfg = FontConfig::new().with_default_font(&font);
     let bytes = parse_into_bytes(md, ConfigSource::Default, Some(&cfg))
-        .expect("render must succeed when Georgia is present");
+        .expect("render must succeed when an external font is present");
 
     // Built-in Courier paths emit `(literal text) Tj`; external paths
     // emit `<hex glyph ids> Tj`. Finding the parenthesized form for

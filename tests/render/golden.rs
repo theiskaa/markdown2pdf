@@ -104,7 +104,9 @@ text_align = "justify"
 /// regressions in inline shape transformations.
 #[test]
 fn typography_combo() {
-    let md = "\
+    let img = temp_jpeg_path();
+    let md = format!(
+        "\
 # Typography Showcase
 
 Einstein wrote E = mc<sup>2</sup>. Water is H<sub>2</sub>O. The body
@@ -112,12 +114,14 @@ of this paragraph also uses small caps to verify that the inline
 super/sub transforms still work alongside the per-character case-class
 split.
 
-![hero](examples/showcase_image.jpg \"A caption beneath the image\")
+![hero]({} \"A caption beneath the image\")
 
 Closing paragraph.
-";
+",
+        img
+    );
     let cfg = "[paragraph]\nsmall_caps = true\n[image]\nalign = \"center\"\nmax_width_pct = 60.0\n";
-    let bytes = render(md, cfg);
+    let bytes = render(&md, cfg);
     pdf_ok(&bytes);
     assert!(contains_text(&bytes, "(INSTEIN"));
     assert!(contains_text(&bytes, "(2)"));
