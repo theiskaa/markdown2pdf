@@ -14,6 +14,12 @@ use std::path::Path;
 pub enum ConfigSource<'a> {
     /// Use the bundled `default` theme preset, no user overrides.
     Default,
+    /// Use a bundled theme preset by name (`"default"`, `"github"`,
+    /// `"academic"`, `"minimal"`, `"compact"`, `"modern"`). Unknown
+    /// names surface as [`ResolveError::UnknownTheme`] from
+    /// [`load_config_strict`]; [`load_config_from_source`] silently
+    /// falls back to the bundled default.
+    Theme(&'a str),
     /// Load and parse `path` as a user config file (see
     /// `docs/config.toml` in the repo for the full schema reference).
     File(&'a str),
@@ -34,6 +40,12 @@ pub fn load_config_strict(
 ) -> Result<ResolvedStyle, ResolveError> {
     let (toml_text, file_for_errors) = match source {
         ConfigSource::Default => return resolve(DocumentConfig::default(), theme_override),
+        ConfigSource::Theme(name) => {
+            // CLI `--theme` semantics: caller-supplied theme_override
+            // still wins so a user can layer overrides on top.
+            let theme = theme_override.or(Some(name));
+            return resolve(DocumentConfig::default(), theme);
+        }
         ConfigSource::File(path) => {
             let p = Path::new(path).to_path_buf();
             let text = fs::read_to_string(&p).map_err(|source| ResolveError::Io {
@@ -106,6 +118,29 @@ mod tests {
     fn theme_preset_override() {
         let style = load_config_strict(ConfigSource::Default, Some("github")).unwrap();
         assert_eq!(style.paragraph.font_size_pt, 10.0);
+    }
+
+    #[test]
+    fn theme_source_picks_named_preset() {
+        let style = load_config_strict(ConfigSource::Theme("github"), None).unwrap();
+        assert_eq!(style.paragraph.font_size_pt, 10.0);
+    }
+
+    #[test]
+    fn theme_source_unknown_returns_typed_error() {
+        let err = load_config_strict(ConfigSource::Theme("doesnotexist"), None);
+        match err {
+            Err(ResolveError::UnknownTheme { name, .. }) => assert_eq!(name, "doesnotexist"),
+            other => panic!("expected UnknownTheme, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn theme_source_falls_back_via_load_from_source() {
+        // Soft-fail helper masks the typed error; an unknown theme
+        // should drop us to the bundled default.
+        let style = load_config_from_source(ConfigSource::Theme("doesnotexist"));
+        assert_eq!(style.paragraph.font_size_pt, 8.0);
     }
 
     #[test]
