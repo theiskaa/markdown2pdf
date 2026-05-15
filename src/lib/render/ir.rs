@@ -261,6 +261,9 @@ pub struct RunFlags {
     /// upper-cases the source character and tags only the
     /// originally-lowercase characters with this flag.
     pub small_caps: bool,
+    /// Renders at ~85% of body size on the original baseline. Set
+    /// by `<small>` inline HTML.
+    pub small: bool,
 }
 
 impl RunFlags {
@@ -290,6 +293,10 @@ impl RunFlags {
     }
     pub fn with_subscript(mut self) -> Self {
         self.subscript = true;
+        self
+    }
+    pub fn with_small(mut self) -> Self {
+        self.small = true;
         self
     }
 }

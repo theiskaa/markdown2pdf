@@ -409,6 +409,7 @@ impl<'a> Engine<'a> {
             superscript: false,
             subscript: false,
             small_caps: false,
+            small: false,
             underline: false,
         };
         let measured = self.font_set.measure(flags, text, size_pt);
@@ -511,6 +512,7 @@ impl<'a> Engine<'a> {
             superscript: false,
             subscript: false,
             small_caps: false,
+            small: false,
             underline: false,
         };
         let ctx = self.begin_block(&s);
@@ -964,6 +966,7 @@ impl<'a> Engine<'a> {
             superscript: false,
             subscript: false,
             small_caps: false,
+            small: false,
             underline: false,
         };
         let size_pt = style.font_size_pt;
@@ -1094,6 +1097,7 @@ impl<'a> Engine<'a> {
             superscript: false,
             subscript: false,
             small_caps: false,
+            small: false,
         };
         let ctx = self.begin_block(&h2);
         self.write_wrapped_runs(&title_runs, h2.font_size_pt, h2.line_height, flags, color);
@@ -1692,6 +1696,7 @@ impl<'a> Engine<'a> {
             superscript: false,
             subscript: false,
             small_caps: false,
+            small: false,
             underline: false,
         };
 
@@ -1918,6 +1923,8 @@ impl<'a> Engine<'a> {
                     size_pt * 0.70
                 } else if seg.flags.small_caps {
                     size_pt * 0.78
+                } else if seg.flags.small {
+                    size_pt * 0.85
                 } else {
                     size_pt
                 };
@@ -1995,6 +2002,8 @@ impl<'a> Engine<'a> {
                     (size_pt * 0.70, baseline_y_pt + size_pt * 0.20)
                 } else if seg.flags.small_caps {
                     (size_pt * 0.78, baseline_y_pt)
+                } else if seg.flags.small {
+                    (size_pt * 0.85, baseline_y_pt)
                 } else {
                     (size_pt, baseline_y_pt)
                 };

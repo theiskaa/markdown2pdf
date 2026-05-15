@@ -845,6 +845,68 @@ fn html_sup_sub_uppercase_tags_recognized() {
 }
 
 #[test]
+fn html_underline_tag_is_consumed() {
+    let bytes = render("Try <u>underlined</u> text.", "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        !s.contains("(<u>)") && !s.contains("(</u>)"),
+        "<u> tags leaked into output"
+    );
+    assert!(contains(&bytes, b"underlined"));
+}
+
+#[test]
+fn html_strike_and_del_tags_consumed() {
+    for src in [
+        "<s>gone</s>",
+        "<del>removed</del>",
+        "<strike>cancelled</strike>",
+    ] {
+        let bytes = render(src, "");
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(
+            !s.contains("(<s>)")
+                && !s.contains("(<del>)")
+                && !s.contains("(<strike>)"),
+            "tag leaked into output for `{}`",
+            src
+        );
+    }
+}
+
+#[test]
+fn html_small_tag_is_consumed() {
+    let bytes = render("Body <small>fine print</small>.", "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        !s.contains("(<small>)") && !s.contains("(</small>)"),
+        "<small> tag leaked into output"
+    );
+    assert!(contains(&bytes, b"fine print"));
+}
+
+#[test]
+fn html_kbd_tag_is_consumed() {
+    let bytes = render("Press <kbd>Enter</kbd>.", "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        !s.contains("(<kbd>)") && !s.contains("(</kbd>)"),
+        "<kbd> tag leaked into output"
+    );
+    assert!(contains(&bytes, b"Enter"));
+}
+
+#[test]
+fn html_unknown_inline_tag_falls_through_verbatim() {
+    let bytes = render("Random <custom>thing</custom>.", "");
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        s.contains("<custom>") || contains_text(&bytes, "<custom>"),
+        "unknown inline tag should appear verbatim, not be silently dropped"
+    );
+}
+
+#[test]
 fn cross_reference_backward_link_to_earlier_heading() {
     let md = "\
 # Introduction

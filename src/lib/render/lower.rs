@@ -26,11 +26,9 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
     let footnote_numbers = collect_footnote_numbering(tokens);
     let mut footnote_definitions: HashMap<String, Vec<InlineRun>> = HashMap::new();
 
-    // `<sup>` / `<sub>` HTML inlines toggle these depth counters as we
-    // walk the top-level token stream, mirroring the same logic in
-    // `flatten_inline` for nested contexts.
-    let mut root_sup_depth = 0u32;
-    let mut root_sub_depth = 0u32;
+    // Inline-HTML scope tracking at the top level (sup/sub/u/s/del/
+    // small/kbd). Mirrors `flatten_inline`'s nested-context handling.
+    let mut root_html_depth = InlineHtmlDepth::default();
 
     fn flush_paragraph(out: &mut Vec<Block>, buffered: &mut Vec<InlineRun>) {
         if !buffered.iter().all(|r| r.text.trim().is_empty()) {
@@ -234,37 +232,13 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             // current paragraph buffer.
             _ => {
                 if let Token::HtmlInline(tag) = &tokens[i] {
-                    match classify_sup_sub_tag(tag) {
-                        Some(SupSubTag::SupOpen) => {
-                            root_sup_depth += 1;
-                            i += 1;
-                            continue;
-                        }
-                        Some(SupSubTag::SupClose) => {
-                            root_sup_depth = root_sup_depth.saturating_sub(1);
-                            i += 1;
-                            continue;
-                        }
-                        Some(SupSubTag::SubOpen) => {
-                            root_sub_depth += 1;
-                            i += 1;
-                            continue;
-                        }
-                        Some(SupSubTag::SubClose) => {
-                            root_sub_depth = root_sub_depth.saturating_sub(1);
-                            i += 1;
-                            continue;
-                        }
-                        None => {}
+                    if let Some(parsed) = classify_inline_html_tag(tag) {
+                        root_html_depth.handle(parsed);
+                        i += 1;
+                        continue;
                     }
                 }
-                let mut effective = RunFlags::default();
-                if root_sup_depth > 0 {
-                    effective = effective.with_superscript();
-                }
-                if root_sub_depth > 0 {
-                    effective = effective.with_subscript();
-                }
+                let effective = root_html_depth.apply(RunFlags::default());
                 flatten_one(&tokens[i], effective, None, &mut buffered_inline, &footnote_numbers);
                 i += 1;
             }
@@ -646,60 +620,107 @@ fn flatten_inline(
     footnotes: &HashMap<String, usize>,
 ) -> Vec<InlineRun> {
     let mut out = Vec::new();
-    // Track open `<sup>` / `<sub>` HTML inline scopes. The lexer emits
-    // the opening / closing tag as separate `HtmlInline` tokens, so we
-    // toggle the relevant flag here and consume the tag tokens.
-    let mut sup_depth = 0u32;
-    let mut sub_depth = 0u32;
+    // Track open inline-HTML scopes (sup/sub/u/s/del/small/kbd). The
+    // lexer emits each opening / closing tag as a separate `HtmlInline`
+    // token; we consume them here and toggle the relevant flag.
+    let mut depth = InlineHtmlDepth::default();
     for tok in tokens {
         if let Token::HtmlInline(tag) = tok {
-            match classify_sup_sub_tag(tag) {
-                Some(SupSubTag::SupOpen) => {
-                    sup_depth += 1;
-                    continue;
-                }
-                Some(SupSubTag::SupClose) => {
-                    sup_depth = sup_depth.saturating_sub(1);
-                    continue;
-                }
-                Some(SupSubTag::SubOpen) => {
-                    sub_depth += 1;
-                    continue;
-                }
-                Some(SupSubTag::SubClose) => {
-                    sub_depth = sub_depth.saturating_sub(1);
-                    continue;
-                }
-                None => {}
+            if let Some(parsed) = classify_inline_html_tag(tag) {
+                depth.handle(parsed);
+                continue;
             }
         }
-        let mut effective = flags;
-        if sup_depth > 0 {
-            effective = effective.with_superscript();
-        }
-        if sub_depth > 0 {
-            effective = effective.with_subscript();
-        }
+        let effective = depth.apply(flags);
         flatten_one(tok, effective, link, &mut out, footnotes);
     }
     out
 }
 
-enum SupSubTag {
+enum InlineHtmlTag {
     SupOpen,
     SupClose,
     SubOpen,
     SubClose,
+    UnderlineOpen,
+    UnderlineClose,
+    StrikeOpen,
+    StrikeClose,
+    SmallOpen,
+    SmallClose,
+    KbdOpen,
+    KbdClose,
 }
 
-fn classify_sup_sub_tag(raw: &str) -> Option<SupSubTag> {
+fn classify_inline_html_tag(raw: &str) -> Option<InlineHtmlTag> {
     let s = raw.trim().to_ascii_lowercase();
     match s.as_str() {
-        "<sup>" => Some(SupSubTag::SupOpen),
-        "</sup>" => Some(SupSubTag::SupClose),
-        "<sub>" => Some(SupSubTag::SubOpen),
-        "</sub>" => Some(SupSubTag::SubClose),
+        "<sup>" => Some(InlineHtmlTag::SupOpen),
+        "</sup>" => Some(InlineHtmlTag::SupClose),
+        "<sub>" => Some(InlineHtmlTag::SubOpen),
+        "</sub>" => Some(InlineHtmlTag::SubClose),
+        "<u>" => Some(InlineHtmlTag::UnderlineOpen),
+        "</u>" => Some(InlineHtmlTag::UnderlineClose),
+        "<s>" | "<del>" | "<strike>" => Some(InlineHtmlTag::StrikeOpen),
+        "</s>" | "</del>" | "</strike>" => Some(InlineHtmlTag::StrikeClose),
+        "<small>" => Some(InlineHtmlTag::SmallOpen),
+        "</small>" => Some(InlineHtmlTag::SmallClose),
+        "<kbd>" => Some(InlineHtmlTag::KbdOpen),
+        "</kbd>" => Some(InlineHtmlTag::KbdClose),
         _ => None,
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct InlineHtmlDepth {
+    sup: u32,
+    sub: u32,
+    underline: u32,
+    strike: u32,
+    small: u32,
+    kbd: u32,
+}
+
+impl InlineHtmlDepth {
+    /// Update depth counters for a recognized tag. Returns `true` if
+    /// the tag was consumed (and should be skipped from output).
+    fn handle(&mut self, tag: InlineHtmlTag) {
+        match tag {
+            InlineHtmlTag::SupOpen => self.sup += 1,
+            InlineHtmlTag::SupClose => self.sup = self.sup.saturating_sub(1),
+            InlineHtmlTag::SubOpen => self.sub += 1,
+            InlineHtmlTag::SubClose => self.sub = self.sub.saturating_sub(1),
+            InlineHtmlTag::UnderlineOpen => self.underline += 1,
+            InlineHtmlTag::UnderlineClose => self.underline = self.underline.saturating_sub(1),
+            InlineHtmlTag::StrikeOpen => self.strike += 1,
+            InlineHtmlTag::StrikeClose => self.strike = self.strike.saturating_sub(1),
+            InlineHtmlTag::SmallOpen => self.small += 1,
+            InlineHtmlTag::SmallClose => self.small = self.small.saturating_sub(1),
+            InlineHtmlTag::KbdOpen => self.kbd += 1,
+            InlineHtmlTag::KbdClose => self.kbd = self.kbd.saturating_sub(1),
+        }
+    }
+
+    fn apply(&self, mut flags: RunFlags) -> RunFlags {
+        if self.sup > 0 {
+            flags = flags.with_superscript();
+        }
+        if self.sub > 0 {
+            flags = flags.with_subscript();
+        }
+        if self.underline > 0 {
+            flags = flags.with_underline();
+        }
+        if self.strike > 0 {
+            flags = flags.with_strikethrough();
+        }
+        if self.small > 0 {
+            flags = flags.with_small();
+        }
+        if self.kbd > 0 {
+            flags = flags.with_monospace();
+        }
+        flags
     }
 }
 
@@ -783,24 +804,24 @@ fn flatten_one(
             }
         }
         Token::HtmlInline(tag) => {
-            // Recognized inline whitelist (b/i/u/s/del/strike/br plus
-            // em/strong) is handled by the lexer via the regular
-            // emphasis tokens, so by the time we see HtmlInline here
-            // the tag is *outside* that whitelist. Emit the literal
-            // text so the user sees what's there.
+            // Tags we semantically handle (sup/sub/u/s/del/small/kbd)
+            // are consumed by the calling context's depth tracker
+            // before reaching `flatten_one`; if we see one here it
+            // means flatten_one was called directly (e.g. inside an
+            // emphasis run) — drop it silently so the inline style
+            // applies to the surrounded text without dumping `<u>`.
+            if classify_inline_html_tag(tag).is_some() {
+                return;
+            }
             let lower = tag.to_ascii_lowercase();
-            // Hide standalone whitelist tags that the lexer doesn't
-            // convert (e.g. `<br/>`).
-            if lower.starts_with("<br")
-                || lower.starts_with("</br")
-                || lower == "<br>"
-                || lower == "<br/>"
-                || lower == "<br />"
-            {
+            // <br>, </br>, <br/>, <br /> — soft inline line break.
+            if lower.starts_with("<br") || lower.starts_with("</br") {
                 push_text(out, " ", flags, link);
             } else if lower.starts_with("<!--") {
                 // Inline HTML comment payload — drop silently.
             } else {
+                // Unknown tag — emit verbatim so users see something
+                // rather than have it silently disappear.
                 push_text(out, tag, flags, link);
             }
         }
