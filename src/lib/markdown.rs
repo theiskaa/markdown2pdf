@@ -926,6 +926,36 @@ fn is_paragraph_breaking_line_chars(chars: &[char], start: usize, end: usize) ->
     false
 }
 
+/// Returns the indent width when the line at `pos` is a valid
+/// footnote-definition continuation line: leading whitespace of at
+/// least 4 columns (4+ spaces, or a tab counted as 4), and at least
+/// one non-whitespace character after the indent. `None` for blank
+/// lines, EOF, or non-indented lines (which end the definition body).
+fn footnote_continuation_indent(chars: &[char], pos: usize) -> Option<usize> {
+    let mut p = pos;
+    let mut cols = 0usize;
+    while p < chars.len() {
+        match chars[p] {
+            ' ' => {
+                p += 1;
+                cols += 1;
+            }
+            '\t' => {
+                p += 1;
+                cols += 4;
+            }
+            _ => break,
+        }
+    }
+    if cols < 4 {
+        return None;
+    }
+    if p >= chars.len() || chars[p] == '\n' {
+        return None;
+    }
+    Some(p - pos)
+}
+
 /// True if `chars[pos..]` starts a definition-list definition marker
 /// line: up to 3 leading spaces, then `:`, then a single space or tab
 /// (definition body may be empty after that).
@@ -2826,13 +2856,46 @@ impl Lexer {
         if content_start < self.input.len() && self.input[content_start] == ' ' {
             content_start += 1;
         }
-        // Find the end of the line (or input).
+        // Find the end of the first line (or input).
         let mut content_end = content_start;
         while content_end < self.input.len() && self.input[content_end] != '\n' {
             content_end += 1;
         }
+        let mut body: String = self.input[content_start..content_end].iter().collect();
 
-        let body: String = self.input[content_start..content_end].iter().collect();
+        // GFM multi-line continuation: after the first line, each
+        // 4-space- or tab-indented line that follows belongs to the
+        // same definition body. Stop at the first blank or
+        // non-indented line, or EOF. Continuation lines join with a
+        // single space (soft-break semantics inside an inline run).
+        let mut cursor = content_end;
+        while cursor < self.input.len() && self.input[cursor] == '\n' {
+            let line_start = cursor + 1;
+            if line_start >= self.input.len() {
+                break;
+            }
+            let indent_width = footnote_continuation_indent(&self.input, line_start);
+            let Some(indent_width) = indent_width else {
+                break;
+            };
+            let body_start = line_start + indent_width;
+            let mut line_end = body_start;
+            while line_end < self.input.len() && self.input[line_end] != '\n' {
+                line_end += 1;
+            }
+            // Skip purely-blank continuation lines (would otherwise
+            // collapse to nothing but signal "still in definition").
+            // We currently stop at any blank, so this is unreachable
+            // for v1; left as a guard for future paragraph support.
+            if line_end == body_start {
+                break;
+            }
+            body.push(' ');
+            body.extend(&self.input[body_start..line_end]);
+            cursor = line_end;
+            content_end = line_end;
+        }
+
         let inner_tokens = if body.is_empty() {
             Vec::new()
         } else {

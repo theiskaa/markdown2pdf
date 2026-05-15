@@ -255,3 +255,163 @@ fn definition_with_empty_body_lexes() {
     // Empty body — content is empty or whitespace only.
     assert!(defs[0].1.trim().is_empty());
 }
+
+#[test]
+fn multiline_definition_joins_indented_continuation() {
+    // GFM: 4-space-indented continuation lines become part of the
+    // same definition body, joined by a soft space.
+    let src = "[^1]: First line.\n    Second line continues.";
+    let tokens = parse(src);
+    let defs = defs_of(&tokens);
+    assert_eq!(defs.len(), 1);
+    assert!(
+        defs[0].1.contains("First line.") && defs[0].1.contains("Second line continues."),
+        "multi-line body lost content: {:?}",
+        defs[0].1
+    );
+}
+
+#[test]
+fn multiline_definition_supports_three_continuation_lines() {
+    let src = "[^1]: Line one.\n    Line two.\n    Line three.\n    Line four.";
+    let tokens = parse(src);
+    let defs = defs_of(&tokens);
+    assert_eq!(defs.len(), 1);
+    for needle in ["Line one.", "Line two.", "Line three.", "Line four."] {
+        assert!(
+            defs[0].1.contains(needle),
+            "multi-line body missing `{}` (got {:?})",
+            needle,
+            defs[0].1
+        );
+    }
+}
+
+#[test]
+fn multiline_definition_stops_at_blank_line() {
+    // The blank line terminates the body; the paragraph after stays
+    // a regular paragraph, not part of the footnote.
+    let src = "[^1]: Inside footnote.\n\nNot in footnote.";
+    let tokens = parse(src);
+    let defs = defs_of(&tokens);
+    assert_eq!(defs.len(), 1);
+    assert!(defs[0].1.contains("Inside footnote."));
+    assert!(
+        !defs[0].1.contains("Not in footnote"),
+        "blank line should have ended the body: {:?}",
+        defs[0].1
+    );
+}
+
+#[test]
+fn multiline_definition_stops_at_unindented_line() {
+    let src = "[^1]: First line.\nNot indented.";
+    let tokens = parse(src);
+    let defs = defs_of(&tokens);
+    assert_eq!(defs.len(), 1);
+    assert!(defs[0].1.contains("First line."));
+    assert!(
+        !defs[0].1.contains("Not indented"),
+        "non-indented line should have ended the body: {:?}",
+        defs[0].1
+    );
+}
+
+#[test]
+fn multiline_definition_indent_can_be_tab() {
+    // A leading tab counts as ≥4 columns of indentation per GFM.
+    let src = "[^1]: First line.\n\tSecond line via tab.";
+    let tokens = parse(src);
+    let defs = defs_of(&tokens);
+    assert_eq!(defs.len(), 1);
+    assert!(
+        defs[0].1.contains("First line.") && defs[0].1.contains("Second line via tab."),
+        "tab continuation not joined: {:?}",
+        defs[0].1
+    );
+}
+
+#[test]
+fn multiline_definition_indent_requires_four_spaces() {
+    // Only 3 spaces of indent: NOT a continuation. The body is the
+    // first line only.
+    let src = "[^1]: First line.\n   Three-space indent.";
+    let tokens = parse(src);
+    let defs = defs_of(&tokens);
+    assert_eq!(defs.len(), 1);
+    assert!(defs[0].1.contains("First line."));
+    assert!(
+        !defs[0].1.contains("Three-space indent"),
+        "3-space indent should NOT be a continuation: {:?}",
+        defs[0].1
+    );
+}
+
+#[test]
+fn multiline_definition_continuation_runs_inline_lexer() {
+    // Inline markdown inside continuation lines should be parsed
+    // (emphasis, links, code) just like the first line.
+    let src = "[^1]: First.\n    Second with *emphasis* and `code`.";
+    let tokens = parse(src);
+    for t in &tokens {
+        if let Token::FootnoteDefinition { label, content } = t {
+            assert_eq!(label, "1");
+            let has_emphasis = content
+                .iter()
+                .any(|c| matches!(c, Token::Emphasis { .. }));
+            let has_code = content
+                .iter()
+                .any(|c| matches!(c, Token::Code { block: false, .. }));
+            assert!(has_emphasis, "no emphasis from continuation: {:?}", content);
+            assert!(has_code, "no inline code from continuation: {:?}", content);
+            return;
+        }
+    }
+    panic!("no FootnoteDefinition emitted");
+}
+
+#[test]
+fn multiline_definition_followed_by_another_definition() {
+    // Multiple consecutive multi-line definitions all parse cleanly.
+    let src = "[^1]: First definition.\n    Second line of first.\n[^2]: Second definition.\n    Second line of second.";
+    let tokens = parse(src);
+    let defs = defs_of(&tokens);
+    assert_eq!(defs.len(), 2);
+    assert_eq!(defs[0].0, "1");
+    assert_eq!(defs[1].0, "2");
+    assert!(defs[0].1.contains("Second line of first."));
+    assert!(defs[1].1.contains("Second line of second."));
+    assert!(
+        !defs[0].1.contains("Second line of second"),
+        "definitions leaked content between each other: {:?}",
+        defs[0].1
+    );
+}
+
+#[test]
+fn singleline_definition_still_works() {
+    // Sanity: pre-existing single-line behavior is unchanged.
+    let src = "[^1]: Just one line.";
+    let tokens = parse(src);
+    let defs = defs_of(&tokens);
+    assert_eq!(defs.len(), 1);
+    assert_eq!(defs[0].1, "Just one line.");
+}
+
+#[test]
+fn multiline_definition_does_not_consume_following_unindented_paragraph() {
+    // Regression: paragraphs after a footnote definition should
+    // remain regular paragraphs, not get absorbed.
+    let src = "[^1]: A footnote.\n    Continued.\n\nNew paragraph after blank line.";
+    let tokens = parse(src);
+    let defs = defs_of(&tokens);
+    assert_eq!(defs.len(), 1);
+    assert!(defs[0].1.contains("A footnote."));
+    assert!(defs[0].1.contains("Continued."));
+    let all_text = Token::collect_all_text(&tokens);
+    assert!(
+        all_text.contains("New paragraph after blank line."),
+        "following paragraph was swallowed: {:?}",
+        all_text
+    );
+}
