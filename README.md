@@ -37,6 +37,13 @@ For the latest git version:
 cargo install --git https://github.com/theiskaa/markdown2pdf
 ```
 
+URL input (`-u`) and SVG images are behind optional features; pass
+them to `cargo install` (see [Feature flags](#feature-flags)):
+
+```bash
+cargo install markdown2pdf --features fetch,svg
+```
+
 ### Prebuilt binaries
 
 Prebuilt versions are available in our [GitHub releases](https://github.com/theiskaa/markdown2pdf/releases/latest):
@@ -51,47 +58,38 @@ Prebuilt versions are available in our [GitHub releases](https://github.com/thei
 
 ## Install as library
 
-Add to your project:
+Add the crate to your project:
 
 ```bash
 cargo add markdown2pdf
 ```
 
-Or add to your Cargo.toml:
+Or, in `Cargo.toml`:
 
 ```toml
 # Minimal — local files only, no network, no SVG
 markdown2pdf = "0.4.0"
-```
 
-```toml
-# Full library: URL fetching + SVG rasterization
+# Or with URL fetching + SVG rasterization
 markdown2pdf = { version = "0.4.0", features = ["fetch", "svg"] }
 ```
 
-Two optional features. Both off by default.
+See [docs/Library.md](docs/Library.md) for the programmatic API.
 
-- **`fetch`** — URL fetching support for remote images and `-u` /
-  `--url` markdown input. Uses pure-Rust TLS (rustls), no
-  system-OpenSSL needed; works in `rust:slim` and Alpine. If you
-  need native-TLS for corporate certificate stores, depend on
-  `reqwest` directly with your preferred backend and Cargo will
-  unify.
-- **`svg`** — SVG image rasterization via `resvg`. Required for
-  README-style hero images and any SVG embedded via `![](path.svg)`
-  or `<img src="...svg">`.
+## Feature flags
 
-To build the binary with URL fetching:
+Two optional features, both off by default and shared by the binary
+and the library. The library enables them in `Cargo.toml`
+(`features = [...]`); the binary enables them at install or build
+time (`cargo install markdown2pdf --features fetch,svg`).
 
-```bash
-cargo install markdown2pdf --features fetch
-```
-
-Or from source:
-
-```bash
-cargo build --release --features fetch,svg
-```
+- **`fetch`** — URL input (the `-u`/`--url` flag) and remote images.
+  Uses pure-Rust TLS (rustls), so no system OpenSSL is needed; works
+  in `rust:slim` and Alpine. If you need native TLS for corporate
+  certificate stores, depend on `reqwest` directly with your
+  preferred backend and Cargo will unify the features.
+- **`svg`** — SVG image rasterization via `resvg`, for SVG embedded
+  through `![](path.svg)` or `<img src="...svg">`.
 
 ## Configuration
 
