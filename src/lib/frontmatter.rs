@@ -313,6 +313,7 @@ mod tests {
             subject: None,
             creator: Some("CLI".to_string()),
             keywords: vec!["existing".to_string()],
+            language: None,
         };
         let fm = Frontmatter {
             title: Some("New".to_string()),

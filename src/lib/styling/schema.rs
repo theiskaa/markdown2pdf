@@ -173,6 +173,10 @@ pub struct MetadataConfig {
     pub subject: Option<String>,
     pub keywords: Option<Vec<String>>,
     pub creator: Option<String>,
+    /// BCP-47 / ISO-639 language tag (`"en"`, `"en-US"`, `"de"`).
+    /// Emitted as the PDF Catalog `/Lang` entry for screen readers.
+    /// Omitted entirely when unset.
+    pub language: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]

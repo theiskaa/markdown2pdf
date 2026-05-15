@@ -132,6 +132,7 @@ pub struct ResolvedMetadata {
     pub subject: Option<String>,
     pub keywords: Vec<String>,
     pub creator: Option<String>,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -320,7 +320,12 @@ author = "Author Name"
 subject = "Subject line"
 keywords = ["one", "two"]
 creator = "markdown2pdf"
+language = "en-US"
 ```
+
+`language` is a BCP-47 tag emitted as the PDF Catalog `/Lang` entry,
+used by screen readers to select a pronunciation dictionary. It is
+omitted entirely when unset (no faked default).
 
 Non-ASCII values are encoded as UTF-16BE with a FEFF BOM (PDF spec
 compliant).

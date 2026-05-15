@@ -176,6 +176,9 @@ margin_after_pt = 6.0
 # subject = "Subject line"
 # keywords = ["one", "two"]
 creator = "markdown2pdf"
+# BCP-47 language tag; emitted as the PDF /Lang catalog entry for
+# screen readers. Omitted entirely when unset.
+# language = "en-US"
 
 
 # Headers and footers. Three slots (left / center / right) with

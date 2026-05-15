@@ -151,6 +151,13 @@ pub fn render_to_bytes(
     let tooltips = postprocess::collect_link_tooltips(&tokens);
     let bytes = postprocess::inject_link_tooltips(bytes, &tooltips);
 
+    // Catalog `/Lang` for accessibility — printpdf 0.9 doesn't expose
+    // it. No-op when no language is configured.
+    let bytes = match &style.metadata.language {
+        Some(lang) => postprocess::inject_lang(bytes, lang),
+        None => bytes,
+    };
+
     Ok(bytes)
 }
 

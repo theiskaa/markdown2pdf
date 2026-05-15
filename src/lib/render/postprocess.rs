@@ -137,6 +137,36 @@ pub fn inject_link_tooltips(bytes: Vec<u8>, tooltips: &HashMap<String, String>) 
     }
 }
 
+/// Set the document Catalog's `/Lang` entry to `lang` (a BCP-47 tag
+/// like `"en-US"`). printpdf 0.9 doesn't expose this. Screen readers
+/// and `Tagged PDF`-aware tools use it to pick a pronunciation
+/// dictionary. Degrades silently to the input bytes on any parse /
+/// serialize failure. No-op when `lang` is empty.
+pub fn inject_lang(bytes: Vec<u8>, lang: &str) -> Vec<u8> {
+    if lang.trim().is_empty() {
+        return bytes;
+    }
+    let Ok(mut doc) = Document::load_mem(&bytes) else {
+        return bytes;
+    };
+    let Ok(root_ref) = doc.trailer.get(b"Root") else {
+        return bytes;
+    };
+    let Ok(root_id) = root_ref.as_reference() else {
+        return bytes;
+    };
+    let Some(Object::Dictionary(catalog)) = doc.objects.get_mut(&root_id) else {
+        return bytes;
+    };
+    catalog.set("Lang", Object::string_literal(lang.to_string()));
+    let mut out = Vec::new();
+    if doc.save_to(&mut out).is_ok() {
+        out
+    } else {
+        bytes
+    }
+}
+
 fn is_link_annotation(d: &Dictionary) -> bool {
     let subtype_link = d
         .get(b"Subtype")

@@ -590,3 +590,79 @@ mod document_info {
         }
     }
 }
+
+mod document_language {
+    use super::*;
+
+    fn catalog_lang(bytes: &[u8]) -> Option<String> {
+        let doc = parse(bytes);
+        let cat = catalog(&doc);
+        match cat.get(b"Lang").ok()? {
+            Object::String(b, _) => Some(String::from_utf8_lossy(b).to_string()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn language_in_config_emits_catalog_lang() {
+        let bytes = render(
+            "Body.",
+            r##"
+            [metadata]
+            language = "en-US"
+            "##,
+        );
+        assert_eq!(catalog_lang(&bytes).as_deref(), Some("en-US"));
+    }
+
+    #[test]
+    fn no_language_omits_catalog_lang() {
+        let bytes = render("Body with no language configured.", "");
+        assert_eq!(
+            catalog_lang(&bytes),
+            None,
+            "/Lang must be absent when unset (don't fake a default)"
+        );
+    }
+
+    #[test]
+    fn language_other_than_english() {
+        let bytes = render(
+            "Inhalt.",
+            r##"
+            [metadata]
+            language = "de"
+            "##,
+        );
+        assert_eq!(catalog_lang(&bytes).as_deref(), Some("de"));
+    }
+
+    #[test]
+    fn whitespace_only_language_is_ignored() {
+        let bytes = render(
+            "Body.",
+            r##"
+            [metadata]
+            language = "   "
+            "##,
+        );
+        assert_eq!(
+            catalog_lang(&bytes),
+            None,
+            "whitespace-only language must not produce a /Lang entry"
+        );
+    }
+
+    #[test]
+    fn document_with_lang_still_structurally_valid() {
+        let bytes = render(
+            &multi_page_markdown(10),
+            r##"
+            [metadata]
+            language = "en-GB"
+            "##,
+        );
+        validate(&bytes);
+        assert_eq!(catalog_lang(&bytes).as_deref(), Some("en-GB"));
+    }
+}
