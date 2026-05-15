@@ -27,12 +27,28 @@ pub fn resolve(
     user: DocumentConfig,
     theme_override: Option<&str>,
 ) -> Result<ResolvedStyle, ResolveError> {
+    resolve_with_overrides(user, theme_override, None)
+}
+
+/// Like [`resolve`], but applies `overrides` as the highest-priority
+/// layer — on top of the theme preset *and* the user config. Used by
+/// the CLI so per-parameter flags win over the config file and
+/// `--theme`. The cascade is therefore:
+/// `preset → user config → overrides`.
+pub fn resolve_with_overrides(
+    user: DocumentConfig,
+    theme_override: Option<&str>,
+    overrides: Option<DocumentConfig>,
+) -> Result<ResolvedStyle, ResolveError> {
     let theme_name = theme_override
         .map(str::to_string)
         .or_else(|| user.theme.clone())
         .unwrap_or_else(|| "default".to_string());
     let preset = load_theme_preset(&theme_name)?;
-    let merged = merge_documents(preset, user);
+    let mut merged = merge_documents(preset, user);
+    if let Some(ov) = overrides {
+        merged = merge_documents(merged, ov);
+    }
     lower(&theme_name, merged)
 }
 
