@@ -68,12 +68,13 @@ pub fn render_to_file(
     tokens: Vec<Token>,
     style: ResolvedStyle,
     font_config: Option<&FontConfig>,
-    path: &str,
+    path: impl AsRef<std::path::Path>,
 ) -> Result<(), MdpError> {
+    let path = path.as_ref();
     let bytes = render_to_bytes(tokens, style, font_config)?;
     std::fs::write(path, bytes).map_err(|e| MdpError::PdfError {
         message: e.to_string(),
-        path: Some(path.to_string()),
+        path: Some(path.display().to_string()),
         suggestion: Some(
             "Check that the output directory exists and you have write permissions".to_string(),
         ),

@@ -289,11 +289,12 @@ impl MdpError {
 /// `--print-effective-config`) and doesn't want to load it again.
 pub fn parse_into_file_with_style(
     markdown: String,
-    path: &str,
+    path: impl AsRef<std::path::Path>,
     style: styling::ResolvedStyle,
     font_config: Option<&fonts::FontConfig>,
 ) -> Result<(), MdpError> {
-    if let Some(parent) = std::path::Path::new(path).parent() {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
             return Err(MdpError::IoError {
                 message: "Output directory does not exist".to_string(),
@@ -303,41 +304,37 @@ pub fn parse_into_file_with_style(
         }
     }
 
-    let mut lexer = Lexer::new(markdown);
-    let tokens = lexer.parse().map_err(|e| {
-        let msg = format!("{:?}", e);
-        MdpError::ParseError {
-            message: msg.clone(),
-            position: None,
-            suggestion: Some(if msg.contains("UnexpectedEndOfInput") {
-                "Check for unclosed code blocks (```), links, or image tags".to_string()
-            } else {
-                "Verify your Markdown syntax is valid. Try testing with a simpler document first.".to_string()
-            }),
-        }
-    })?;
+    let tokens = parse_markdown(markdown)?;
     render::render_to_file(tokens, style, font_config, path)
 }
 
 pub fn parse_into_file(
     markdown: String,
-    path: &str,
+    path: impl AsRef<std::path::Path>,
     config: config::ConfigSource,
     font_config: Option<&fonts::FontConfig>,
 ) -> Result<(), MdpError> {
-    // Validate output path exists
-    if let Some(parent) = std::path::Path::new(path).parent() {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
             return Err(MdpError::IoError {
-                message: format!("Output directory does not exist"),
+                message: "Output directory does not exist".to_string(),
                 path: parent.display().to_string(),
                 suggestion: format!("Create the directory first: mkdir -p {}", parent.display()),
             });
         }
     }
 
+    let tokens = parse_markdown(markdown)?;
+    let style = config::load_config_from_source(config);
+    render::render_to_file(tokens, style, font_config, path)
+}
+
+/// Lex markdown and map lexer errors to `MdpError::ParseError`. Used
+/// by every public entry point.
+fn parse_markdown(markdown: String) -> Result<Vec<markdown::Token>, MdpError> {
     let mut lexer = Lexer::new(markdown);
-    let tokens = lexer.parse().map_err(|e| {
+    lexer.parse().map_err(|e| {
         let msg = format!("{:?}", e);
         MdpError::ParseError {
             message: msg.clone(),
@@ -349,10 +346,7 @@ pub fn parse_into_file(
                     .to_string()
             }),
         }
-    })?;
-
-    let style = config::load_config_from_source(config);
-    render::render_to_file(tokens, style, font_config, path)
+    })
 }
 
 /// Transforms Markdown content into a styled PDF document and returns the PDF data as bytes.
@@ -399,22 +393,21 @@ pub fn parse_into_bytes(
     config: config::ConfigSource,
     font_config: Option<&fonts::FontConfig>,
 ) -> Result<Vec<u8>, MdpError> {
-    let mut lexer = Lexer::new(markdown);
-    let tokens = lexer.parse().map_err(|e| {
-        let msg = format!("{:?}", e);
-        MdpError::ParseError {
-            message: msg.clone(),
-            position: None,
-            suggestion: Some(if msg.contains("UnexpectedEndOfInput") {
-                "Check for unclosed code blocks (```), links, or image tags".to_string()
-            } else {
-                "Verify your Markdown syntax is valid. Try testing with a simpler document first."
-                    .to_string()
-            }),
-        }
-    })?;
-
+    let tokens = parse_markdown(markdown)?;
     let style = config::load_config_from_source(config);
+    render::render_to_bytes(tokens, style, font_config)
+}
+
+/// Variant of [`parse_into_bytes`] that takes a pre-resolved style
+/// instead of a `ConfigSource`. Mirrors [`parse_into_file_with_style`]
+/// for callers that already have a `ResolvedStyle` in hand (web
+/// services, in-memory pipelines).
+pub fn parse_into_bytes_with_style(
+    markdown: String,
+    style: styling::ResolvedStyle,
+    font_config: Option<&fonts::FontConfig>,
+) -> Result<Vec<u8>, MdpError> {
+    let tokens = parse_markdown(markdown)?;
     render::render_to_bytes(tokens, style, font_config)
 }
 
@@ -482,6 +475,34 @@ mod tests {
         let pdf_bytes = result.unwrap();
         assert!(!pdf_bytes.is_empty());
         assert!(pdf_bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn parse_into_bytes_with_style_renders() {
+        let markdown = "# Test\nBody".to_string();
+        let style = styling::ResolvedStyle::default();
+        let bytes = parse_into_bytes_with_style(markdown, style, None).expect("render");
+        assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn parse_into_file_accepts_pathbuf_and_str() {
+        let markdown = "# Hi".to_string();
+        let pathbuf = std::env::temp_dir().join("m2p_asref_test.pdf");
+        parse_into_file(
+            markdown.clone(),
+            &pathbuf,
+            config::ConfigSource::Default,
+            None,
+        )
+        .expect("PathBuf path works");
+        assert!(pathbuf.exists());
+        let _ = fs::remove_file(&pathbuf);
+
+        let path_str = pathbuf.to_str().unwrap();
+        parse_into_file(markdown, path_str, config::ConfigSource::Default, None)
+            .expect("&str path works");
+        let _ = fs::remove_file(&pathbuf);
     }
 
     #[test]
