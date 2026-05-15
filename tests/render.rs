@@ -28,3 +28,6 @@ mod adversarial;
 
 #[path = "render/structure.rs"]
 mod structure;
+
+#[path = "render/config_validation.rs"]
+mod config_validation;

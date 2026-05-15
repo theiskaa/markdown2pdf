@@ -188,6 +188,7 @@ fn merge_metadata(base: MetadataConfig, overlay: MetadataConfig) -> MetadataConf
         subject: overlay.subject.or(base.subject),
         keywords: overlay.keywords.or(base.keywords),
         creator: overlay.creator.or(base.creator),
+        language: overlay.language.or(base.language),
     }
 }
 
@@ -306,6 +307,7 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
         subject: metadata_cfg.subject,
         keywords: metadata_cfg.keywords.unwrap_or_default(),
         creator: metadata_cfg.creator,
+        language: metadata_cfg.language,
     };
 
     let header = lower_furniture(theme, "header", &defaults, cfg.header)?;
@@ -342,22 +344,49 @@ fn lower_block(
     raw: BlockConfig,
 ) -> Result<ResolvedBlock, ResolveError> {
     let merged = merge_block(defaults.clone(), raw);
+    let font_size_pt = merged
+        .font_size_pt
+        .ok_or_else(|| missing(theme, &format!("{}.font_size_pt", where_)))?;
+    // Hostile / mistaken config must never crash or hang the renderer.
+    // A non-positive font size makes glyph advances zero — the greedy
+    // wrap loop would never make progress (hang). A non-positive line
+    // height collapses leading and can stall vertical advance.
+    // Negative spacing moves the layout cursor backwards and can loop
+    // the page-break logic forever. Clamp these to safe minimums
+    // (graceful degradation; we log nothing — the output is still a
+    // valid, if ugly, PDF). `letter_spacing_pt` is intentionally NOT
+    // clamped: negative tracking is a legitimate typographic choice.
+    let font_size_pt = if font_size_pt.is_finite() && font_size_pt > 0.0 {
+        font_size_pt
+    } else {
+        1.0
+    };
+    let line_height = {
+        let lh = merged.line_height.unwrap_or(1.4);
+        if lh.is_finite() && lh > 0.0 { lh } else { 0.1 }
+    };
+    let clamp_nonneg = |v: f32| if v.is_finite() && v > 0.0 { v } else { 0.0 };
+    let pad = merged.padding.unwrap_or_else(|| Sides::uniform(0.0));
+    let padding = Sides {
+        top: clamp_nonneg(pad.top),
+        right: clamp_nonneg(pad.right),
+        bottom: clamp_nonneg(pad.bottom),
+        left: clamp_nonneg(pad.left),
+    };
     Ok(ResolvedBlock {
         font_family: merged.font_family,
-        font_size_pt: merged
-            .font_size_pt
-            .ok_or_else(|| missing(theme, &format!("{}.font_size_pt", where_)))?,
+        font_size_pt,
         font_weight: merged.font_weight.unwrap_or(FontWeight::Normal),
         font_style: merged.font_style.unwrap_or(FontStyleVariant::Normal),
         text_color: merged.text_color.unwrap_or(Color::rgb(0, 0, 0)),
         background_color: merged.background_color,
-        line_height: merged.line_height.unwrap_or(1.4),
+        line_height,
         text_align: merged.text_align.unwrap_or(TextAlignment::Left),
         border: lower_border(merged.border.unwrap_or_default()),
-        padding: merged.padding.unwrap_or_else(|| Sides::uniform(0.0)),
-        margin_before_pt: merged.margin_before_pt.unwrap_or(0.0),
-        margin_after_pt: merged.margin_after_pt.unwrap_or(0.0),
-        indent_pt: merged.indent_pt.unwrap_or(0.0),
+        padding,
+        margin_before_pt: clamp_nonneg(merged.margin_before_pt.unwrap_or(0.0)),
+        margin_after_pt: clamp_nonneg(merged.margin_after_pt.unwrap_or(0.0)),
+        indent_pt: clamp_nonneg(merged.indent_pt.unwrap_or(0.0)),
         letter_spacing_pt: merged.letter_spacing_pt.unwrap_or(0.0),
         strikethrough: merged.strikethrough.unwrap_or(false),
         underline: merged.underline.unwrap_or(false),
