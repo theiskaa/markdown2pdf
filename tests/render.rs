@@ -22,3 +22,6 @@ mod styling;
 
 #[path = "render/golden.rs"]
 mod golden;
+
+#[path = "render/adversarial.rs"]
+mod adversarial;
