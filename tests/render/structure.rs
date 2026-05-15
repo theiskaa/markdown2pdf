@@ -400,22 +400,83 @@ mod config_variations {
     }
 }
 
-mod showcase {
+mod feature_rich_document {
     use super::*;
 
+    /// A self-contained document exercising most renderer features.
+    /// Inline (not loaded from a file) so the test has no external
+    /// dependency and is reproducible in any checkout / CI.
+    const KITCHEN_SINK: &str = "\
+# Top heading
+
+Intro paragraph with **bold**, *italic*, `code`, ~~strike~~, a
+[link](https://example.com), and a footnote.[^1]
+
+## Lists
+
+- bullet one
+- bullet two
+  - nested
+1. ordered
+2. ordered two
+
+- [x] done task
+- [ ] open task
+
+## Quote and code
+
+> A blockquote spanning
+> two source lines.
+
+```rust
+fn main() { println!(\"hi\"); }
+```
+
+## Table
+
+| Name  | Score | Grade |
+|:------|:-----:|------:|
+| Alice |  91   |   A   |
+| Bob   |  72   |   C   |
+
+## Definition list
+
+Term
+: a definition body.
+
+## Math-free inline HTML
+
+x<sup>2</sup> and H<sub>2</sub>O and <kbd>Ctrl</kbd>.
+
+---
+
+Closing paragraph after a thematic break.
+
+[^1]: The footnote definition.
+";
+
     #[test]
-    fn full_showcase_passes_structural_validation() {
-        let md = include_str!("../../examples/all_features.md");
-        let bytes = render(md, "");
+    fn kitchen_sink_passes_structural_validation() {
+        let bytes = render(KITCHEN_SINK, "");
         validate(&bytes);
     }
 
     #[test]
-    fn showcase_under_github_theme_validates() {
-        let md = include_str!("../../examples/all_features.md");
+    fn kitchen_sink_under_github_theme_validates() {
         let bytes = markdown2pdf::parse_into_bytes(
-            md.to_string(),
+            KITCHEN_SINK.to_string(),
             markdown2pdf::config::ConfigSource::Theme("github"),
+            None,
+        )
+        .expect("render");
+        validate(&bytes);
+    }
+
+    #[test]
+    fn kitchen_sink_under_academic_theme_validates() {
+        let bytes = markdown2pdf::parse_into_bytes(
+            KITCHEN_SINK.to_string(),
+            markdown2pdf::config::ConfigSource::Theme("academic"),
             None,
         )
         .expect("render");
