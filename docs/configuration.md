@@ -52,7 +52,7 @@ inherits a known-good baseline; you override only what you care about.
 
 Any field below can also be overridden per-run from the command
 line (winning over the config file and `--theme`) — see
-[CLI.md](CLI.md#config-overrides) for `--title` / `--font-size` /
+[cli.md](cli.md#config-overrides) for `--title` / `--font-size` /
 `--margin` / `-V key=value` and the dotted-key syntax.
 
 ## How configuration resolves
