@@ -2901,7 +2901,74 @@ impl Lexer {
                 return Ok(tok);
             }
         }
+        if let Some(tok) = self.try_parse_wikilink() {
+            return Ok(tok);
+        }
         self.parse_link()
+    }
+
+    /// Try to consume an Obsidian/MediaWiki-style wikilink:
+    /// `[[Target]]` or `[[Target|Label]]`. The destination is the
+    /// target slugified to an in-document heading anchor (`#slug`), so
+    /// it flows through the exact same renderer path as an explicit
+    /// `[text](#slug)` cross-reference — including the graceful
+    /// "warn + render as styled text" behaviour when no heading
+    /// matches.
+    ///
+    /// Returns `None` (position untouched) on any non-match so the
+    /// caller falls through to `parse_link`, which turns a stray `[[`
+    /// into literal text. A wikilink does not span lines, and a target
+    /// that slugifies to nothing is not a wikilink — both degrade to
+    /// literal text rather than producing a dead link. The label is
+    /// emitted verbatim (no nested inline parsing), matching Obsidian.
+    fn try_parse_wikilink(&mut self) -> Option<Token> {
+        // Caller guarantees `self.input[self.position] == '['`.
+        if self.position + 1 >= self.input.len()
+            || self.input[self.position + 1] != '['
+        {
+            return None;
+        }
+        let body_start = self.position + 2;
+        let mut i = body_start;
+        let close = loop {
+            if i + 1 >= self.input.len() {
+                return None;
+            }
+            let c = self.input[i];
+            if c == '\n' {
+                return None;
+            }
+            if c == ']' && self.input[i + 1] == ']' {
+                break i;
+            }
+            i += 1;
+        };
+        let body: &[char] = &self.input[body_start..close];
+        let pipe = body.iter().position(|&c| c == '|');
+        let (target, label): (&[char], Option<&[char]>) = match pipe {
+            Some(p) => (&body[..p], Some(&body[p + 1..])),
+            None => (body, None),
+        };
+        let target: String = target.iter().collect();
+        let slug = slugify(target.trim());
+        if slug.is_empty() {
+            return None;
+        }
+        let visible: String = match label {
+            Some(l) => l.iter().collect::<String>().trim().to_string(),
+            None => target.trim().to_string(),
+        };
+        let visible = if visible.is_empty() {
+            target.trim().to_string()
+        } else {
+            visible
+        };
+        self.position = close + 2; // past the closing `]]`
+        Some(Token::Link {
+            content: vec![Token::Text(visible)],
+            url: format!("#{}", slug),
+            title: None,
+        })
     }
 
     /// Try to consume `[^label]` as a footnote reference. Returns
