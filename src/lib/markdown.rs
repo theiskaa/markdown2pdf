@@ -3384,16 +3384,22 @@ impl Lexer {
             // the pending queue and return `Text("[")`. The queue
             // approach replaces an older position-rewind that re-parsed
             // the body and went exponential on inputs like `[[[[…alt](u)`.
-            let only_text = content
+            // Fast path only for a pure single-line body: collapse the
+            // `[…` run into one Text. A multi-line body must NOT be
+            // flattened with embedded `\n` — a literal newline baked
+            // into a Text run reaches the renderer, which has no glyph
+            // for it and draws a missing-glyph box on the embedded-font
+            // path. Instead fall through to the queue path so every
+            // `Token::Newline` survives as a real newline token and
+            // lowering turns it into a space like any soft break.
+            let only_flat_text = content
                 .iter()
-                .all(|t| matches!(t, Token::Text(_) | Token::Newline));
-            if only_text {
+                .all(|t| matches!(t, Token::Text(_)));
+            if only_flat_text {
                 let mut s = String::from("[");
                 for t in &content {
-                    match t {
-                        Token::Text(t) => s.push_str(t),
-                        Token::Newline => s.push('\n'),
-                        _ => {}
+                    if let Token::Text(t) = t {
+                        s.push_str(t);
                     }
                 }
                 return Ok(Token::Text(s));
