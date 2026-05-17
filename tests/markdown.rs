@@ -217,3 +217,6 @@ mod try_parse_definition_tests;
 
 #[path = "markdown/unmatched_emphasis_fallback_tests.rs"]
 mod unmatched_emphasis_fallback_tests;
+
+#[path = "markdown/wikilink_tests.rs"]
+mod wikilink_tests;

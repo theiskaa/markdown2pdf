@@ -1,7 +1,10 @@
 # CommonMark spec examples we don't yet pass. One example number per
 # line, optional trailing `# comment`. Lines starting with `#` ignored.
 # Categories: R=lexer bug, H=renderer bug, N=normalization, O=out-of-scope (HTML)
-# Last measured: 652/652 passing (100.0%). All CommonMark 0.31.2 examples pass.
+# Last measured: 649/652 CommonMark 0.31.2 examples pass. The 3 below are
+# intentional: the WikiLink extension reclaims `[[...]]`, which CommonMark
+# treats as nested/shortcut-reference brackets (same divergence Obsidian,
+# Foam, Dendron make). Not bugs — feature scope.
 
 # --- ATX headings (0 failing) ---
 
@@ -23,13 +26,16 @@
 
 # --- Hard line breaks (0 failing) ---
 
-# --- Images (0 failing) ---
+# --- Images (1 failing) ---
+590 # WikiLink extension reclaims `[[...]]`; `[[foo]]: /url` is a wikilink, not a (literal) ref-def line
 
 # --- Indented code blocks (0 failing) ---
 
 # --- Link reference definitions (0 failing) ---
 
-# --- Links (0 failing) ---
+# --- Links (2 failing) ---
+548 # WikiLink extension: `[[[foo]]]` parses the inner `[[...]]` as a wikilink, not CommonMark literal brackets
+559 # WikiLink extension: `[[*foo* bar]]` is a wikilink, not `[` + shortcut-ref `[*foo* bar]` + `]`
 
 # --- List items (0 failing) ---
 
