@@ -181,9 +181,14 @@ fn check_syntax_issues(markdown: &str) -> Vec<ValidationWarning> {
         ));
     }
 
-    // Check for unclosed links
-    let open_links = markdown.matches('[').count();
-    let close_links = markdown.matches(']').count();
+    // Check for unclosed links. Footnote brackets are neutralized
+    // first: `[^id]` references/definitions and Pandoc inline
+    // footnotes `^[body]` are valid syntax, and the lexer even
+    // accepts a stray `^[` (degrading it to literal text), so none of
+    // them is "broken link syntax".
+    let scan = neutralize_footnote_brackets(markdown);
+    let open_links = scan.matches('[').count();
+    let close_links = scan.matches(']').count();
     if open_links != close_links {
         warnings.push(ValidationWarning::syntax_warning(
             "Unmatched square brackets detected (possible broken link syntax)",
@@ -191,6 +196,71 @@ fn check_syntax_issues(markdown: &str) -> Vec<ValidationWarning> {
     }
 
     warnings
+}
+
+/// Blanks out the brackets that belong to footnote constructs so the
+/// crude `[` vs `]` tally in [`check_syntax_issues`] only sees real
+/// link brackets. Mirrors the lexer's own acceptance rules:
+///
+/// - `[^label]` — a footnote reference / definition (label is
+///   `[A-Za-z0-9_-]+`). Both brackets are cleared.
+/// - `^[body]` — a Pandoc inline footnote. The opener is always
+///   cleared (the lexer treats even an unterminated `^[` as literal
+///   text, so it must not read as an unmatched bracket); the matching
+///   close, if present, is cleared too. Brackets *inside* the body
+///   are left alone — they balance among themselves.
+///
+/// Anything that doesn't match these shapes is untouched, so a real
+/// `[unclosed link` still trips the warning.
+fn neutralize_footnote_brackets(md: &str) -> String {
+    let chars: Vec<char> = md.chars().collect();
+    let mut out = chars.clone();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '[' && chars.get(i + 1) == Some(&'^') {
+            let mut j = i + 2;
+            while j < chars.len()
+                && (chars[j].is_ascii_alphanumeric()
+                    || chars[j] == '_'
+                    || chars[j] == '-')
+            {
+                j += 1;
+            }
+            if j > i + 2 && chars.get(j) == Some(&']') {
+                out[i] = ' ';
+                out[j] = ' ';
+                i = j + 1;
+                continue;
+            }
+        }
+        if chars[i] == '^' && chars.get(i + 1) == Some(&'[') {
+            out[i + 1] = ' ';
+            let mut depth = 1usize;
+            let mut j = i + 2;
+            while j < chars.len() {
+                match chars[j] {
+                    '\\' if j + 1 < chars.len() => {
+                        j += 2;
+                        continue;
+                    }
+                    '[' => depth += 1,
+                    ']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            out[j] = ' ';
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    out.into_iter().collect()
 }
 
 /// Checks for image references and validates paths exist
@@ -273,6 +343,33 @@ mod tests {
         let text = "[unclosed link";
         let warnings = check_syntax_issues(text);
         assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn footnote_syntax_does_not_trip_bracket_warning() {
+        // Inline footnotes, refs/defs, nested brackets in a body, and
+        // the intentional degradation cases (`^[` unterminated, `^[]`)
+        // are all valid — none should warn.
+        let text = "A ref[^a] and inline^[a note with [1] inside].\n\
+                    Degrade: an unterminated ^[never closed and ^[] too.\n\
+                    [^a]: def";
+        let warnings = check_syntax_issues(text);
+        assert!(
+            warnings.is_empty(),
+            "footnote syntax falsely flagged: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn real_unmatched_bracket_still_warns_alongside_footnotes() {
+        // A genuine broken link must still be caught even when
+        // footnote brackets are present and balanced.
+        let text = "Valid^[note] but [this link is unclosed";
+        let warnings = check_syntax_issues(text);
+        assert!(
+            !warnings.is_empty(),
+            "a real unmatched `[` should still warn"
+        );
     }
 
     #[test]
