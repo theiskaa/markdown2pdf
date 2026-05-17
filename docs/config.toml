@@ -159,6 +159,11 @@ text_color = "#0969DA"
 underline = false
 
 
+# Inline highlight (==text==).
+[mark]
+background_color = "#FFF59D"
+
+
 # Horizontal rules (---).
 [horizontal_rule]
 color = "#D0D7DE"
