@@ -402,11 +402,17 @@ impl Token {
                 label.replace("\"", "\\\""),
                 indent
             ),
-            Token::FootnoteDefinition { label, content } => {
+            Token::FootnoteDefinition { label, content }
+            | Token::InlineFootnote { label, content } => {
+                let type_name = if matches!(self, Token::InlineFootnote { .. }) {
+                    "InlineFootnote"
+                } else {
+                    "FootnoteDefinition"
+                };
                 let mut result = format!("{}{{\n", indent);
                 result.push_str(&format!(
-                    "{}\"type\": \"FootnoteDefinition\",\n",
-                    inner_indent
+                    "{}\"type\": \"{}\",\n",
+                    inner_indent, type_name
                 ));
                 result.push_str(&format!(
                     "{}\"label\": \"{}\",\n",
@@ -562,6 +568,9 @@ impl Token {
             Token::FootnoteReference(label) => format!("FootnoteRef({})", quote(label)),
             Token::FootnoteDefinition { label, content } => {
                 format!("FootnoteDef({}, {})", quote(label), list(content))
+            }
+            Token::InlineFootnote { label, content } => {
+                format!("InlineFootnote({}, {})", quote(label), list(content))
             }
             Token::Text(s) => format!("Text({})", quote(s)),
             Token::DelimRun { ch, count } => {
