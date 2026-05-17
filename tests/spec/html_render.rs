@@ -401,6 +401,11 @@ fn render_inline_token(t: &Token, out: &mut String) {
             render_inlines(content, out);
             out.push_str("</del>");
         }
+        Token::Highlight(content) => {
+            out.push_str("<mark>");
+            render_inlines(content, out);
+            out.push_str("</mark>");
+        }
         Token::Code { content: body, .. } => {
             out.push_str("<code>");
             out.push_str(&escape_text(body));
@@ -469,6 +474,15 @@ fn render_inline_token(t: &Token, out: &mut String) {
             out.push_str("\">");
             render_inlines(content, out);
             out.push_str("</div>");
+        }
+        Token::InlineFootnote { label, content } => {
+            // Pandoc inline footnote. Not a CommonMark construct; this
+            // helper just keeps the marker + body visible for coverage.
+            out.push_str("<sup class=\"footnote-ref\">");
+            out.push_str(&escape_text(label));
+            out.push_str("</sup><span class=\"footnote-inline\">");
+            render_inlines(content, out);
+            out.push_str("</span>");
         }
         Token::DefinitionList { entries } => {
             out.push_str("<dl>");

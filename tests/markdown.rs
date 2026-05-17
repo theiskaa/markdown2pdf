@@ -59,6 +59,9 @@ mod definition_list_tests;
 #[path = "markdown/footnote_tests.rs"]
 mod footnote_tests;
 
+#[path = "markdown/inline_footnote_tests.rs"]
+mod inline_footnote_tests;
+
 #[path = "markdown/gfm_trio_tests.rs"]
 mod gfm_trio_tests;
 
@@ -215,5 +218,11 @@ mod try_decode_entity_tests;
 #[path = "markdown/try_parse_definition_tests.rs"]
 mod try_parse_definition_tests;
 
+#[path = "markdown/highlight_tests.rs"]
+mod highlight_tests;
+
 #[path = "markdown/unmatched_emphasis_fallback_tests.rs"]
 mod unmatched_emphasis_fallback_tests;
+
+#[path = "markdown/wikilink_tests.rs"]
+mod wikilink_tests;

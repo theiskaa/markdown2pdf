@@ -5,10 +5,10 @@ The crate exposes the same conversion pipeline the binary uses, so any styling a
 Add the crate with Cargo. The default build has no network or SVG support; the optional `fetch` feature enables fetching remote images over a pure-Rust TLS stack, and the optional `svg` feature enables rasterizing SVG images:
 
 ```toml
-markdown2pdf = "1.0.0"
+markdown2pdf = "1.1.0"
 
 # with URL fetching + SVG rasterization
-markdown2pdf = { version = "1.0.0", features = ["fetch", "svg"] }
+markdown2pdf = { version = "1.1.0", features = ["fetch", "svg"] }
 ```
 
 ## Entry points
@@ -56,7 +56,7 @@ const CFG: &str = include_str!("../brand.toml");
 parse_into_file(md, "b.pdf", ConfigSource::Embedded(CFG), None)?;
 ```
 
-Every field these sources can set is documented in [Configuration.md](Configuration.md), with an annotated reference configuration in [config.toml](config.toml).
+Every field these sources can set is documented in [configuration.md](configuration.md), with an annotated reference configuration in [config.toml](config.toml).
 
 ## Pre-resolved styles and runtime overrides
 

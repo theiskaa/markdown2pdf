@@ -17,6 +17,8 @@ use crate::styling::{
     ResolvedPage, ResolvedPageFurniture, ResolvedStyle, ResolvedToc, TextAlignment,
 };
 
+use crate::markdown::slugify;
+
 use super::font::FontSet;
 use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
 
@@ -129,6 +131,14 @@ struct Engine<'a> {
     url_image_cache: HashMap<String, Vec<u8>>,
     /// Whether a text section is currently open.
     in_text_section: bool,
+    /// Index into `page_ops` just before the currently-open text
+    /// section's `SaveGraphicsState`. Inline `==highlight==` fills are
+    /// spliced here on [`close_text_section`] so they paint *under*
+    /// the section's glyphs (same trick as block backgrounds).
+    text_section_marker: usize,
+    /// Highlight rects collected while the current text section is
+    /// open; drained into `page_ops` when it closes.
+    pending_highlights: Vec<HighlightBox>,
     /// Stack of block backgrounds currently open (LIFO — matches the
     /// nesting of `begin_block` / `end_block`). When a page break
     /// happens mid-block, [`start_new_page`] paints the fragment that
@@ -175,6 +185,8 @@ impl<'a> Engine<'a> {
             current_text_align: TextAlignment::Left,
             url_image_cache: HashMap::new(),
             in_text_section: false,
+            text_section_marker: 0,
+            pending_highlights: Vec::new(),
             open_bg: Vec::new(),
         }
     }
@@ -444,6 +456,7 @@ impl<'a> Engine<'a> {
             italic: style.is_italic(),
             monospace: false,
             strikethrough: false,
+            highlight: false,
             superscript: false,
             subscript: false,
             small_caps: false,
@@ -547,6 +560,7 @@ impl<'a> Engine<'a> {
             italic: s.is_italic(),
             monospace: false,
             strikethrough: false,
+            highlight: false,
             superscript: false,
             subscript: false,
             small_caps: false,
@@ -883,6 +897,7 @@ impl<'a> Engine<'a> {
 
     fn ensure_text_section(&mut self) {
         if !self.in_text_section {
+            self.text_section_marker = self.page_ops.len();
             self.page_ops.push(Op::SaveGraphicsState);
             self.page_ops.push(Op::StartTextSection);
             self.in_text_section = true;
@@ -895,6 +910,36 @@ impl<'a> Engine<'a> {
             self.page_ops.push(Op::RestoreGraphicsState);
             self.in_text_section = false;
         }
+        self.flush_highlights();
+    }
+
+    /// Splice the collected `==highlight==` rects into `page_ops` just
+    /// before the (now-closed) text section's `SaveGraphicsState`, so
+    /// they paint behind the glyphs. No-op when nothing was
+    /// highlighted or `[mark]` has no background colour.
+    fn flush_highlights(&mut self) {
+        if self.pending_highlights.is_empty() {
+            return;
+        }
+        let boxes = std::mem::take(&mut self.pending_highlights);
+        let Some(fill_rgb) = self.style.mark.background_color_rgb() else {
+            return;
+        };
+        let page_h_pt = self.page_height_pt();
+        let mut bg_ops: Vec<Op> = Vec::new();
+        for b in &boxes {
+            draw_filled_rect(
+                &mut bg_ops,
+                b.x0_pt,
+                b.baseline_y_pt - b.size_pt * 0.80,
+                b.x1_pt,
+                b.baseline_y_pt + b.size_pt * 0.20,
+                rgb_color(fill_rgb),
+                page_h_pt,
+            );
+        }
+        let at = self.text_section_marker.min(self.page_ops.len());
+        self.page_ops.splice(at..at, bg_ops);
     }
 
     /// Place the text cursor at (x_pt_from_left, y_pt_from_top) on the
@@ -1063,6 +1108,7 @@ impl<'a> Engine<'a> {
             italic: style.is_italic(),
             monospace: false,
             strikethrough: false,
+            highlight: false,
             superscript: false,
             subscript: false,
             small_caps: false,
@@ -1193,6 +1239,7 @@ impl<'a> Engine<'a> {
             italic: h2.is_italic(),
             monospace: false,
             strikethrough: false,
+            highlight: false,
             underline: false,
             superscript: false,
             subscript: false,
@@ -1892,6 +1939,7 @@ impl<'a> Engine<'a> {
             italic: s.is_italic(),
             monospace: false,
             strikethrough: false,
+            highlight: false,
             superscript: false,
             subscript: false,
             small_caps: false,
@@ -2307,6 +2355,14 @@ impl<'a> Engine<'a> {
                         baseline_y_pt,
                     });
                 }
+                if seg.flags.highlight {
+                    self.pending_highlights.push(HighlightBox {
+                        x0_pt: x_cursor_pt,
+                        x1_pt: x_cursor_pt + seg_width,
+                        baseline_y_pt,
+                        size_pt,
+                    });
+                }
                 x_cursor_pt += seg_width;
             }
 
@@ -2458,6 +2514,17 @@ struct PendingDecoration {
     link: Option<String>,
     size_pt: f32,
     baseline_y_pt: f32,
+}
+
+/// One `==highlight==` segment's box, in top-down points. Collected
+/// while a text section is open and painted (under the glyphs) when
+/// the section closes.
+#[derive(Debug)]
+struct HighlightBox {
+    x0_pt: f32,
+    x1_pt: f32,
+    baseline_y_pt: f32,
+    size_pt: f32,
 }
 
 /// Convert a UTF-8 string to ASCII for safe rendering with
@@ -2963,28 +3030,6 @@ fn pt_to_mm(pt: f32) -> f32 {
     pt / MM_TO_PT
 }
 
-/// GitHub-style slug: lowercase, ASCII letters + digits + dashes,
-/// whitespace → `-`, everything else dropped, no leading / trailing
-/// dashes, no consecutive dashes.
-fn slugify(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut last_was_dash = true;
-    for ch in text.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            last_was_dash = false;
-        } else if ch.is_whitespace() || ch == '-' || ch == '_' {
-            if !last_was_dash {
-                out.push('-');
-                last_was_dash = true;
-            }
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    out
-}
 
 /// Concatenate the plain text of a heading's inline runs. The PDF
 /// outline + slug source. Markdown emphasis / inline code inside a

@@ -71,6 +71,7 @@ pub fn merge_documents(base: DocumentConfig, overlay: DocumentConfig) -> Documen
         table: merge_optional(base.table, overlay.table, merge_table),
         image: merge_optional(base.image, overlay.image, merge_image),
         link: merge_optional(base.link, overlay.link, merge_inline),
+        mark: merge_optional(base.mark, overlay.mark, merge_inline),
         horizontal_rule: merge_optional(base.horizontal_rule, overlay.horizontal_rule, merge_rule),
         metadata: merge_optional(base.metadata, overlay.metadata, merge_metadata),
         header: merge_optional(base.header, overlay.header, merge_furniture),
@@ -277,6 +278,7 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
     let code_inline = lower_inline(theme, "code_inline", &defaults, cfg.code_inline.unwrap_or_default())?;
     let blockquote = lower_block(theme, "blockquote", &defaults, cfg.blockquote.unwrap_or_default())?;
     let link = lower_inline(theme, "link", &defaults, cfg.link.unwrap_or_default())?;
+    let mark = lower_inline(theme, "mark", &defaults, cfg.mark.unwrap_or_default())?;
 
     let list_cfg = cfg.list.unwrap_or_default();
     let list_common = list_cfg.common.unwrap_or_default();
@@ -344,6 +346,7 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
         table,
         image,
         link,
+        mark,
         horizontal_rule,
         metadata,
         header,

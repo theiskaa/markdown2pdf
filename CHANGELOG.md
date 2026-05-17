@@ -6,6 +6,79 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Each release section below is what ships as the GitHub Release notes.
 
+## [1.1.0] - 2026-05-18
+
+A note-vault syntax release. Three Markdown extensions that are
+standard in Obsidian / Pandoc / MediaWiki-style tools — inline
+highlight, WikiLinks, and Pandoc inline footnotes — are now parsed
+and rendered, so a vault or a Pandoc-flavoured document exports to PDF
+without its syntax leaking through as literal text. The release also
+hardens two lexer/validation edge cases surfaced while building the
+above. No breaking changes; purely additive plus fixes.
+
+Resolves [#79](https://github.com/theiskaa/markdown2pdf/issues/79), [#80](https://github.com/theiskaa/markdown2pdf/issues/80), and [#82](https://github.com/theiskaa/markdown2pdf/issues/82).
+
+### Added
+
+- **Inline footnotes (`text^[note body]`)** ([#80]). Pandoc-style
+  footnotes written in place, with no separate `[^id]:` definition.
+  The lexer dispatches on `^[`, scans a balanced bracket pair
+  (bracket nesting and `\`-escapes respected), sub-lexes the body as
+  inline content, and assigns a document-unique internal label from a
+  counter shared across nested sub-lexers (so a note inside a list
+  item or table cell never collides with one in the body). Lowering
+  treats it as a reference + definition pair, so inline and regular
+  `[^id]` footnotes **share one numbering sequence** (assigned in
+  first-reference document order), the marker is the same superscript
+  linking to `#footnote-N`, and every body is collected into the
+  single tail **Footnotes** section without splitting its host
+  paragraph. An unbalanced `^[` or an empty `^[]` degrades to literal
+  text — never a panic.
+- **WikiLinks (`[[Target]]`, `[[Target|Label]]`)** ([#82]). The
+  destination is the target slugified to an in-document anchor and
+  flows through the exact same resolution path as a
+  `[text](#slug)` cross-reference: a match becomes a clickable
+  internal jump; an unmatched target logs a warning and falls back to
+  styled text so a partial export is never broken. An unclosed `[[`
+  or an escaped `\[\[…\]\]` renders literally.
+- **Inline highlight / mark (`==text==`)** ([#79]). New `Highlight`
+  inline token painting a configurable background behind the run,
+  nestable with other inline styles (`==**bold**==` is bold *and*
+  highlighted). New `[mark]` config block with `background_color`
+  (default a soft yellow `#FFF59D`). Dispatch runs after Setext
+  detection, so a line that is exactly `===` / `---` still underlines
+  the paragraph above it; an unterminated `==` degrades to literal
+  text.
+
+### Fixed
+
+- **Lexer: unclosed `[…` spanning a line break no longer emits a
+  missing-glyph box.** `parse_link`'s no-closing-bracket fallback
+  flattened a multi-line body into one `Text` token with an embedded
+  literal `\n`. That raw newline reached the renderer, which has no
+  glyph for U+000A and painted a `.notdef` box on the embedded-font
+  path. Multi-line bodies now route through the pending-token path so
+  each break survives as a real `Token::Newline` and lowering turns
+  it into a space, exactly like any soft break. Pre-existing;
+  reproducible with any unclosed `[` across a newline. Covered by a
+  new invariant regression test (no `Token::Text` ever carries a
+  literal newline).
+- **Validation: footnote syntax no longer trips the "unmatched
+  square brackets" warning.** The heuristic did a raw `[` vs `]`
+  tally, so `[^id]` references/definitions, inline `^[…]`, and the
+  intentionally-degrading stray `^[` were falsely flagged as broken
+  link syntax. Footnote brackets are now neutralized before the
+  tally; a genuine `[unclosed link` still warns.
+
+### Documentation
+
+- Documented the three new syntaxes in `docs/configuration.md`
+  (WikiLinks, Highlight `[mark]`, and a new Footnotes section
+  covering both `[^id]` and `^[…]`).
+- Lowercased the user-facing doc filenames (`docs/cli.md`,
+  `docs/configuration.md`, `docs/library.md`) for consistency and
+  updated every inbound reference.
+
 ## [1.0.0] - 2026-05-15
 
 First stable release. The dependency on `genpdfi` (a `genpdf` fork) is
@@ -265,7 +338,12 @@ Initial release: a Markdown lexer and a `genpdfi`-backed PDF
 converter with basic styling, configuration via `mdprc`, code blocks,
 emphasis, links, and nested tokens.
 
+[1.1.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.1.0
 [1.0.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.0.0
+
+[#79]: https://github.com/theiskaa/markdown2pdf/issues/79
+[#80]: https://github.com/theiskaa/markdown2pdf/issues/80
+[#82]: https://github.com/theiskaa/markdown2pdf/issues/82
 [0.4.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.4.0
 [0.3.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.3.0
 [0.2.2]: https://github.com/theiskaa/markdown2pdf/releases/tag/v0.2.2

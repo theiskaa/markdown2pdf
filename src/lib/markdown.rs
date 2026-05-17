@@ -167,6 +167,17 @@ pub enum Token {
         label: String,
         content: Vec<Token>,
     },
+    /// Pandoc-style inline footnote: `text^[note body]`. The body is
+    /// already inline-parsed. `label` is a lexer-assigned internal id,
+    /// globally unique within the document and not author-reachable
+    /// (regular `[^id]` labels are `[A-Za-z0-9_-]+`). Lowering treats
+    /// this as a `FootnoteReference` + `FootnoteDefinition` pair under
+    /// that label, so numbering, the back-link, and the tail
+    /// "Footnotes" section all reuse the existing GFM machinery.
+    InlineFootnote {
+        label: String,
+        content: Vec<Token>,
+    },
     /// PHP Markdown Extra-style definition list. A term line is
     /// followed by one or more lines beginning with `:` introducing a
     /// definition. Consecutive entries (term/definition groups) are
@@ -216,6 +227,10 @@ pub enum Token {
     HorizontalRule,
     /// GFM strikethrough (`~~text~~`).
     Strikethrough(Vec<Token>),
+    /// Inline highlight / mark (`==text==`). Nestable with other
+    /// inline styles; the renderer paints a configurable background
+    /// behind the run.
+    Highlight(Vec<Token>),
     /// Unknown or malformed token
     Unknown(String),
 }
@@ -308,7 +323,7 @@ impl Token {
             Token::Newline | Token::HardBreak | Token::HorizontalRule => {
                 // These don't contain text
             }
-            Token::Strikethrough(nested) => {
+            Token::Strikethrough(nested) | Token::Highlight(nested) => {
                 for token in nested {
                     token.collect_text_recursive(result);
                 }
@@ -319,7 +334,8 @@ impl Token {
                 // emit the raw label so the text isn't lost.
                 result.push_str(label);
             }
-            Token::FootnoteDefinition { content, .. } => {
+            Token::FootnoteDefinition { content, .. }
+            | Token::InlineFootnote { content, .. } => {
                 for token in content {
                     token.collect_text_recursive(result);
                 }
@@ -1376,6 +1392,7 @@ fn last_meaningful_char(tok: &Token) -> Option<char> {
         Token::Emphasis { content, .. } => last_meaningful_in_slice(content),
         Token::StrongEmphasis(content) => last_meaningful_in_slice(content),
         Token::Strikethrough(content) => last_meaningful_in_slice(content),
+        Token::Highlight(content) => last_meaningful_in_slice(content),
         Token::Link { content, .. } => last_meaningful_in_slice(content),
         Token::Image { alt, .. } => last_meaningful_in_slice(alt),
         Token::Heading(content, _) => last_meaningful_in_slice(content),
@@ -1394,6 +1411,7 @@ fn first_meaningful_char(tok: &Token) -> Option<char> {
         Token::Emphasis { content, .. } => first_meaningful_in_slice(content),
         Token::StrongEmphasis(content) => first_meaningful_in_slice(content),
         Token::Strikethrough(content) => first_meaningful_in_slice(content),
+        Token::Highlight(content) => first_meaningful_in_slice(content),
         Token::Link { content, .. } => first_meaningful_in_slice(content),
         Token::Image { alt, .. } => first_meaningful_in_slice(alt),
         Token::Heading(content, _) => first_meaningful_in_slice(content),
@@ -1495,6 +1513,32 @@ fn is_ascii_punctuation(c: char) -> bool {
             | '}'
             | '~'
     )
+}
+
+/// GitHub-style heading slug: lowercase, ASCII letters + digits kept,
+/// whitespace / `-` / `_` collapse to a single `-`, everything else
+/// dropped, no leading / trailing dashes. Shared so the renderer's
+/// heading anchors and the lexer's `[[wikilink]]` targets slug
+/// identically — a wikilink resolves only when its slug byte-matches a
+/// heading's.
+pub(crate) fn slugify(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last_was_dash = true;
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if ch.is_whitespace() || ch == '-' || ch == '_' {
+            if !last_was_dash {
+                out.push('-');
+                last_was_dash = true;
+            }
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
 }
 
 /// Error types that can occur during lexical analysis. `line` and
@@ -1607,6 +1651,11 @@ pub struct Lexer {
     /// deeper. Checked against [`MAX_PARSE_DEPTH`] so pathological
     /// nesting fails with a [`LexerError`] instead of a stack overflow.
     depth: usize,
+    /// Monotonic counter for auto-assigning inline-footnote labels.
+    /// Shared (by clone) with every [`Lexer::sub_lexer`] so labels stay
+    /// unique across nested content — an inline footnote inside a list
+    /// item or table cell must not collide with one in the body.
+    inline_footnote_seq: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
 impl Lexer {
@@ -1644,6 +1693,7 @@ impl Lexer {
             suppress_setext: false,
             pending: std::collections::VecDeque::new(),
             depth: 0,
+            inline_footnote_seq: std::rc::Rc::new(std::cell::Cell::new(0)),
         }
     }
 
@@ -1654,6 +1704,7 @@ impl Lexer {
     fn sub_lexer(&self, input: String) -> Lexer {
         let mut l = Lexer::new(input);
         l.depth = self.depth.saturating_add(1);
+        l.inline_footnote_seq = std::rc::Rc::clone(&self.inline_footnote_seq);
         l
     }
 
@@ -2079,6 +2130,12 @@ impl Lexer {
             }
             '~' if self.count_consecutive('~') >= 2 => self.parse_strikethrough()?,
             '~' => self.parse_text(ctx)?,
+            // Inline highlight `==text==`. A `==`/`===` line that
+            // underlines a paragraph was already consumed as a Setext
+            // heading by the detection above (which returns before this
+            // match), so reaching here means the `==` is mid-content.
+            '=' if self.count_consecutive('=') >= 2 => self.parse_highlight()?,
+            '=' => self.parse_text(ctx)?,
             '>' if is_block_start && allow_block_tokens(ctx) => self.parse_blockquote()?,
             '-' | '+' if is_block_start && allow_block_tokens(ctx) => {
                 if self.is_thematic_break_line() {
@@ -2168,6 +2225,13 @@ impl Lexer {
             '|' if is_line_start => {
                 if self.is_table_start() {
                     self.parse_table()?
+                } else {
+                    self.parse_text(ctx)?
+                }
+            }
+            '^' => {
+                if let Some(tok) = self.try_parse_inline_footnote(ctx)? {
+                    tok
                 } else {
                     self.parse_text(ctx)?
                 }
@@ -2503,6 +2567,43 @@ impl Lexer {
         let mut content = content;
         resolve_emphasis(&mut content);
         Ok(Token::Strikethrough(content))
+    }
+
+    /// Parses an inline highlight run (`==text==`). Mirrors
+    /// `parse_strikethrough`: opens with two-or-more `=`, always closes
+    /// with two, and falls back to literal text when the closer is
+    /// missing so an unterminated `==` (or a stray `===` line that
+    /// wasn't a Setext underline) degrades cleanly.
+    fn parse_highlight(&mut self) -> Result<Token, LexerError> {
+        let mut level = 0;
+        while self.current_char() == '=' {
+            level += 1;
+            self.advance();
+        }
+        let after_opener = self.position;
+
+        let close_level = 2;
+        let content = self.parse_nested_content(|c| c == '=', ParseContext::Inline)?;
+
+        let mut found = 0usize;
+        while found < close_level && self.current_char() == '=' {
+            self.advance();
+            found += 1;
+        }
+
+        if found < close_level {
+            self.position = after_opener;
+            let mut run = "=".repeat(level);
+            if self.position < self.input.len() && self.current_char() == ' ' {
+                run.push(' ');
+                self.advance();
+            }
+            return Ok(Token::Text(run));
+        }
+
+        let mut content = content;
+        resolve_emphasis(&mut content);
+        Ok(Token::Highlight(content))
     }
 
     /// Parses a `~~~`-fenced code block. Mirrors the backtick fence path but
@@ -2875,7 +2976,74 @@ impl Lexer {
                 return Ok(tok);
             }
         }
+        if let Some(tok) = self.try_parse_wikilink() {
+            return Ok(tok);
+        }
         self.parse_link()
+    }
+
+    /// Try to consume an Obsidian/MediaWiki-style wikilink:
+    /// `[[Target]]` or `[[Target|Label]]`. The destination is the
+    /// target slugified to an in-document heading anchor (`#slug`), so
+    /// it flows through the exact same renderer path as an explicit
+    /// `[text](#slug)` cross-reference — including the graceful
+    /// "warn + render as styled text" behaviour when no heading
+    /// matches.
+    ///
+    /// Returns `None` (position untouched) on any non-match so the
+    /// caller falls through to `parse_link`, which turns a stray `[[`
+    /// into literal text. A wikilink does not span lines, and a target
+    /// that slugifies to nothing is not a wikilink — both degrade to
+    /// literal text rather than producing a dead link. The label is
+    /// emitted verbatim (no nested inline parsing), matching Obsidian.
+    fn try_parse_wikilink(&mut self) -> Option<Token> {
+        // Caller guarantees `self.input[self.position] == '['`.
+        if self.position + 1 >= self.input.len()
+            || self.input[self.position + 1] != '['
+        {
+            return None;
+        }
+        let body_start = self.position + 2;
+        let mut i = body_start;
+        let close = loop {
+            if i + 1 >= self.input.len() {
+                return None;
+            }
+            let c = self.input[i];
+            if c == '\n' {
+                return None;
+            }
+            if c == ']' && self.input[i + 1] == ']' {
+                break i;
+            }
+            i += 1;
+        };
+        let body: &[char] = &self.input[body_start..close];
+        let pipe = body.iter().position(|&c| c == '|');
+        let (target, label): (&[char], Option<&[char]>) = match pipe {
+            Some(p) => (&body[..p], Some(&body[p + 1..])),
+            None => (body, None),
+        };
+        let target: String = target.iter().collect();
+        let slug = slugify(target.trim());
+        if slug.is_empty() {
+            return None;
+        }
+        let visible: String = match label {
+            Some(l) => l.iter().collect::<String>().trim().to_string(),
+            None => target.trim().to_string(),
+        };
+        let visible = if visible.is_empty() {
+            target.trim().to_string()
+        } else {
+            visible
+        };
+        self.position = close + 2; // past the closing `]]`
+        Some(Token::Link {
+            content: vec![Token::Text(visible)],
+            url: format!("#{}", slug),
+            title: None,
+        })
     }
 
     /// Try to consume `[^label]` as a footnote reference. Returns
@@ -2981,6 +3149,78 @@ impl Lexer {
 
         self.position = content_end;
         Ok(Some(Token::FootnoteDefinition {
+            label,
+            content: inner_tokens,
+        }))
+    }
+
+    /// Try to consume a Pandoc-style inline footnote `^[body]`. The
+    /// caller guarantees `self.input[self.position] == '^'`. Returns
+    /// `Ok(None)` with the position untouched on any non-match so the
+    /// dispatcher falls back to `parse_text` (a bare `^` then literal
+    /// text) — covering `^x`, `^[` with no close, and an empty body.
+    ///
+    /// Brackets nest: the body runs to the `]` that balances the
+    /// opening `[`, so `note^[see [1] above]` keeps its inner pair. A
+    /// backslash escapes the next character for the purpose of this
+    /// scan (`\]` does not close, `\[` does not open a level); the
+    /// backslash is left in the body so the inline sub-lexer applies
+    /// its own escape handling, exactly as footnote definitions do.
+    /// The body may span lines; the sub-lexer treats newlines as soft
+    /// breaks. v1: a blank line inside the body is not special-cased.
+    fn try_parse_inline_footnote(
+        &mut self,
+        _ctx: ParseContext,
+    ) -> Result<Option<Token>, LexerError> {
+        let start = self.position;
+        if start + 1 >= self.input.len() || self.input[start + 1] != '[' {
+            return Ok(None);
+        }
+        let body_start = start + 2;
+        let mut i = body_start;
+        let mut depth = 1usize;
+        while i < self.input.len() {
+            match self.input[i] {
+                '\\' if i + 1 < self.input.len() => {
+                    i += 2;
+                    continue;
+                }
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        // Unbalanced: ran off the end without closing the body.
+        if depth != 0 {
+            return Ok(None);
+        }
+        let close = i;
+        let body: String = self.input[body_start..close].iter().collect();
+        // An empty / whitespace-only body degrades to literal text
+        // rather than emitting a dangling footnote marker.
+        if body.trim().is_empty() {
+            return Ok(None);
+        }
+
+        let inner_tokens = {
+            let mut sub = self.sub_lexer(body);
+            sub.parse_with_context(ParseContext::Inline)?
+        };
+
+        let n = self.inline_footnote_seq.get() + 1;
+        self.inline_footnote_seq.set(n);
+        // `\u{1}` is not a legal `[^id]` label character, so this
+        // synthetic label can never collide with an authored one.
+        let label = format!("\u{1}ifn{}", n);
+
+        self.position = close + 1; // past the closing `]`
+        Ok(Some(Token::InlineFootnote {
             label,
             content: inner_tokens,
         }))
@@ -3144,16 +3384,22 @@ impl Lexer {
             // the pending queue and return `Text("[")`. The queue
             // approach replaces an older position-rewind that re-parsed
             // the body and went exponential on inputs like `[[[[…alt](u)`.
-            let only_text = content
+            // Fast path only for a pure single-line body: collapse the
+            // `[…` run into one Text. A multi-line body must NOT be
+            // flattened with embedded `\n` — a literal newline baked
+            // into a Text run reaches the renderer, which has no glyph
+            // for it and draws a missing-glyph box on the embedded-font
+            // path. Instead fall through to the queue path so every
+            // `Token::Newline` survives as a real newline token and
+            // lowering turns it into a space like any soft break.
+            let only_flat_text = content
                 .iter()
-                .all(|t| matches!(t, Token::Text(_) | Token::Newline));
-            if only_text {
+                .all(|t| matches!(t, Token::Text(_)));
+            if only_flat_text {
                 let mut s = String::from("[");
                 for t in &content {
-                    match t {
-                        Token::Text(t) => s.push_str(t),
-                        Token::Newline => s.push('\n'),
-                        _ => {}
+                    if let Token::Text(t) = t {
+                        s.push_str(t);
                     }
                 }
                 return Ok(Token::Text(s));
@@ -4718,6 +4964,17 @@ impl Lexer {
             // still break here so the dispatcher can decide.
             '~' => self.count_consecutive('~') >= 2,
 
+            // `==` opens an inline highlight; lone `=` is literal text
+            // but we still break so the dispatcher can decide.
+            '=' => self.count_consecutive('=') >= 2,
+
+            // `^[` may open a Pandoc inline footnote; a lone `^`
+            // (`2^3`, `a ^ b`) stays literal text.
+            '^' => {
+                self.position + 1 < self.input.len()
+                    && self.input[self.position + 1] == '['
+            }
+
             '!' => {
                 if self.position + 1 < self.input.len() {
                     self.input[self.position + 1] == '['
@@ -4801,15 +5058,16 @@ impl Lexer {
     /// following spaces. Includes the closing chars of every inline construct:
     /// `` ` `` (code span), `)` (inline link/image), `]` (reference /
     /// shortcut), `>` (autolink / inline HTML), `*` and `_` (emphasis), `~`
-    /// (strikethrough). Without these, `next_token`'s leading whitespace
-    /// skip eats the space between e.g. `*foo*` and the next word.
+    /// (strikethrough), `=` (highlight). Without these, `next_token`'s
+    /// leading whitespace skip eats the space between e.g. `*foo*` and
+    /// the next word.
     fn is_after_special_token(&self) -> bool {
         if self.position == 0 {
             return false;
         }
         matches!(
             self.input[self.position - 1],
-            '`' | ')' | ']' | '>' | '*' | '_' | '~'
+            '`' | ')' | ']' | '>' | '*' | '_' | '~' | '='
         )
     }
 

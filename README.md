@@ -13,7 +13,7 @@ markdown2pdf converts Markdown to PDF with a lexical analyzer and an in-tree ren
 
 Both a binary and a library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
 
-The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions and passes 100% of the CommonMark spec suite. The renderer covers headings with bookmarks and anchors, inline emphasis (bold, italic, monospace, strikethrough, underline, superscript, subscript, small-caps), ordered/unordered/task lists with arbitrary nesting, GFM tables with per-column alignment and header repeat, blockquotes, fenced and indented code, images (local, URL, and SVG), footnotes, definition lists, cross-references, and inline HTML. Document features include six bundled themes, per-block styling, configurable page setup, headers and footers, an auto-generated table of contents, a title page, YAML/TOML frontmatter, and PDF metadata. Multiple input sources; output to a file or to bytes for in-memory processing.
+The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions plus note-tool extensions (WikiLinks, `==highlight==`); it passes 649 of the 652 CommonMark spec examples, the 3 exceptions being deliberate where the WikiLink syntax reclaims `[[…]]` (which CommonMark treats as nested brackets). The renderer covers headings with bookmarks and anchors, inline emphasis (bold, italic, monospace, strikethrough, underline, highlight, superscript, subscript, small-caps), ordered/unordered/task lists with arbitrary nesting, GFM tables with per-column alignment and header repeat, blockquotes, fenced and indented code, images (local, URL, and SVG), footnotes, definition lists, cross-references, WikiLinks, and inline HTML. Document features include six bundled themes, per-block styling, configurable page setup, headers and footers, an auto-generated table of contents, a title page, YAML/TOML frontmatter, and PDF metadata. Multiple input sources; output to a file or to bytes for in-memory processing.
 
 ## Install binary
 
@@ -68,13 +68,13 @@ Or, in `Cargo.toml`:
 
 ```toml
 # Minimal — local files only, no network, no SVG
-markdown2pdf = "1.0.0"
+markdown2pdf = "1.1.0"
 
 # Or with URL fetching + SVG rasterization
-markdown2pdf = { version = "1.0.0", features = ["fetch", "svg"] }
+markdown2pdf = { version = "1.1.0", features = ["fetch", "svg"] }
 ```
 
-See [docs/Library.md](docs/Library.md) for the programmatic API.
+See [docs/library.md](docs/library.md) for the programmatic API.
 
 ## Feature flags
 
@@ -114,7 +114,7 @@ markdown2pdf -p input.md --title "Report" --font-size 11 --margin 2.5cm \
 ```
 
 The full schema with every field explained is in
-**[`docs/Configuration.md`](docs/Configuration.md)**; an annotated,
+**[`docs/configuration.md`](docs/configuration.md)**; an annotated,
 copy-and-tweak reference config is **[`docs/config.toml`](docs/config.toml)**.
 
 ## Usage
@@ -132,7 +132,7 @@ markdown2pdf -p doc.md --theme academic --page-numbers -o out.pdf
 `--verbose` / `--quiet` control output; `--dry-run` validates
 without writing; `--print-effective-config` prints the resolved
 style as TOML. Full flag reference, the config-override system, and
-font selection: **[`docs/CLI.md`](docs/CLI.md)**.
+font selection: **[`docs/cli.md`](docs/cli.md)**.
 
 ## Library Usage
 
@@ -149,11 +149,11 @@ parse_into_file("# Doc".into(), "out.pdf", ConfigSource::Theme("academic"), None
 
 Pre-resolved styles + runtime overrides, fonts (name / path /
 embedded bytes), frontmatter, and the error model are covered in
-**[`docs/Library.md`](docs/Library.md)**.
+**[`docs/library.md`](docs/library.md)**.
 
 ## Markdown Coverage
 
-Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/). CommonMark spec pass rate: **100% (652/652)** — every section passes. Backed by ~800 inline lexer unit tests in `tests/markdown/`, the full spec runner in `tests/commonmark_spec.rs`, a robustness suite in `tests/stress.rs`, and an adversarial / structural renderer test suite in `tests/render/` (object-graph validation, malformed input, image-pipeline, and config-validation cases).
+Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/), plus the WikiLink and `==highlight==` note-tool extensions. CommonMark spec pass rate: **649/652** — the 3 exceptions are deliberate, where the WikiLink extension reclaims `[[…]]` (CommonMark treats it as nested/shortcut-reference brackets). Backed by ~800 inline lexer unit tests in `tests/markdown/`, the full spec runner in `tests/commonmark_spec.rs`, a robustness suite in `tests/stress.rs`, and an adversarial / structural renderer test suite in `tests/render/` (object-graph validation, malformed input, image-pipeline, and config-validation cases).
 
 ## Contributing
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.

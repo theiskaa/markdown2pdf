@@ -71,3 +71,56 @@ fn unterminated_fenced_code_at_eof() {
     let toks = parse("```rust\nfn main() {}");
     assert!(!toks.is_empty());
 }
+
+/// Invariant: the lexer never bakes a literal `\n` into a `Token::Text`.
+/// A line break must always survive as `Token::Newline` so lowering can
+/// turn it into a space — a raw `\n` inside a text run reaches the
+/// renderer, which has no glyph for it and paints a missing-glyph box
+/// on the embedded-font path. Regression for the `parse_link`
+/// no-closing-bracket fallback, which used to flatten multi-line bodies
+/// into one `Text` with embedded newlines.
+fn assert_no_literal_newline_in_text(input: &str) {
+    fn walk(t: &Token, input: &str) {
+        match t {
+            Token::Text(s) => assert!(
+                !s.contains('\n'),
+                "Token::Text carries a literal newline for {input:?}: {s:?}"
+            ),
+            Token::Heading(inner, _)
+            | Token::Emphasis { content: inner, .. }
+            | Token::StrongEmphasis(inner)
+            | Token::Strikethrough(inner)
+            | Token::Highlight(inner)
+            | Token::BlockQuote(inner)
+            | Token::ListItem { content: inner, .. }
+            | Token::Link { content: inner, .. }
+            | Token::Image { alt: inner, .. }
+            | Token::FootnoteDefinition { content: inner, .. }
+            | Token::InlineFootnote { content: inner, .. } => {
+                for c in inner {
+                    walk(c, input);
+                }
+            }
+            _ => {}
+        }
+    }
+    for t in &parse(input) {
+        walk(t, input);
+    }
+}
+
+#[test]
+fn unclosed_bracket_spanning_newline_keeps_newline_token() {
+    // Plain failed link across a soft break.
+    assert_no_literal_newline_in_text("[never closed and stuff\nmore text\n");
+    // Degraded inline footnote (`^[`) across a soft break + EOF newline.
+    assert_no_literal_newline_in_text(
+        "a stray ^[never closed and an empty ^[] both\nrender as text done.\n",
+    );
+    // The break must actually be preserved as a Newline, not dropped.
+    let toks = parse("see [a b c\nd e f\n");
+    assert!(
+        toks.iter().any(|t| matches!(t, Token::Newline)),
+        "soft break inside an unclosed link was lost entirely: {toks:?}"
+    );
+}

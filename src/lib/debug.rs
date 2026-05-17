@@ -374,9 +374,14 @@ impl Token {
                     indent, inner_indent, indent
                 )
             }
-            Token::Strikethrough(body) => {
+            Token::Strikethrough(body) | Token::Highlight(body) => {
+                let type_name = if matches!(self, Token::Highlight(_)) {
+                    "Highlight"
+                } else {
+                    "Strikethrough"
+                };
                 let mut result = format!("{}{{\n", indent);
-                result.push_str(&format!("{}\"type\": \"Strikethrough\",\n", inner_indent));
+                result.push_str(&format!("{}\"type\": \"{}\",\n", inner_indent, type_name));
                 result.push_str(&format!("{}\"content\": [\n", inner_indent));
                 for (i, token) in body.iter().enumerate() {
                     result.push_str(&token.to_readable_json(indent_level + 2));
@@ -397,11 +402,17 @@ impl Token {
                 label.replace("\"", "\\\""),
                 indent
             ),
-            Token::FootnoteDefinition { label, content } => {
+            Token::FootnoteDefinition { label, content }
+            | Token::InlineFootnote { label, content } => {
+                let type_name = if matches!(self, Token::InlineFootnote { .. }) {
+                    "InlineFootnote"
+                } else {
+                    "FootnoteDefinition"
+                };
                 let mut result = format!("{}{{\n", indent);
                 result.push_str(&format!(
-                    "{}\"type\": \"FootnoteDefinition\",\n",
-                    inner_indent
+                    "{}\"type\": \"{}\",\n",
+                    inner_indent, type_name
                 ));
                 result.push_str(&format!(
                     "{}\"label\": \"{}\",\n",
@@ -558,6 +569,9 @@ impl Token {
             Token::FootnoteDefinition { label, content } => {
                 format!("FootnoteDef({}, {})", quote(label), list(content))
             }
+            Token::InlineFootnote { label, content } => {
+                format!("InlineFootnote({}, {})", quote(label), list(content))
+            }
             Token::Text(s) => format!("Text({})", quote(s)),
             Token::DelimRun { ch, count } => {
                 format!("DelimRun({}{})", ch, count)
@@ -605,6 +619,7 @@ impl Token {
             Token::HardBreak => "HardBreak".to_string(),
             Token::HorizontalRule => "HorizontalRule".to_string(),
             Token::Strikethrough(body) => format!("Strikethrough({})", list(body)),
+            Token::Highlight(body) => format!("Highlight({})", list(body)),
             Token::DefinitionList { entries } => {
                 let es: Vec<String> = entries
                     .iter()

@@ -25,6 +25,10 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
     // post-pass walks definitions in numeric order.
     let footnote_numbers = collect_footnote_numbering(tokens);
     let mut footnote_definitions: HashMap<String, Vec<InlineRun>> = HashMap::new();
+    // Inline footnotes (`text^[body]`) carry their definition with
+    // them; pull every body out up-front so it lands in the tail
+    // "Footnotes" section without disturbing the inline stream.
+    collect_inline_footnote_defs(tokens, &footnote_numbers, &mut footnote_definitions);
 
     // Inline-HTML scope tracking at the top level (sup/sub/u/s/del/
     // small/kbd). Mirrors `flatten_inline`'s nested-context handling.
@@ -491,10 +495,22 @@ fn collect_footnote_numbering(tokens: &[Token]) -> HashMap<String, usize> {
                 let next = map.len() + 1;
                 map.entry(label.clone()).or_insert(next);
             }
+            Token::InlineFootnote { label, content } => {
+                // Same numbering sequence as `[^id]`, assigned at the
+                // marker's document position so inline and regular
+                // footnotes interleave correctly. The label is unique
+                // per occurrence, so this always inserts.
+                let next = map.len() + 1;
+                map.entry(label.clone()).or_insert(next);
+                for c in content {
+                    walk(c, map);
+                }
+            }
             Token::Heading(inner, _)
             | Token::Emphasis { content: inner, .. }
             | Token::StrongEmphasis(inner)
             | Token::Strikethrough(inner)
+            | Token::Highlight(inner)
             | Token::BlockQuote(inner)
             | Token::ListItem { content: inner, .. }
             | Token::Link { content: inner, .. }
@@ -541,6 +557,81 @@ fn collect_footnote_numbering(tokens: &[Token]) -> HashMap<String, usize> {
         walk(t, &mut map);
     }
     map
+}
+
+/// Recursively gather every inline-footnote (`text^[body]`) body,
+/// keyed by its lexer-assigned label, flattening each to inline runs.
+/// These feed the same `footnote_definitions` map that block `[^id]:`
+/// definitions populate, so the tail "Footnotes" section and the
+/// back-link anchors come out of the existing machinery unchanged.
+/// The body is collected here rather than at the marker's position so
+/// it never splits the paragraph the marker sits in.
+fn collect_inline_footnote_defs(
+    tokens: &[Token],
+    footnotes: &HashMap<String, usize>,
+    out: &mut HashMap<String, Vec<InlineRun>>,
+) {
+    fn walk(
+        t: &Token,
+        footnotes: &HashMap<String, usize>,
+        out: &mut HashMap<String, Vec<InlineRun>>,
+    ) {
+        match t {
+            Token::InlineFootnote { label, content } => {
+                // Nested footnotes inside the body, if any, first.
+                for c in content {
+                    walk(c, footnotes, out);
+                }
+                let runs =
+                    flatten_inline(content, RunFlags::default(), None, footnotes);
+                out.entry(label.clone()).or_insert(runs);
+            }
+            Token::Heading(inner, _)
+            | Token::Emphasis { content: inner, .. }
+            | Token::StrongEmphasis(inner)
+            | Token::Strikethrough(inner)
+            | Token::Highlight(inner)
+            | Token::BlockQuote(inner)
+            | Token::ListItem { content: inner, .. }
+            | Token::Link { content: inner, .. }
+            | Token::Image { alt: inner, .. }
+            | Token::FootnoteDefinition { content: inner, .. } => {
+                for c in inner {
+                    walk(c, footnotes, out);
+                }
+            }
+            Token::DefinitionList { entries } => {
+                for entry in entries {
+                    for c in &entry.term {
+                        walk(c, footnotes, out);
+                    }
+                    for def in &entry.definitions {
+                        for c in def {
+                            walk(c, footnotes, out);
+                        }
+                    }
+                }
+            }
+            Token::Table { headers, rows, .. } => {
+                for header in headers {
+                    for c in header {
+                        walk(c, footnotes, out);
+                    }
+                }
+                for row in rows {
+                    for cell in row {
+                        for c in cell {
+                            walk(c, footnotes, out);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for t in tokens {
+        walk(t, footnotes, out);
+    }
 }
 
 fn image_is_standalone(tokens: &[Token], idx: usize) -> bool {
@@ -755,6 +846,12 @@ fn flatten_one(
                 flatten_one(t, nested, link, out, footnotes);
             }
         }
+        Token::Highlight(content) => {
+            let nested = flags.with_highlight();
+            for t in content {
+                flatten_one(t, nested, link, out, footnotes);
+            }
+        }
         Token::Code {
             content,
             block: false,
@@ -790,6 +887,21 @@ fn flatten_one(
                 flags: sup_flags,
                 link: anchor_link,
             });
+        }
+        Token::InlineFootnote { label, .. } => {
+            // Render exactly like a `[^id]` reference: a superscript
+            // number linked to its tail entry. The body itself is
+            // collected separately by `collect_inline_footnote_defs`.
+            // The synthetic label is never user-visible, so if
+            // numbering somehow missed it we emit nothing rather than
+            // leak the control-prefixed id.
+            if let Some(n) = footnotes.get(label).copied() {
+                out.push(InlineRun {
+                    text: n.to_string(),
+                    flags: flags.with_superscript(),
+                    link: Some(format!("#footnote-{}", n)),
+                });
+            }
         }
         Token::FootnoteDefinition { .. } => {
             // Definitions handled at the top-level lower loop; this
@@ -960,5 +1072,66 @@ mod tests {
             panic!();
         };
         assert_eq!(lines, &vec!["fn main()".to_string(), "{}".to_string()]);
+    }
+
+    fn lex(src: &str) -> Vec<Token> {
+        crate::markdown::Lexer::new(src.to_string()).parse().unwrap()
+    }
+
+    fn footnote_section(blocks: &[Block]) -> &[FootnoteEntry] {
+        blocks
+            .iter()
+            .find_map(|b| match b {
+                Block::FootnoteDefinitions { entries } => Some(entries.as_slice()),
+                _ => None,
+            })
+            .expect("no Block::FootnoteDefinitions emitted")
+    }
+
+    #[test]
+    fn inline_footnote_numbered_and_collected_to_tail() {
+        let blocks = lower(&lex("Body^[the note]. More text."));
+
+        // The marker and the text after it stay in one paragraph —
+        // collecting the definition must not split it.
+        let para = blocks
+            .iter()
+            .find_map(|b| match b {
+                Block::Paragraph { runs } => Some(runs),
+                _ => None,
+            })
+            .expect("no paragraph");
+        let joined: String = para.iter().map(|r| r.text.as_str()).collect();
+        assert!(
+            joined.contains("Body") && joined.contains("More text."),
+            "paragraph was split: {joined:?}"
+        );
+        let marker = para
+            .iter()
+            .find(|r| r.flags.superscript)
+            .expect("no superscript marker");
+        assert_eq!(marker.text, "1");
+        assert_eq!(marker.link.as_deref(), Some("#footnote-1"));
+
+        let entries = footnote_section(&blocks);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].number, 1);
+        let body: String = entries[0].runs.iter().map(|r| r.text.as_str()).collect();
+        assert!(body.contains("the note"), "tail body wrong: {body:?}");
+    }
+
+    #[test]
+    fn inline_and_regular_footnotes_share_numbering() {
+        // Inline note appears first -> #1; the `[^x]` ref -> #2.
+        let blocks = lower(&lex("First^[inline note] then[^x].\n\n[^x]: ref def"));
+        let entries = footnote_section(&blocks);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].number, 1);
+        assert_eq!(entries[1].number, 2);
+        let first: String = entries[0].runs.iter().map(|r| r.text.as_str()).collect();
+        let second: String =
+            entries[1].runs.iter().map(|r| r.text.as_str()).collect();
+        assert!(first.contains("inline note"), "got {first:?}");
+        assert!(second.contains("ref def"), "got {second:?}");
     }
 }

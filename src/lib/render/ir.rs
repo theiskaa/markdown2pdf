@@ -250,6 +250,9 @@ pub struct RunFlags {
     pub monospace: bool,
     pub strikethrough: bool,
     pub underline: bool,
+    /// `==text==` highlight. The renderer paints `style.mark`'s
+    /// background behind the run's glyphs.
+    pub highlight: bool,
     /// Renders the glyphs at ~70% size with a raised baseline. Used
     /// for footnote marker numbers and any `<sup>` HTML inline.
     pub superscript: bool,
@@ -281,6 +284,10 @@ impl RunFlags {
     }
     pub fn with_strikethrough(mut self) -> Self {
         self.strikethrough = true;
+        self
+    }
+    pub fn with_highlight(mut self) -> Self {
+        self.highlight = true;
         self
     }
     pub fn with_underline(mut self) -> Self {

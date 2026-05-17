@@ -37,3 +37,9 @@ mod whitespace;
 
 #[path = "render/image_pipeline.rs"]
 mod image_pipeline;
+
+#[path = "render/wikilink.rs"]
+mod wikilink;
+
+#[path = "render/highlight.rs"]
+mod highlight;

@@ -2,7 +2,7 @@
 
 The `markdown2pdf` binary converts a Markdown file, a string, or a remote URL into a styled PDF. Styling is resolved from a bundled theme and an optional TOML configuration, and every value in that configuration can be overridden per invocation directly on the command line. Because overrides take precedence over both the configuration file and the selected theme, most one-off documents need no configuration file at all — a theme plus a handful of flags is enough.
 
-This document covers every flag, the way styling is resolved, the font system, and the runtime override mechanism in full. The configuration schema itself — every section and field that a config file or an override can set — is documented separately in [Configuration.md](Configuration.md), with an annotated, copy-and-tweak starting point in [config.toml](config.toml).
+This document covers every flag, the way styling is resolved, the font system, and the runtime override mechanism in full. The configuration schema itself — every section and field that a config file or an override can set — is documented separately in [configuration.md](configuration.md), with an annotated, copy-and-tweak starting point in [config.toml](config.toml).
 
 ## Input and output
 

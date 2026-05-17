@@ -27,6 +27,7 @@ pub struct ResolvedStyle {
     pub table: ResolvedTable,
     pub image: ResolvedImage,
     pub link: ResolvedInline,
+    pub mark: ResolvedInline,
     pub horizontal_rule: ResolvedRule,
     pub metadata: ResolvedMetadata,
     pub header: Option<ResolvedPageFurniture>,
