@@ -59,6 +59,9 @@ mod definition_list_tests;
 #[path = "markdown/footnote_tests.rs"]
 mod footnote_tests;
 
+#[path = "markdown/inline_footnote_tests.rs"]
+mod inline_footnote_tests;
+
 #[path = "markdown/gfm_trio_tests.rs"]
 mod gfm_trio_tests;
 
