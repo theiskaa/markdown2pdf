@@ -316,6 +316,39 @@ config block — a WikiLink renders with the `[link]` style above and
 resolves like any `#slug`, so an unmatched target logs a warning and
 falls back to styled text rather than breaking the export.
 
+### Footnotes (`[^id]` and `^[…]`)
+
+Two syntaxes are supported. The GFM reference form defines the note
+separately:
+
+```markdown
+Tea rewards patience[^steep].
+
+[^steep]: Two to three minutes is a sensible start.
+```
+
+The Pandoc inline form writes the note in place — no separate
+definition, no label to invent:
+
+```markdown
+Water just off the boil^[around 90–95 °C for black teas] is plenty.
+```
+
+Both share one numbering sequence, assigned in first-reference order
+as they appear in the document, so inline and reference footnotes
+interleave correctly. Every marker renders as a superscript number
+linking to its entry, and all notes are collected into a single
+**Footnotes** section appended at the end of the document. A
+reference definition may span multiple lines (continuation lines
+indented at least four spaces); a defined-but-unreferenced `[^id]:`
+is still listed so it never silently vanishes.
+
+There is no `[footnote]` config block — markers use the body /
+`[link]` style above and the section heading uses Heading 2
+typography. Malformed input degrades to literal text rather than
+breaking the export: an unbalanced `^[`, an empty `^[]`, or a `[^id]`
+with no matching definition all render as plain characters.
+
 ### Highlight (`==text==`)
 
 ```toml
