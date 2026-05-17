@@ -216,6 +216,10 @@ pub enum Token {
     HorizontalRule,
     /// GFM strikethrough (`~~text~~`).
     Strikethrough(Vec<Token>),
+    /// Inline highlight / mark (`==text==`). Nestable with other
+    /// inline styles; the renderer paints a configurable background
+    /// behind the run.
+    Highlight(Vec<Token>),
     /// Unknown or malformed token
     Unknown(String),
 }
@@ -308,7 +312,7 @@ impl Token {
             Token::Newline | Token::HardBreak | Token::HorizontalRule => {
                 // These don't contain text
             }
-            Token::Strikethrough(nested) => {
+            Token::Strikethrough(nested) | Token::Highlight(nested) => {
                 for token in nested {
                     token.collect_text_recursive(result);
                 }
@@ -1376,6 +1380,7 @@ fn last_meaningful_char(tok: &Token) -> Option<char> {
         Token::Emphasis { content, .. } => last_meaningful_in_slice(content),
         Token::StrongEmphasis(content) => last_meaningful_in_slice(content),
         Token::Strikethrough(content) => last_meaningful_in_slice(content),
+        Token::Highlight(content) => last_meaningful_in_slice(content),
         Token::Link { content, .. } => last_meaningful_in_slice(content),
         Token::Image { alt, .. } => last_meaningful_in_slice(alt),
         Token::Heading(content, _) => last_meaningful_in_slice(content),
@@ -1394,6 +1399,7 @@ fn first_meaningful_char(tok: &Token) -> Option<char> {
         Token::Emphasis { content, .. } => first_meaningful_in_slice(content),
         Token::StrongEmphasis(content) => first_meaningful_in_slice(content),
         Token::Strikethrough(content) => first_meaningful_in_slice(content),
+        Token::Highlight(content) => first_meaningful_in_slice(content),
         Token::Link { content, .. } => first_meaningful_in_slice(content),
         Token::Image { alt, .. } => first_meaningful_in_slice(alt),
         Token::Heading(content, _) => first_meaningful_in_slice(content),
@@ -2105,6 +2111,12 @@ impl Lexer {
             }
             '~' if self.count_consecutive('~') >= 2 => self.parse_strikethrough()?,
             '~' => self.parse_text(ctx)?,
+            // Inline highlight `==text==`. A `==`/`===` line that
+            // underlines a paragraph was already consumed as a Setext
+            // heading by the detection above (which returns before this
+            // match), so reaching here means the `==` is mid-content.
+            '=' if self.count_consecutive('=') >= 2 => self.parse_highlight()?,
+            '=' => self.parse_text(ctx)?,
             '>' if is_block_start && allow_block_tokens(ctx) => self.parse_blockquote()?,
             '-' | '+' if is_block_start && allow_block_tokens(ctx) => {
                 if self.is_thematic_break_line() {
@@ -2529,6 +2541,43 @@ impl Lexer {
         let mut content = content;
         resolve_emphasis(&mut content);
         Ok(Token::Strikethrough(content))
+    }
+
+    /// Parses an inline highlight run (`==text==`). Mirrors
+    /// `parse_strikethrough`: opens with two-or-more `=`, always closes
+    /// with two, and falls back to literal text when the closer is
+    /// missing so an unterminated `==` (or a stray `===` line that
+    /// wasn't a Setext underline) degrades cleanly.
+    fn parse_highlight(&mut self) -> Result<Token, LexerError> {
+        let mut level = 0;
+        while self.current_char() == '=' {
+            level += 1;
+            self.advance();
+        }
+        let after_opener = self.position;
+
+        let close_level = 2;
+        let content = self.parse_nested_content(|c| c == '=', ParseContext::Inline)?;
+
+        let mut found = 0usize;
+        while found < close_level && self.current_char() == '=' {
+            self.advance();
+            found += 1;
+        }
+
+        if found < close_level {
+            self.position = after_opener;
+            let mut run = "=".repeat(level);
+            if self.position < self.input.len() && self.current_char() == ' ' {
+                run.push(' ');
+                self.advance();
+            }
+            return Ok(Token::Text(run));
+        }
+
+        let mut content = content;
+        resolve_emphasis(&mut content);
+        Ok(Token::Highlight(content))
     }
 
     /// Parses a `~~~`-fenced code block. Mirrors the backtick fence path but
@@ -4811,6 +4860,10 @@ impl Lexer {
             // still break here so the dispatcher can decide.
             '~' => self.count_consecutive('~') >= 2,
 
+            // `==` opens an inline highlight; lone `=` is literal text
+            // but we still break so the dispatcher can decide.
+            '=' => self.count_consecutive('=') >= 2,
+
             '!' => {
                 if self.position + 1 < self.input.len() {
                     self.input[self.position + 1] == '['
@@ -4894,15 +4947,16 @@ impl Lexer {
     /// following spaces. Includes the closing chars of every inline construct:
     /// `` ` `` (code span), `)` (inline link/image), `]` (reference /
     /// shortcut), `>` (autolink / inline HTML), `*` and `_` (emphasis), `~`
-    /// (strikethrough). Without these, `next_token`'s leading whitespace
-    /// skip eats the space between e.g. `*foo*` and the next word.
+    /// (strikethrough), `=` (highlight). Without these, `next_token`'s
+    /// leading whitespace skip eats the space between e.g. `*foo*` and
+    /// the next word.
     fn is_after_special_token(&self) -> bool {
         if self.position == 0 {
             return false;
         }
         matches!(
             self.input[self.position - 1],
-            '`' | ')' | ']' | '>' | '*' | '_' | '~'
+            '`' | ')' | ']' | '>' | '*' | '_' | '~' | '='
         )
     }
 

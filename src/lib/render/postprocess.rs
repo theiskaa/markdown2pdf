@@ -38,6 +38,7 @@ fn walk(tokens: &[Token], map: &mut HashMap<String, String>) {
             | Token::Emphasis { content: inner, .. }
             | Token::StrongEmphasis(inner)
             | Token::Strikethrough(inner)
+            | Token::Highlight(inner)
             | Token::BlockQuote(inner)
             | Token::ListItem { content: inner, .. }
             | Token::FootnoteDefinition { content: inner, .. } => walk(inner, map),

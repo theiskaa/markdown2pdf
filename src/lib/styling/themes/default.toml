@@ -139,6 +139,9 @@ margin_before_pt = 1.0
 text_color = "#808080"
 underline = true
 
+[mark]
+background_color = "#FFF59D"
+
 [horizontal_rule]
 color = "#808080"
 thickness_pt = 0.5

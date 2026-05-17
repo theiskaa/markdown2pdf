@@ -495,6 +495,7 @@ fn collect_footnote_numbering(tokens: &[Token]) -> HashMap<String, usize> {
             | Token::Emphasis { content: inner, .. }
             | Token::StrongEmphasis(inner)
             | Token::Strikethrough(inner)
+            | Token::Highlight(inner)
             | Token::BlockQuote(inner)
             | Token::ListItem { content: inner, .. }
             | Token::Link { content: inner, .. }
@@ -751,6 +752,12 @@ fn flatten_one(
         }
         Token::Strikethrough(content) => {
             let nested = flags.with_strikethrough();
+            for t in content {
+                flatten_one(t, nested, link, out, footnotes);
+            }
+        }
+        Token::Highlight(content) => {
+            let nested = flags.with_highlight();
             for t in content {
                 flatten_one(t, nested, link, out, footnotes);
             }

@@ -28,6 +28,10 @@ pub struct DocumentConfig {
     pub table: Option<TableConfig>,
     pub image: Option<ImageConfig>,
     pub link: Option<InlineConfig>,
+    /// Inline highlight (`==text==`). Only `background_color` is
+    /// load-bearing today; the rest of `InlineConfig` is accepted for
+    /// symmetry with `link`/`code_inline`.
+    pub mark: Option<InlineConfig>,
     pub horizontal_rule: Option<RuleConfig>,
     pub metadata: Option<MetadataConfig>,
     pub header: Option<PageFurnitureConfig>,

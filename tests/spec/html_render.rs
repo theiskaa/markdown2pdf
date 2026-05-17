@@ -401,6 +401,11 @@ fn render_inline_token(t: &Token, out: &mut String) {
             render_inlines(content, out);
             out.push_str("</del>");
         }
+        Token::Highlight(content) => {
+            out.push_str("<mark>");
+            render_inlines(content, out);
+            out.push_str("</mark>");
+        }
         Token::Code { content: body, .. } => {
             out.push_str("<code>");
             out.push_str(&escape_text(body));
