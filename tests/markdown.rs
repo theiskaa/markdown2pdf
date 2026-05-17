@@ -215,6 +215,9 @@ mod try_decode_entity_tests;
 #[path = "markdown/try_parse_definition_tests.rs"]
 mod try_parse_definition_tests;
 
+#[path = "markdown/highlight_tests.rs"]
+mod highlight_tests;
+
 #[path = "markdown/unmatched_emphasis_fallback_tests.rs"]
 mod unmatched_emphasis_fallback_tests;
 

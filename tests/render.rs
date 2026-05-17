@@ -40,3 +40,6 @@ mod image_pipeline;
 
 #[path = "render/wikilink.rs"]
 mod wikilink;
+
+#[path = "render/highlight.rs"]
+mod highlight;
