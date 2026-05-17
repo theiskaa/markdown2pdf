@@ -167,6 +167,17 @@ pub enum Token {
         label: String,
         content: Vec<Token>,
     },
+    /// Pandoc-style inline footnote: `text^[note body]`. The body is
+    /// already inline-parsed. `label` is a lexer-assigned internal id,
+    /// globally unique within the document and not author-reachable
+    /// (regular `[^id]` labels are `[A-Za-z0-9_-]+`). Lowering treats
+    /// this as a `FootnoteReference` + `FootnoteDefinition` pair under
+    /// that label, so numbering, the back-link, and the tail
+    /// "Footnotes" section all reuse the existing GFM machinery.
+    InlineFootnote {
+        label: String,
+        content: Vec<Token>,
+    },
     /// PHP Markdown Extra-style definition list. A term line is
     /// followed by one or more lines beginning with `:` introducing a
     /// definition. Consecutive entries (term/definition groups) are
@@ -323,7 +334,8 @@ impl Token {
                 // emit the raw label so the text isn't lost.
                 result.push_str(label);
             }
-            Token::FootnoteDefinition { content, .. } => {
+            Token::FootnoteDefinition { content, .. }
+            | Token::InlineFootnote { content, .. } => {
                 for token in content {
                     token.collect_text_recursive(result);
                 }
@@ -1639,6 +1651,11 @@ pub struct Lexer {
     /// deeper. Checked against [`MAX_PARSE_DEPTH`] so pathological
     /// nesting fails with a [`LexerError`] instead of a stack overflow.
     depth: usize,
+    /// Monotonic counter for auto-assigning inline-footnote labels.
+    /// Shared (by clone) with every [`Lexer::sub_lexer`] so labels stay
+    /// unique across nested content — an inline footnote inside a list
+    /// item or table cell must not collide with one in the body.
+    inline_footnote_seq: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
 impl Lexer {
@@ -1676,6 +1693,7 @@ impl Lexer {
             suppress_setext: false,
             pending: std::collections::VecDeque::new(),
             depth: 0,
+            inline_footnote_seq: std::rc::Rc::new(std::cell::Cell::new(0)),
         }
     }
 
@@ -1686,6 +1704,7 @@ impl Lexer {
     fn sub_lexer(&self, input: String) -> Lexer {
         let mut l = Lexer::new(input);
         l.depth = self.depth.saturating_add(1);
+        l.inline_footnote_seq = std::rc::Rc::clone(&self.inline_footnote_seq);
         l
     }
 
@@ -2206,6 +2225,13 @@ impl Lexer {
             '|' if is_line_start => {
                 if self.is_table_start() {
                     self.parse_table()?
+                } else {
+                    self.parse_text(ctx)?
+                }
+            }
+            '^' => {
+                if let Some(tok) = self.try_parse_inline_footnote(ctx)? {
+                    tok
                 } else {
                     self.parse_text(ctx)?
                 }
@@ -3128,6 +3154,78 @@ impl Lexer {
         }))
     }
 
+    /// Try to consume a Pandoc-style inline footnote `^[body]`. The
+    /// caller guarantees `self.input[self.position] == '^'`. Returns
+    /// `Ok(None)` with the position untouched on any non-match so the
+    /// dispatcher falls back to `parse_text` (a bare `^` then literal
+    /// text) — covering `^x`, `^[` with no close, and an empty body.
+    ///
+    /// Brackets nest: the body runs to the `]` that balances the
+    /// opening `[`, so `note^[see [1] above]` keeps its inner pair. A
+    /// backslash escapes the next character for the purpose of this
+    /// scan (`\]` does not close, `\[` does not open a level); the
+    /// backslash is left in the body so the inline sub-lexer applies
+    /// its own escape handling, exactly as footnote definitions do.
+    /// The body may span lines; the sub-lexer treats newlines as soft
+    /// breaks. v1: a blank line inside the body is not special-cased.
+    fn try_parse_inline_footnote(
+        &mut self,
+        _ctx: ParseContext,
+    ) -> Result<Option<Token>, LexerError> {
+        let start = self.position;
+        if start + 1 >= self.input.len() || self.input[start + 1] != '[' {
+            return Ok(None);
+        }
+        let body_start = start + 2;
+        let mut i = body_start;
+        let mut depth = 1usize;
+        while i < self.input.len() {
+            match self.input[i] {
+                '\\' if i + 1 < self.input.len() => {
+                    i += 2;
+                    continue;
+                }
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        // Unbalanced: ran off the end without closing the body.
+        if depth != 0 {
+            return Ok(None);
+        }
+        let close = i;
+        let body: String = self.input[body_start..close].iter().collect();
+        // An empty / whitespace-only body degrades to literal text
+        // rather than emitting a dangling footnote marker.
+        if body.trim().is_empty() {
+            return Ok(None);
+        }
+
+        let inner_tokens = {
+            let mut sub = self.sub_lexer(body);
+            sub.parse_with_context(ParseContext::Inline)?
+        };
+
+        let n = self.inline_footnote_seq.get() + 1;
+        self.inline_footnote_seq.set(n);
+        // `\u{1}` is not a legal `[^id]` label character, so this
+        // synthetic label can never collide with an authored one.
+        let label = format!("\u{1}ifn{}", n);
+
+        self.position = close + 1; // past the closing `]`
+        Ok(Some(Token::InlineFootnote {
+            label,
+            content: inner_tokens,
+        }))
+    }
+
     /// Try to consume one or more `Term\n: Definition` blocks as a
     /// `Token::DefinitionList`. Returns `Ok(None)` (with position
     /// preserved) unless the very next two lines satisfy the
@@ -3286,16 +3384,22 @@ impl Lexer {
             // the pending queue and return `Text("[")`. The queue
             // approach replaces an older position-rewind that re-parsed
             // the body and went exponential on inputs like `[[[[…alt](u)`.
-            let only_text = content
+            // Fast path only for a pure single-line body: collapse the
+            // `[…` run into one Text. A multi-line body must NOT be
+            // flattened with embedded `\n` — a literal newline baked
+            // into a Text run reaches the renderer, which has no glyph
+            // for it and draws a missing-glyph box on the embedded-font
+            // path. Instead fall through to the queue path so every
+            // `Token::Newline` survives as a real newline token and
+            // lowering turns it into a space like any soft break.
+            let only_flat_text = content
                 .iter()
-                .all(|t| matches!(t, Token::Text(_) | Token::Newline));
-            if only_text {
+                .all(|t| matches!(t, Token::Text(_)));
+            if only_flat_text {
                 let mut s = String::from("[");
                 for t in &content {
-                    match t {
-                        Token::Text(t) => s.push_str(t),
-                        Token::Newline => s.push('\n'),
-                        _ => {}
+                    if let Token::Text(t) = t {
+                        s.push_str(t);
                     }
                 }
                 return Ok(Token::Text(s));
@@ -4863,6 +4967,13 @@ impl Lexer {
             // `==` opens an inline highlight; lone `=` is literal text
             // but we still break so the dispatcher can decide.
             '=' => self.count_consecutive('=') >= 2,
+
+            // `^[` may open a Pandoc inline footnote; a lone `^`
+            // (`2^3`, `a ^ b`) stays literal text.
+            '^' => {
+                self.position + 1 < self.input.len()
+                    && self.input[self.position + 1] == '['
+            }
 
             '!' => {
                 if self.position + 1 < self.input.len() {

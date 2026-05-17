@@ -56,7 +56,7 @@ const CFG: &str = include_str!("../brand.toml");
 parse_into_file(md, "b.pdf", ConfigSource::Embedded(CFG), None)?;
 ```
 
-Every field these sources can set is documented in [Configuration.md](Configuration.md), with an annotated reference configuration in [config.toml](config.toml).
+Every field these sources can set is documented in [configuration.md](configuration.md), with an annotated reference configuration in [config.toml](config.toml).
 
 ## Pre-resolved styles and runtime overrides
 

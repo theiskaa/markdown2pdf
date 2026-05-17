@@ -41,7 +41,8 @@ fn walk(tokens: &[Token], map: &mut HashMap<String, String>) {
             | Token::Highlight(inner)
             | Token::BlockQuote(inner)
             | Token::ListItem { content: inner, .. }
-            | Token::FootnoteDefinition { content: inner, .. } => walk(inner, map),
+            | Token::FootnoteDefinition { content: inner, .. }
+            | Token::InlineFootnote { content: inner, .. } => walk(inner, map),
             Token::Image { alt, .. } => walk(alt, map),
             Token::Table { headers, rows, .. } => {
                 for h in headers {
