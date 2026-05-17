@@ -302,6 +302,39 @@ See [the conclusion](#conclusion) for context.
 two headings have the same text, the second gets `-2`, the third
 `-3`, etc. Unresolved anchors log a warning and emit no annotation.
 
+WikiLinks resolve through the same anchor machinery:
+
+```markdown
+See [[Conclusion]] or [[conclusion|the wrap-up]].
+
+# Conclusion
+```
+
+`[[Target]]` links to the heading whose slug matches `Target`;
+`[[Target|Label]]` shows `Label` instead. There is no `[wikilink]`
+config block — a WikiLink renders with the `[link]` style above and
+resolves like any `#slug`, so an unmatched target logs a warning and
+falls back to styled text rather than breaking the export.
+
+### Highlight (`==text==`)
+
+```toml
+[mark]
+background_color = "#FFF59D"
+```
+
+`==text==` paints `background_color` behind the run (a soft yellow by
+default). It nests with other inline styles, so `==**bold**==` is both
+bold and highlighted:
+
+```markdown
+Some ==important== text, and a ==**bold mark**==.
+```
+
+`==` is only a highlight mid-content: a line that is exactly `===` (or
+`---`) still underlines the paragraph above it as a Setext heading, and
+an unterminated `==` renders as literal text.
+
 ### Horizontal rule (`---`)
 
 ```toml
