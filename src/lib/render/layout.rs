@@ -17,6 +17,8 @@ use crate::styling::{
     ResolvedPage, ResolvedPageFurniture, ResolvedStyle, ResolvedToc, TextAlignment,
 };
 
+use crate::markdown::slugify;
+
 use super::font::FontSet;
 use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
 
@@ -2963,28 +2965,6 @@ fn pt_to_mm(pt: f32) -> f32 {
     pt / MM_TO_PT
 }
 
-/// GitHub-style slug: lowercase, ASCII letters + digits + dashes,
-/// whitespace → `-`, everything else dropped, no leading / trailing
-/// dashes, no consecutive dashes.
-fn slugify(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut last_was_dash = true;
-    for ch in text.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            last_was_dash = false;
-        } else if ch.is_whitespace() || ch == '-' || ch == '_' {
-            if !last_was_dash {
-                out.push('-');
-                last_was_dash = true;
-            }
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    out
-}
 
 /// Concatenate the plain text of a heading's inline runs. The PDF
 /// outline + slug source. Markdown emphasis / inline code inside a

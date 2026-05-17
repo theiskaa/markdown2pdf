@@ -1497,6 +1497,32 @@ fn is_ascii_punctuation(c: char) -> bool {
     )
 }
 
+/// GitHub-style heading slug: lowercase, ASCII letters + digits kept,
+/// whitespace / `-` / `_` collapse to a single `-`, everything else
+/// dropped, no leading / trailing dashes. Shared so the renderer's
+/// heading anchors and the lexer's `[[wikilink]]` targets slug
+/// identically — a wikilink resolves only when its slug byte-matches a
+/// heading's.
+pub(crate) fn slugify(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last_was_dash = true;
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if ch.is_whitespace() || ch == '-' || ch == '_' {
+            if !last_was_dash {
+                out.push('-');
+                last_was_dash = true;
+            }
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
 /// Error types that can occur during lexical analysis. `line` and
 /// `column` are 1-based and point at the source character that
 /// triggered the failure.
