@@ -137,6 +137,9 @@ mod list_lazy_continuation_tests;
 #[path = "markdown/loose_tight_list_tests.rs"]
 mod loose_tight_list_tests;
 
+#[path = "markdown/math_tests.rs"]
+mod math_tests;
+
 #[path = "markdown/multi_backtick_inline_code_tests.rs"]
 mod multi_backtick_inline_code_tests;
 
