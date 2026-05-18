@@ -130,6 +130,16 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 out.push(Block::DefinitionList { entries: ir_entries });
                 i += 1;
             }
+            Token::Math {
+                inline: false,
+                content,
+            } => {
+                flush_paragraph(&mut out, &mut buffered_inline);
+                out.push(Block::MathBlock {
+                    content: content.clone(),
+                });
+                i += 1;
+            }
             Token::FootnoteDefinition { label, content } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 // Definitions don't produce a Block at their source
@@ -860,6 +870,15 @@ fn flatten_one(
             let mono = flags.with_monospace();
             push_text(out, content, mono, link);
         }
+        Token::Math { content, .. } => {
+            // Inline math renders as italic monospace so it reads as
+            // distinct from prose. A display-math token only reaches
+            // here when it isn't at the top level (e.g. inside a list
+            // item or table cell); the top-level lower loop promotes
+            // standalone display math to a centered `Block::MathBlock`.
+            let math = flags.with_monospace().with_italic();
+            push_text(out, content, math, link);
+        }
         Token::Link { content, url, .. } => {
             // The link styling (underline + color) is applied at the
             // layout pass — here we just propagate the URL and mark
@@ -1058,6 +1077,58 @@ mod tests {
             panic!();
         };
         assert!(runs.iter().any(|r| r.text == "foo" && r.flags.monospace));
+    }
+
+    #[test]
+    fn inline_math_becomes_italic_monospace_run() {
+        let blocks = lower(&[
+            Token::Text("when ".into()),
+            Token::Math {
+                inline: true,
+                content: "x^2".into(),
+            },
+        ]);
+        let Block::Paragraph { runs } = &blocks[0] else {
+            panic!("expected paragraph");
+        };
+        assert!(runs.iter().any(|r| {
+            r.text == "x^2" && r.flags.monospace && r.flags.italic
+        }));
+    }
+
+    #[test]
+    fn display_math_becomes_centered_block_and_flushes_paragraphs() {
+        let blocks = lower(&[
+            Token::Text("intro".into()),
+            Token::Math {
+                inline: false,
+                content: "E = mc^2".into(),
+            },
+            Token::Text("outro".into()),
+        ]);
+        // Paragraph("intro"), MathBlock, Paragraph("outro").
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(blocks[0], Block::Paragraph { .. }));
+        let Block::MathBlock { content } = &blocks[1] else {
+            panic!("expected a MathBlock, got {:?}", blocks[1]);
+        };
+        assert_eq!(content, "E = mc^2");
+        assert!(matches!(blocks[2], Block::Paragraph { .. }));
+    }
+
+    #[test]
+    fn display_math_in_list_item_falls_back_to_inline_run() {
+        // A display token that isn't at the top level (here, inside a
+        // list item) must still render — as an italic monospace run —
+        // rather than vanish.
+        let blocks = lower(&lex("- see $$a+b$$ here"));
+        let Block::List { entries } = &blocks[0] else {
+            panic!("expected list");
+        };
+        assert!(entries[0]
+            .runs
+            .iter()
+            .any(|r| r.text == "a+b" && r.flags.monospace && r.flags.italic));
     }
 
     #[test]

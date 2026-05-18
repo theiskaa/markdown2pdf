@@ -55,6 +55,11 @@ pub enum Block {
     /// PHP Markdown Extra-style definition list. Each entry pairs a
     /// term with one or more definitions.
     DefinitionList { entries: Vec<DefinitionEntry> },
+    /// LaTeX display math (`$$ … $$`). `content` is the raw TeX,
+    /// rendered centered in an italic monospace style. (v1 renders the
+    /// source verbatim; full mathematical typesetting is a separate,
+    /// larger effort tracked independently.)
+    MathBlock { content: String },
 }
 
 #[derive(Debug, Clone)]
@@ -220,6 +225,10 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
                     }
                 }
             }
+        }
+        Block::MathBlock { .. } => {
+            // Rendered as centered italic monospace.
+            u.mono_italic = true;
         }
         Block::HorizontalRule | Block::Image { .. } | Block::PageBreak => {}
     }

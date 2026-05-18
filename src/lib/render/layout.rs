@@ -1176,7 +1176,44 @@ impl<'a> Engine<'a> {
                 self.render_footnote_definitions(entries)
             }
             Block::DefinitionList { entries } => self.render_definition_list(entries),
+            Block::MathBlock { content } => self.render_math_block(content),
         }
+    }
+
+    /// Display math (`$$ … $$`). v1 typesetting: the raw TeX centered
+    /// in an italic monospace face (matching inline math's styling) so
+    /// it stands out as a distinct block. Paragraph typography drives
+    /// size, color, and block spacing. Multi-line source is rendered
+    /// one centered line per source line.
+    fn render_math_block(&mut self, content: &str) {
+        if content.trim().is_empty() {
+            return;
+        }
+        let s = self.style.paragraph.clone();
+        let color = Some(rgb_color(s.text_color_rgb()));
+        let base = RunFlags::default().with_monospace().with_italic();
+        let ctx = self.begin_block(&s);
+        let saved_align = self.current_text_align;
+        self.current_text_align = TextAlignment::Center;
+        for line in content.split('\n') {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let run = InlineRun {
+                text: line.to_string(),
+                flags: base,
+                link: None,
+            };
+            self.write_wrapped_runs(
+                std::slice::from_ref(&run),
+                s.font_size_pt,
+                s.line_height,
+                base,
+                color.clone(),
+            );
+        }
+        self.current_text_align = saved_align;
+        self.end_block(ctx);
     }
 
     fn render_definition_list(&mut self, entries: &[crate::render::ir::DefinitionEntry]) {
