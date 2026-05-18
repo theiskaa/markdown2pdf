@@ -153,6 +153,11 @@ struct Engine<'a> {
     /// Inline math is measured several times per line (wrap, natural
     /// width, emit) — typesetting once and cloning keeps that O(1).
     math_inline_cache: HashMap<(String, u32), super::math::layout::Frag>,
+    /// One Form XObject per distinct glyph id. A glyph outline is
+    /// emitted once here and invoked with a tiny `cm`/`Do` at every
+    /// occurrence, instead of re-inlining its (flattened-Bézier)
+    /// polygon — the dominant cost in math-heavy PDFs.
+    math_glyph_xobjects: HashMap<u16, printpdf::XObjectId>,
 }
 
 struct MathState {
@@ -202,6 +207,7 @@ impl<'a> Engine<'a> {
             open_bg: Vec::new(),
             math: None,
             math_inline_cache: HashMap::new(),
+            math_glyph_xobjects: HashMap::new(),
         }
     }
 
@@ -1234,6 +1240,74 @@ impl<'a> Engine<'a> {
         frag
     }
 
+    /// The Form XObject for glyph `gid`, building + registering it on
+    /// first use. Content is the filled outline in raw font units;
+    /// the form's `/Matrix` scales font units → em (1/upem) so a
+    /// single object serves every size, positioned by the per-use
+    /// CTM. `None` only if the math font or this glyph's outline is
+    /// unavailable. (printpdf's `FormXObject` serializer omits the
+    /// required `/BBox` and writes `/FormType` as a name — both are
+    /// patched in `postprocess::compress`.)
+    fn math_glyph_xobject(&mut self, gid: u16) -> Option<printpdf::XObjectId> {
+        if let Some(id) = self.math_glyph_xobjects.get(&gid) {
+            return Some(id.clone());
+        }
+        let font = self.math.as_ref()?.as_ref()?;
+        let upem = font.font.upem;
+        let contours = font.font.outline(gid);
+        if contours.is_empty() {
+            return None;
+        }
+        let mut s = String::with_capacity(contours.len() * 48);
+        for c in &contours {
+            if c.len() < 2 {
+                continue;
+            }
+            let (x, y) = c[0];
+            // Font units (~±2000); integer precision is ≈0.01 pt at
+            // body size after the 1/upem form matrix — sub-pixel, and
+            // very compact.
+            s.push_str(&format!("{} {} m\n", x.round() as i32, y.round() as i32));
+            for &(x, y) in &c[1..] {
+                s.push_str(&format!("{} {} l\n", x.round() as i32, y.round() as i32));
+            }
+            s.push_str("h\n");
+        }
+        s.push_str("f\n");
+        let form = printpdf::FormXObject {
+            form_type: printpdf::FormType::Type1,
+            size: None,
+            bytes: s.into_bytes(),
+            matrix: Some(printpdf::CurTransMat::Raw([
+                1.0 / upem,
+                0.0,
+                0.0,
+                1.0 / upem,
+                0.0,
+                0.0,
+            ])),
+            resources: None,
+            group: None,
+            ref_dict: None,
+            metadata: None,
+            piece_info: None,
+            last_modified: None,
+            struct_parent: None,
+            struct_parents: None,
+            opi: None,
+            oc: None,
+            name: None,
+        };
+        let id = printpdf::XObjectId::new();
+        self.doc
+            .resources
+            .xobjects
+            .map
+            .insert(id.clone(), printpdf::XObject::Form(form));
+        self.math_glyph_xobjects.insert(gid, id.clone());
+        Some(id)
+    }
+
     /// Emit a laid-out math fragment as filled glyph outlines plus
     /// rule rectangles. `x0` is the left edge and `baseline` the
     /// fragment baseline (points-from-left / points-from-top).
@@ -1241,7 +1315,9 @@ impl<'a> Engine<'a> {
     /// Glyphs are drawn as vector paths, not text: there is no
     /// embedded math font and nothing selectable, so the equation
     /// behaves like a figure in every PDF viewer (no stray selection
-    /// box, no broken copy) and the PDF stays small.
+    /// box, no broken copy). Each distinct glyph's outline is stored
+    /// once as a Form XObject and invoked with a tiny CTM/`Do` per
+    /// occurrence, so repetition costs almost nothing.
     fn emit_math_frag(
         &mut self,
         frag: &super::math::layout::Frag,
@@ -1253,52 +1329,33 @@ impl<'a> Engine<'a> {
         let page_h = self.page_height_pt();
         // Baseline in PDF space (origin bottom-left, y up).
         let base_pdf_y = page_h - baseline;
-        let font = match self.math.as_ref().and_then(|m| m.as_ref()) {
-            Some(ms) => &ms.font,
-            None => return,
-        };
-        let upem = font.upem;
-        let mut polys: Vec<Polygon> = Vec::new();
-        for g in &frag.glyphs {
-            let scale = g.size / upem;
-            let ox = x0 + g.x;
-            let oy = base_pdf_y + g.y;
-            let contours = font.outline(g.gid);
-            if contours.is_empty() {
-                continue;
-            }
-            let rings: Vec<PolygonRing> = contours
-                .into_iter()
-                .map(|c| PolygonRing {
-                    points: c
-                        .into_iter()
-                        .map(|(fx, fy)| LinePoint {
-                            // 0.01 pt ≈ 1/7200 in — far below a
-                            // device pixel, but the short fixed
-                            // decimal keeps the (uncompressed-by-
-                            // printpdf) content stream lean and
-                            // deflates better.
-                            p: Point {
-                                x: Pt(round2(ox + fx * scale)),
-                                y: Pt(round2(oy + fy * scale)),
-                            },
-                            bezier: false,
-                        })
-                        .collect(),
-                })
-                .collect();
-            polys.push(Polygon {
-                rings,
-                mode: PaintMode::Fill,
-                winding_order: WindingOrder::NonZero,
-            });
+        if !matches!(self.math, Some(Some(_))) {
+            return;
         }
-        if !polys.is_empty() {
+        // Snapshot placements so the per-glyph XObject lookup (which
+        // borrows `self` mutably) doesn't clash with `frag`.
+        let glyphs: Vec<(u16, f32, f32, f32)> = frag
+            .glyphs
+            .iter()
+            .map(|g| (g.gid, x0 + g.x, base_pdf_y + g.y, g.size))
+            .collect();
+        for (gid, ox, oy, size) in glyphs {
+            let Some(id) = self.math_glyph_xobject(gid) else {
+                continue;
+            };
+            // Invoke the shared glyph form with an exact CTM:
+            // `[size 0 0 size ox oy]`. The form's own /Matrix scales
+            // font units → em, so this lands the glyph at `size` pt,
+            // origin `(ox, oy)`. Colour is inherited by the form.
             self.page_ops.push(Op::SaveGraphicsState);
             self.page_ops.push(Op::SetFillColor { col: color.clone() });
-            for polygon in polys {
-                self.page_ops.push(Op::DrawPolygon { polygon });
-            }
+            self.page_ops.push(Op::SetTransformationMatrix {
+                matrix: printpdf::CurTransMat::Raw([size, 0.0, 0.0, size, ox, oy]),
+            });
+            self.page_ops.push(Op::UseXobject {
+                id,
+                transform: XObjectTransform::default(),
+            });
             self.page_ops.push(Op::RestoreGraphicsState);
         }
         for r in &frag.rules {
@@ -3284,12 +3341,6 @@ const MM_TO_PT: f32 = 72.0 / 25.4;
 
 fn mm_to_pt(mm: f32) -> f32 {
     mm * MM_TO_PT
-}
-
-/// Round to 0.01 pt — trims math-outline coordinate noise from the
-/// content stream without any visible change.
-fn round2(v: f32) -> f32 {
-    (v * 100.0).round() / 100.0
 }
 
 fn pt_to_mm(pt: f32) -> f32 {

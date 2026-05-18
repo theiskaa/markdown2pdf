@@ -179,12 +179,45 @@ pub fn compress(bytes: Vec<u8>) -> Vec<u8> {
     let Ok(mut doc) = Document::load_mem(&bytes) else {
         return bytes;
     };
+    fix_form_xobjects(&mut doc);
     doc.compress();
     let mut out = Vec::new();
     if doc.save_to(&mut out).is_ok() && out.len() < bytes.len() {
         out
     } else {
         bytes
+    }
+}
+
+/// printpdf 0.9's `FormXObject` serializer omits the spec-required
+/// `/BBox` and writes `/FormType` as a name instead of the integer
+/// `1`. The math engine emits one Form XObject per glyph (its outline
+/// in raw font units, scaled by a `1/upem` `/Matrix`), so patch every
+/// `/Subtype /Form` stream: add a generous font-unit bounding box
+/// (well beyond any glyph; `/BBox` only clips) and a numeric
+/// `/FormType`. Without `/BBox`, conformant viewers drop the form.
+fn fix_form_xobjects(doc: &mut Document) {
+    for obj in doc.objects.values_mut() {
+        let Object::Stream(stream) = obj else { continue };
+        let is_form = matches!(
+            stream.dict.get(b"Subtype"),
+            Ok(Object::Name(n)) if n == b"Form"
+        );
+        if !is_form {
+            continue;
+        }
+        stream.dict.set("FormType", Object::Integer(1));
+        if stream.dict.get(b"BBox").is_err() {
+            stream.dict.set(
+                "BBox",
+                Object::Array(vec![
+                    Object::Integer(-2000),
+                    Object::Integer(-2000),
+                    Object::Integer(4000),
+                    Object::Integer(4000),
+                ]),
+            );
+        }
     }
 }
 

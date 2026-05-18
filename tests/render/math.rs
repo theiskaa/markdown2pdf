@@ -214,12 +214,30 @@ fn math_config_scale_changes_size() {
     let small = render("$$\\frac{a}{b}$$", "[math]\nscale = 0.8\n");
     let big = render("$$\\frac{a}{b}$$", "[math]\nscale = 2.0\n");
     assert!(pdf_well_formed(&small) && pdf_well_formed(&big));
-    // Same glyph count, but bigger scale ⇒ larger outline coordinates
-    // ⇒ a longer content stream.
+    // Glyph outlines are stored once, size-independent, as Form
+    // XObjects — only the per-use `cm` scale differs — so the streams
+    // must differ but byte length is *not* a size proxy any more.
+    assert_ne!(small, big, "scale must change the rendered geometry");
     assert!(
-        big.len() > small.len(),
-        "scale = 2.0 must produce larger geometry than scale = 0.8 ({} vs {})",
-        big.len(),
-        small.len()
+        count_rect_ops(&small) > 0 && count_rect_ops(&big) > 0,
+        "the fraction must still render at both scales"
+    );
+    // The larger scale must put a bigger uniform-scale `cm` into the
+    // stream than the smaller one (scale·body vs 0.8·body).
+    let max_scale = |b: &[u8]| -> i64 {
+        let s = String::from_utf8_lossy(b);
+        s.lines()
+            .filter(|l| l.trim_end().ends_with(" cm"))
+            .filter_map(|l| l.split_whitespace().next())
+            .filter_map(|t| t.parse::<f64>().ok())
+            .map(|v| v as i64)
+            .max()
+            .unwrap_or(0)
+    };
+    assert!(
+        max_scale(&big) > max_scale(&small),
+        "scale=2.0 must emit a larger transform than scale=0.8 ({} vs {})",
+        max_scale(&big),
+        max_scale(&small)
     );
 }
