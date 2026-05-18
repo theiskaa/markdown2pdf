@@ -15,8 +15,8 @@
 use super::error::ResolveError;
 use super::resolved::{
     ResolvedBlock, ResolvedBorder, ResolvedBorderSide, ResolvedImage, ResolvedInline,
-    ResolvedList, ResolvedMetadata, ResolvedPage, ResolvedPageFurniture, ResolvedRule,
-    ResolvedStyle, ResolvedTable, ResolvedTitlePage, ResolvedToc,
+    ResolvedList, ResolvedMath, ResolvedMetadata, ResolvedPage, ResolvedPageFurniture,
+    ResolvedRule, ResolvedStyle, ResolvedTable, ResolvedTitlePage, ResolvedToc,
 };
 use super::schema::*;
 use super::themes::load_theme_preset;
@@ -73,6 +73,7 @@ pub fn merge_documents(base: DocumentConfig, overlay: DocumentConfig) -> Documen
         link: merge_optional(base.link, overlay.link, merge_inline),
         mark: merge_optional(base.mark, overlay.mark, merge_inline),
         horizontal_rule: merge_optional(base.horizontal_rule, overlay.horizontal_rule, merge_rule),
+        math: merge_optional(base.math, overlay.math, merge_math),
         metadata: merge_optional(base.metadata, overlay.metadata, merge_metadata),
         header: merge_optional(base.header, overlay.header, merge_furniture),
         footer: merge_optional(base.footer, overlay.footer, merge_furniture),
@@ -198,6 +199,16 @@ fn merge_rule(base: RuleConfig, overlay: RuleConfig) -> RuleConfig {
     }
 }
 
+fn merge_math(base: MathConfig, overlay: MathConfig) -> MathConfig {
+    MathConfig {
+        align: overlay.align.or(base.align),
+        scale: overlay.scale.or(base.scale),
+        color: overlay.color.or(base.color),
+        margin_before_pt: overlay.margin_before_pt.or(base.margin_before_pt),
+        margin_after_pt: overlay.margin_after_pt.or(base.margin_after_pt),
+    }
+}
+
 fn merge_metadata(base: MetadataConfig, overlay: MetadataConfig) -> MetadataConfig {
     MetadataConfig {
         title: overlay.title.or(base.title),
@@ -318,6 +329,21 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
         margin_after_pt: rule_cfg.margin_after_pt.unwrap_or(0.0),
     };
 
+    let math_cfg = cfg.math.unwrap_or_default();
+    let math = ResolvedMath {
+        align: math_cfg.align.unwrap_or(TextAlignment::Center),
+        scale: math_cfg.scale.unwrap_or(1.08).max(0.05),
+        color: math_cfg.color.unwrap_or(paragraph.text_color),
+        // Default to the paragraph's block spacing so a display
+        // equation sits like a normal paragraph unless overridden.
+        margin_before_pt: math_cfg
+            .margin_before_pt
+            .unwrap_or(paragraph.margin_before_pt),
+        margin_after_pt: math_cfg
+            .margin_after_pt
+            .unwrap_or(paragraph.margin_after_pt),
+    };
+
     let metadata_cfg = cfg.metadata.unwrap_or_default();
     let metadata = ResolvedMetadata {
         title: metadata_cfg.title,
@@ -348,6 +374,7 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
         link,
         mark,
         horizontal_rule,
+        math,
         metadata,
         header,
         footer,

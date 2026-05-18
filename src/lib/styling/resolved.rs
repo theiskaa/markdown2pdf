@@ -29,6 +29,7 @@ pub struct ResolvedStyle {
     pub link: ResolvedInline,
     pub mark: ResolvedInline,
     pub horizontal_rule: ResolvedRule,
+    pub math: ResolvedMath,
     pub metadata: ResolvedMetadata,
     pub header: Option<ResolvedPageFurniture>,
     pub footer: Option<ResolvedPageFurniture>,
@@ -121,6 +122,19 @@ pub struct ResolvedRule {
     pub thickness_pt: f32,
     pub style: BorderStyle,
     pub width_pct: f32,
+    pub margin_before_pt: f32,
+    pub margin_after_pt: f32,
+}
+
+/// Resolved math styling. `align` / `margin_*` drive display
+/// (`$$…$$`) blocks; `scale` multiplies the body size for display
+/// math; `color` is the math ink.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ResolvedMath {
+    pub align: TextAlignment,
+    pub scale: f32,
+    pub color: Color,
     pub margin_before_pt: f32,
     pub margin_after_pt: f32,
 }

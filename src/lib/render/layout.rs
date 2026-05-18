@@ -145,6 +145,18 @@ struct Engine<'a> {
     /// fit on the outgoing page and resets each entry to continue on
     /// the next page. Empty when no background-bearing block is open.
     open_bg: Vec<OpenBlockBg>,
+    /// Lazily-initialised TeX math state: the parsed STIX Two Math
+    /// face. `None` until the first math is rendered; `Some(None)` if
+    /// the font failed to load (we then fall back to plain-text math).
+    math: Option<Option<MathState>>,
+    /// Memoised inline-math layouts, keyed by (raw TeX, size×100).
+    /// Inline math is measured several times per line (wrap, natural
+    /// width, emit) — typesetting once and cloning keeps that O(1).
+    math_inline_cache: HashMap<(String, u32), super::math::layout::Frag>,
+}
+
+struct MathState {
+    font: super::math::font::MathFont,
 }
 
 /// One background-bearing block that is currently open. Tracks the
@@ -188,6 +200,8 @@ impl<'a> Engine<'a> {
             text_section_marker: 0,
             pending_highlights: Vec::new(),
             open_bg: Vec::new(),
+            math: None,
+            math_inline_cache: HashMap::new(),
         }
     }
 
@@ -549,7 +563,7 @@ impl<'a> Engine<'a> {
         // and is overridable by `[headings.h1]`. The toc-specific
         // `[toc.style]` block governs entry rows only.
         let s = self.style.headings[0].clone();
-        let runs = vec![InlineRun {
+        let runs = vec![InlineRun { math: None,
             text: toc.title.clone(),
             flags: RunFlags::default(),
             link: None,
@@ -702,7 +716,7 @@ impl<'a> Engine<'a> {
                 if buf_lower.is_some() && buf_lower != Some(is_lower) {
                     let mut f = run.flags;
                     f.small_caps = buf_lower == Some(true);
-                    out.push(InlineRun {
+                    out.push(InlineRun { math: None,
                         text: std::mem::take(&mut buf),
                         flags: f,
                         link: run.link.clone(),
@@ -720,7 +734,7 @@ impl<'a> Engine<'a> {
             if !buf.is_empty() {
                 let mut f = run.flags;
                 f.small_caps = buf_lower == Some(true);
-                out.push(InlineRun {
+                out.push(InlineRun { math: None,
                     text: buf,
                     flags: f,
                     link: run.link.clone(),
@@ -749,6 +763,11 @@ impl<'a> Engine<'a> {
     ) -> Vec<InlineRun> {
         let mut out: Vec<InlineRun> = Vec::with_capacity(words.len());
         for word in words {
+            if word.math.is_some() {
+                // Inline-math boxes are atomic — never char-split.
+                out.push(word);
+                continue;
+            }
             if word.text.chars().all(char::is_whitespace) {
                 out.push(word);
                 continue;
@@ -783,7 +802,7 @@ impl<'a> Engine<'a> {
                 if let Some(b) = hyphen_break {
                     let mut chunk_text = word.text[chunk_start_byte..b].to_string();
                     chunk_text.push('-');
-                    out.push(InlineRun {
+                    out.push(InlineRun { math: None,
                         text: chunk_text,
                         flags: word.flags,
                         link: word.link.clone(),
@@ -820,7 +839,7 @@ impl<'a> Engine<'a> {
                     .map(|c| c.0)
                     .unwrap_or(word.text.len());
                 let chunk_text = word.text[chunk_start_byte..end_byte].to_string();
-                out.push(InlineRun {
+                out.push(InlineRun { math: None,
                     text: chunk_text,
                     flags: word.flags,
                     link: word.link.clone(),
@@ -1176,7 +1195,201 @@ impl<'a> Engine<'a> {
                 self.render_footnote_definitions(entries)
             }
             Block::DefinitionList { entries } => self.render_definition_list(entries),
+            Block::MathBlock { content } => self.render_math_block(content),
         }
+    }
+
+    /// Lazily parse STIX Two Math. Returns `true` once available;
+    /// `false` if it failed to load (callers then fall back to
+    /// plain-text math so nothing is lost). The font is *never*
+    /// embedded — math is drawn as vector outlines.
+    fn ensure_math(&mut self) -> bool {
+        if self.math.is_none() {
+            self.math = Some(super::math::font::MathFont::new().map(|font| MathState { font }));
+        }
+        matches!(self.math, Some(Some(_)))
+    }
+
+    /// Typeset an inline-math span at `size_pt` (Text style),
+    /// memoised. `None` if the math font is unavailable.
+    fn inline_math_frag(
+        &mut self,
+        content: &str,
+        size_pt: f32,
+    ) -> Option<super::math::layout::Frag> {
+        if !self.ensure_math() {
+            return None;
+        }
+        let key = (content.to_string(), (size_pt * 100.0) as u32);
+        if let Some(f) = self.math_inline_cache.get(&key) {
+            return Some(f.clone());
+        }
+        let frag = {
+            let ms = self.math.as_ref().unwrap().as_ref().unwrap();
+            super::math::typeset(&ms.font, content, false, size_pt)
+        };
+        if let Some(f) = &frag {
+            self.math_inline_cache.insert(key, f.clone());
+        }
+        frag
+    }
+
+    /// Emit a laid-out math fragment as filled glyph outlines plus
+    /// rule rectangles. `x0` is the left edge and `baseline` the
+    /// fragment baseline (points-from-left / points-from-top).
+    ///
+    /// Glyphs are drawn as vector paths, not text: there is no
+    /// embedded math font and nothing selectable, so the equation
+    /// behaves like a figure in every PDF viewer (no stray selection
+    /// box, no broken copy) and the PDF stays small.
+    fn emit_math_frag(
+        &mut self,
+        frag: &super::math::layout::Frag,
+        x0: f32,
+        baseline: f32,
+        color: Color,
+    ) {
+        self.close_text_section();
+        let page_h = self.page_height_pt();
+        // Baseline in PDF space (origin bottom-left, y up).
+        let base_pdf_y = page_h - baseline;
+        let font = match self.math.as_ref().and_then(|m| m.as_ref()) {
+            Some(ms) => &ms.font,
+            None => return,
+        };
+        let upem = font.upem;
+        let mut polys: Vec<Polygon> = Vec::new();
+        for g in &frag.glyphs {
+            let scale = g.size / upem;
+            let ox = x0 + g.x;
+            let oy = base_pdf_y + g.y;
+            let contours = font.outline(g.gid);
+            if contours.is_empty() {
+                continue;
+            }
+            let rings: Vec<PolygonRing> = contours
+                .into_iter()
+                .map(|c| PolygonRing {
+                    points: c
+                        .into_iter()
+                        .map(|(fx, fy)| LinePoint {
+                            p: Point {
+                                x: Pt(ox + fx * scale),
+                                y: Pt(oy + fy * scale),
+                            },
+                            bezier: false,
+                        })
+                        .collect(),
+                })
+                .collect();
+            polys.push(Polygon {
+                rings,
+                mode: PaintMode::Fill,
+                winding_order: WindingOrder::NonZero,
+            });
+        }
+        if !polys.is_empty() {
+            self.page_ops.push(Op::SaveGraphicsState);
+            self.page_ops.push(Op::SetFillColor { col: color.clone() });
+            for polygon in polys {
+                self.page_ops.push(Op::DrawPolygon { polygon });
+            }
+            self.page_ops.push(Op::RestoreGraphicsState);
+        }
+        for r in &frag.rules {
+            draw_filled_rect(
+                &mut self.page_ops,
+                x0 + r.x,
+                baseline - r.y_top,
+                x0 + r.x + r.w,
+                baseline - (r.y_top - r.thickness),
+                color.clone(),
+                page_h,
+            );
+        }
+    }
+
+    /// Display math (`$$ … $$`): real TeX typesetting, centered as its
+    /// own block. Falls back to a plain-text rendering only if the
+    /// math font can't be loaded.
+    fn render_math_block(&mut self, content: &str) {
+        if content.trim().is_empty() {
+            return;
+        }
+        if !self.ensure_math() {
+            return self.render_math_block_text(content);
+        }
+        let m = self.style.math;
+        let color = rgb_color((m.color.r, m.color.g, m.color.b));
+        let base_pt = self.style.paragraph.font_size_pt * m.scale;
+
+        let frag = {
+            let ms = self.math.as_ref().unwrap().as_ref().unwrap();
+            match super::math::typeset(&ms.font, content, true, base_pt) {
+                Some(f) => f,
+                None => return,
+            }
+        };
+
+        // Route block spacing through the paragraph block machinery
+        // (background / page-break bookkeeping) but with the `[math]`
+        // margins substituted.
+        let mut s = self.style.paragraph.clone();
+        s.margin_before_pt = m.margin_before_pt;
+        s.margin_after_pt = m.margin_after_pt;
+        let ctx = self.begin_block(&s);
+        let total_h = frag.asc + frag.desc;
+        // Keep the whole equation on one page when it fits.
+        if self.y_from_top_pt + total_h + self.bottom_margin_pt()
+            > self.page_height_pt()
+            && total_h + self.top_margin_pt() + self.bottom_margin_pt()
+                < self.page_height_pt()
+        {
+            self.start_new_page();
+        }
+        let avail = self.content_width_pt();
+        let slack = (avail - frag.w).max(0.0);
+        let x0 = self.indent_left_pt
+            + match m.align {
+                TextAlignment::Left => 0.0,
+                TextAlignment::Right => slack,
+                // Center / Justify both center a display equation.
+                _ => slack / 2.0,
+            };
+        let baseline = self.y_from_top_pt + frag.asc;
+        self.emit_math_frag(&frag, x0, baseline, color);
+        self.advance_y(total_h);
+        self.end_block(ctx);
+    }
+
+    /// Fallback display-math rendering (centred italic monospace) used
+    /// only when the math font is unavailable.
+    fn render_math_block_text(&mut self, content: &str) {
+        let s = self.style.paragraph.clone();
+        let color = Some(rgb_color(s.text_color_rgb()));
+        let base = RunFlags::default().with_monospace().with_italic();
+        let ctx = self.begin_block(&s);
+        let saved_align = self.current_text_align;
+        self.current_text_align = TextAlignment::Center;
+        for line in content.split('\n') {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let run = InlineRun { math: None,
+                text: line.to_string(),
+                flags: base,
+                link: None,
+            };
+            self.write_wrapped_runs(
+                std::slice::from_ref(&run),
+                s.font_size_pt,
+                s.line_height,
+                base,
+                color.clone(),
+            );
+        }
+        self.current_text_align = saved_align;
+        self.end_block(ctx);
     }
 
     fn render_definition_list(&mut self, entries: &[crate::render::ir::DefinitionEntry]) {
@@ -1228,7 +1441,7 @@ impl<'a> Engine<'a> {
         }
         // Render the "Footnotes" section heading using h2 typography.
         let h2 = self.style.headings[1].clone();
-        let title_runs = vec![InlineRun {
+        let title_runs = vec![InlineRun { math: None,
             text: "Footnotes".to_string(),
             flags: RunFlags::default(),
             link: None,
@@ -1264,12 +1477,12 @@ impl<'a> Engine<'a> {
                 y_pt: self.y_from_top_pt,
             });
             let mut runs: Vec<InlineRun> = Vec::with_capacity(entry.runs.len() + 2);
-            runs.push(InlineRun {
+            runs.push(InlineRun { math: None,
                 text: format!("{}", entry.number),
                 flags: RunFlags::default().with_superscript(),
                 link: None,
             });
-            runs.push(InlineRun {
+            runs.push(InlineRun { math: None,
                 text: "  ".to_string(),
                 flags: RunFlags::default(),
                 link: None,
@@ -1352,7 +1565,7 @@ impl<'a> Engine<'a> {
         if alt.trim().is_empty() {
             return;
         }
-        self.render_paragraph(&[InlineRun {
+        self.render_paragraph(&[InlineRun { math: None,
             text: format!("[image: {}]", alt),
             flags: RunFlags::default().with_italic(),
             link: None,
@@ -1501,7 +1714,7 @@ impl<'a> Engine<'a> {
                 self.indent_left_pt = x_pt;
                 self.indent_right_pt = x_pt + rendered_w_pt;
             }
-            let runs = vec![InlineRun {
+            let runs = vec![InlineRun { math: None,
                 text: text.to_string(),
                 flags: RunFlags::default().with_italic(),
                 link: None,
@@ -2007,7 +2220,7 @@ impl<'a> Engine<'a> {
         let base = RunFlags::default().with_monospace();
         let ctx = self.begin_block(&s);
         for line in lines {
-            let run = InlineRun {
+            let run = InlineRun { math: None,
                 text: line.clone(),
                 flags: base,
                 link: None,
@@ -2096,7 +2309,13 @@ impl<'a> Engine<'a> {
         let mut current_width = 0.0f32;
 
         for word in &words {
-            let word_width = self.font_set.measure(word.flags, &word.text, size_pt);
+            let word_width = match &word.math {
+                Some(tex) => self
+                    .inline_math_frag(tex, size_pt)
+                    .map(|f| f.w)
+                    .unwrap_or(0.0),
+                None => self.font_set.measure(word.flags, &word.text, size_pt),
+            };
 
             // If the very first piece of a line is wider than the
             // page, push it anyway — we don't break inside a word.
@@ -2104,7 +2323,7 @@ impl<'a> Engine<'a> {
                 lines.push(std::mem::take(&mut current));
                 current_width = 0.0;
                 // Drop any leading whitespace on the new line.
-                if word.text.trim().is_empty() {
+                if word.math.is_none() && word.text.trim().is_empty() {
                     continue;
                 }
             }
@@ -2113,6 +2332,7 @@ impl<'a> Engine<'a> {
                 text: word.text.clone(),
                 flags: word.flags,
                 link: word.link.clone(),
+                math: word.math.clone(),
             });
             current_width += word_width;
         }
@@ -2129,7 +2349,11 @@ impl<'a> Engine<'a> {
         // logically-contiguous text.
         for line in &mut lines {
             line.dedup_by(|next, prev| {
-                if prev.flags == next.flags && prev.link == next.link {
+                if prev.math.is_none()
+                    && next.math.is_none()
+                    && prev.flags == next.flags
+                    && prev.link == next.link
+                {
                     prev.text.push_str(&next.text);
                     true
                 } else {
@@ -2166,6 +2390,13 @@ impl<'a> Engine<'a> {
             let mut natural_w_pt = 0.0f32;
             let mut space_count = 0usize;
             for seg in line {
+                if let Some(tex) = &seg.math {
+                    natural_w_pt += self
+                        .inline_math_frag(tex, size_pt)
+                        .map(|f| f.w)
+                        .unwrap_or(0.0);
+                    continue;
+                }
                 let s_size = if seg.flags.superscript || seg.flags.subscript {
                     size_pt * 0.70
                 } else if seg.flags.small_caps {
@@ -2238,6 +2469,22 @@ impl<'a> Engine<'a> {
             let mut cursor_needs_reset = false;
             let mut line_was_broken = false;
             for seg in line {
+                // Inline math: an indivisible typeset box on the text
+                // baseline. Drawn as outlines in its own graphics
+                // block (like the superscript break-out), so the line's
+                // BT/ET is closed and the next text segment re-opens.
+                if let Some(tex) = seg.math.clone() {
+                    if let Some(frag) = self.inline_math_frag(&tex, size_pt) {
+                        let mc = color
+                            .clone()
+                            .unwrap_or_else(|| rgb_color((0, 0, 0)));
+                        self.emit_math_frag(&frag, x_cursor_pt, baseline_y_pt, mc);
+                        x_cursor_pt += frag.w;
+                        cursor_needs_reset = true;
+                        line_was_broken = true;
+                    }
+                    continue;
+                }
                 // Superscript: render at 70% size on a baseline raised
                 // by ~32% of the original size. Implemented as a
                 // self-contained little text section so it doesn't
@@ -2974,6 +3221,8 @@ struct TextSegment {
     text: String,
     flags: RunFlags,
     link: Option<String>,
+    /// Raw TeX when this segment is an inline-math box (`text` empty).
+    math: Option<String>,
 }
 
 /// Flatten a run list to a sequence of (word | whitespace) pieces,
@@ -2982,6 +3231,12 @@ struct TextSegment {
 fn words_from_runs(runs: &[InlineRun]) -> Vec<InlineRun> {
     let mut out = Vec::new();
     for run in runs {
+        if run.math.is_some() {
+            // An inline-math box is one indivisible word — never
+            // split on whitespace, never merged with neighbours.
+            out.push(run.clone());
+            continue;
+        }
         let chars: Vec<(usize, char)> = run.text.char_indices().collect();
         let mut i = 0;
         while i < chars.len() {
@@ -2997,7 +3252,7 @@ fn words_from_runs(runs: &[InlineRun]) -> Vec<InlineRun> {
             };
             let slice = &run.text[chars[i].0..end_byte];
             if !slice.is_empty() {
-                out.push(InlineRun {
+                out.push(InlineRun { math: None,
                     text: slice.to_string(),
                     flags: run.flags,
                     link: run.link.clone(),

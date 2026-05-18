@@ -43,3 +43,6 @@ mod wikilink;
 
 #[path = "render/highlight.rs"]
 mod highlight;
+
+#[path = "render/math.rs"]
+mod math;

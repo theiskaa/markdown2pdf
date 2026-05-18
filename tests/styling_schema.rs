@@ -221,3 +221,28 @@ fn print_effective_config_round_trip() {
     assert!(toml_text.contains("[page]"));
     assert!(toml_text.contains("[paragraph]"));
 }
+
+#[test]
+fn math_block_round_trips_and_defaults() {
+    // Explicit overrides land on `style.math`.
+    let cfg = r##"[math]
+        align = "left"
+        scale = 1.5
+        color = "#1133CC"
+        margin_before_pt = 14
+        margin_after_pt = 6"##;
+    let s = load_config_strict(ConfigSource::Embedded(cfg), None).unwrap();
+    assert_eq!(s.math.align, TextAlignment::Left);
+    assert_eq!(s.math.scale, 1.5);
+    assert_eq!(s.math.color, Color::rgb(0x11, 0x33, 0xCC));
+    assert_eq!(s.math.margin_before_pt, 14.0);
+    assert_eq!(s.math.margin_after_pt, 6.0);
+
+    // With no `[math]`, display math centers, scales 1.08, and
+    // inherits the paragraph ink + spacing.
+    let d = load_config_strict(ConfigSource::Embedded(""), None).unwrap();
+    assert_eq!(d.math.align, TextAlignment::Center);
+    assert_eq!(d.math.scale, 1.08);
+    assert_eq!(d.math.color, d.paragraph.text_color);
+    assert_eq!(d.math.margin_before_pt, d.paragraph.margin_before_pt);
+}

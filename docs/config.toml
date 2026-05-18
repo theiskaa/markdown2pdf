@@ -164,6 +164,17 @@ underline = false
 background_color = "#FFF59D"
 
 
+# LaTeX math ($...$ inline, $$...$$ display). Display blocks honor
+# these; inline math always tracks the surrounding text size. Math is
+# typeset by the built-in TeX engine and drawn as vector outlines.
+[math]
+align = "center"        # center | left | right
+scale = 1.08            # display size as a multiple of the body size
+color = "#1A1A1A"       # defaults to the paragraph text color
+margin_before_pt = 6.0
+margin_after_pt = 6.0
+
+
 # Horizontal rules (---).
 [horizontal_rule]
 color = "#D0D7DE"

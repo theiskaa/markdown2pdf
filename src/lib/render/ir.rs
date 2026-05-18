@@ -55,6 +55,11 @@ pub enum Block {
     /// PHP Markdown Extra-style definition list. Each entry pairs a
     /// term with one or more definitions.
     DefinitionList { entries: Vec<DefinitionEntry> },
+    /// LaTeX display math (`$$ … $$`). `content` is the raw TeX,
+    /// rendered centered in an italic monospace style. (v1 renders the
+    /// source verbatim; full mathematical typesetting is a separate,
+    /// larger effort tracked independently.)
+    MathBlock { content: String },
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +121,10 @@ pub struct InlineRun {
     /// If `Some`, this run is the visible text of a hyperlink and the
     /// renderer emits a PDF link annotation pointing at the URL.
     pub link: Option<String>,
+    /// If `Some`, this run is an inline math span: `text` is empty and
+    /// the string is the raw TeX, typeset by the math engine as one
+    /// indivisible box on the text baseline.
+    pub math: Option<String>,
 }
 
 impl InlineRun {
@@ -125,6 +134,17 @@ impl InlineRun {
             text: text.into(),
             flags: RunFlags::default(),
             link: None,
+            math: None,
+        }
+    }
+
+    /// An inline-math run carrying raw TeX.
+    pub fn math(tex: impl Into<String>, flags: RunFlags, link: Option<String>) -> Self {
+        Self {
+            text: String::new(),
+            flags,
+            link,
+            math: Some(tex.into()),
         }
     }
 }
@@ -220,6 +240,10 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
                     }
                 }
             }
+        }
+        Block::MathBlock { .. } => {
+            // Rendered as centered italic monospace.
+            u.mono_italic = true;
         }
         Block::HorizontalRule | Block::Image { .. } | Block::PageBreak => {}
     }
