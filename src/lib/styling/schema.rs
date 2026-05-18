@@ -33,6 +33,10 @@ pub struct DocumentConfig {
     /// symmetry with `link`/`code_inline`.
     pub mark: Option<InlineConfig>,
     pub horizontal_rule: Option<RuleConfig>,
+    /// LaTeX math (`$…$` / `$$…$$`). Display blocks honour `align`,
+    /// `scale`, `color`, and block margins; inline math always flows
+    /// with its surrounding text at the body size.
+    pub math: Option<MathConfig>,
     pub metadata: Option<MetadataConfig>,
     pub header: Option<PageFurnitureConfig>,
     pub footer: Option<PageFurnitureConfig>,
@@ -165,6 +169,20 @@ pub struct RuleConfig {
     pub style: Option<BorderStyle>,
     /// Width as percent of the content column. 100 = full width.
     pub width_pct: Option<f32>,
+    pub margin_before_pt: Option<f32>,
+    pub margin_after_pt: Option<f32>,
+}
+
+/// Styling for typeset math. `align` / `margin_*` apply to display
+/// (`$$…$$`) blocks; `scale` multiplies the body font size for
+/// display math (inline `$…$` always tracks the surrounding text
+/// size); `color` is the math ink (defaults to the paragraph color).
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct MathConfig {
+    pub align: Option<TextAlignment>,
+    pub scale: Option<f32>,
+    pub color: Option<Color>,
     pub margin_before_pt: Option<f32>,
     pub margin_after_pt: Option<f32>,
 }
