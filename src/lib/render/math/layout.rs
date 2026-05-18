@@ -162,26 +162,21 @@ impl<'f> Ctx<'f> {
             if let Some(p) = prev {
                 x += self.spacing(p, cls, st);
             }
+            // `node()` already laid the fragment out — reuse its
+            // metrics. (Re-deriving the width by calling `node()` a
+            // second time made nested layout O(2^depth).)
+            let w = f.w;
             let asc = f.asc;
             let desc = f.desc;
-            let italic = f.italic;
+            out.italic = f.italic;
             out.absorb(f, x);
-            // advance includes the fragment's own width.
-            let w = self.frag_w(nodes, i, st, classes[i]);
             x += w;
             out.asc = out.asc.max(asc);
             out.desc = out.desc.max(desc);
-            out.italic = italic;
-            let _ = (asc, desc);
             prev = Some(cls);
         }
         out.w = x;
         out
-    }
-
-    fn frag_w(&self, nodes: &[Node], i: usize, st: Style, cls: Class) -> f32 {
-        let (f, _) = self.node(&nodes[i], st, cls);
-        f.w
     }
 
     fn spacing(&self, l: Class, r: Class, st: Style) -> f32 {
@@ -509,9 +504,16 @@ impl<'f> Ctx<'f> {
         let italic = bf.italic;
         let mut sup_h = 0.0;
         let mut sub_d = 0.0;
-        if let Some(s) = sup {
-            let sf = self.list(s, st.sup());
-            let mut shift = self.font.scale(
+
+        // Lay sub/superscripts out first, then resolve their shifts —
+        // when both are present TeXbook rule 18 couples them so they
+        // can't collide (this is the step the OpenType MATH
+        // `subSuperscriptGapMin` constant exists for).
+        let supf = sup.map(|s| self.list(s, st.sup()));
+        let subf = sub.map(|s| self.list(s, st.sub()));
+
+        let mut sup_shift = supf.as_ref().map(|sf| {
+            let base = self.font.scale(
                 if st.is_cramped() {
                     c.superscript_shift_up_cramped
                 } else {
@@ -519,21 +521,43 @@ impl<'f> Ctx<'f> {
                 },
                 size,
             );
-            let min_bottom = self.font.scale(c.superscript_bottom_min, size);
-            shift = shift
-                .max(bf.asc - self.font.scale(c.superscript_baseline_drop_max, size))
-                .max(sf.desc + min_bottom);
+            base.max(bf.asc - self.font.scale(c.superscript_baseline_drop_max, size))
+                .max(sf.desc + self.font.scale(c.superscript_bottom_min, size))
+        });
+        let mut sub_shift = subf.as_ref().map(|sf| {
+            self.font
+                .scale(c.subscript_shift_down, size)
+                .max(bf.desc + self.font.scale(c.subscript_baseline_drop_min, size))
+                .max(sf.asc - self.font.scale(c.subscript_top_max, size))
+        });
+
+        if let (Some(supf), Some(subf), Some(u), Some(v)) =
+            (&supf, &subf, sup_shift.as_mut(), sub_shift.as_mut())
+        {
+            let gap_min = self.font.scale(c.sub_superscript_gap_min, size);
+            let gap = (*u - supf.desc) - (subf.asc - *v);
+            if gap < gap_min {
+                *v += gap_min - gap;
+                // Don't let the superscript hang too low: lift the
+                // whole pair (preserving the gap) until the sup bottom
+                // reaches superscriptBottomMaxWithSubscript.
+                let max_bottom =
+                    self.font.scale(c.superscript_bottom_max_with_subscript, size);
+                let bottom = *u - supf.desc;
+                if bottom < max_bottom {
+                    let lift = max_bottom - bottom;
+                    *u += lift;
+                    *v -= lift;
+                }
+            }
+        }
+
+        if let (Some(sf), Some(shift)) = (&supf, sup_shift) {
             f.absorb(sf.clone().shift(0.0, shift), x + italic);
             sup_h = shift + sf.asc;
             x = x.max(x + italic + sf.w);
         }
-        if let Some(s) = sub {
-            let sf = self.list(s, st.sub());
-            let mut shift = self.font.scale(c.subscript_shift_down, size);
-            let top_max = self.font.scale(c.subscript_top_max, size);
-            shift = shift
-                .max(bf.desc + self.font.scale(c.subscript_baseline_drop_min, size))
-                .max(sf.asc - top_max);
+        if let (Some(sf), Some(shift)) = (&subf, sub_shift) {
             f.absorb(sf.clone().shift(0.0, -shift), bf.w);
             sub_d = shift + sf.desc;
             x = x.max(bf.w + sf.w);
@@ -726,17 +750,25 @@ impl<'f> Ctx<'f> {
         adv_w
     }
 
-    fn accent(&self, mark: char, _stretchy: bool, body: &[Node], st: Style) -> Frag {
+    fn accent(&self, mark: char, stretchy: bool, body: &[Node], st: Style) -> Frag {
         let size = self.size(st);
         let bf = self.list(body, st.cramped());
-        let Some(ag) = self.font.glyph_id(mark) else {
+        let Some(mut ag) = self.font.glyph_id(mark) else {
             return bf;
         };
+        // A stretchy accent (`\widehat`, `\widetilde`, `\vec`) grows a
+        // wide horizontal variant to span the whole base; a plain
+        // accent is a single glyph centred on the attachment point.
+        if stretchy {
+            let target = bf.w / size * self.font.upem;
+            ag = self.font.widen(ag, target);
+        }
         let am = self.font.glyph(ag);
         let acc_w = self.font.scale(am.advance.max(am.x_max - am.x_min), size);
         let acc_h = self.font.scale(am.height(), size);
-        // Centre the accent over the base's accent-attachment point.
-        let base_skew = if let Some(Node::Symbol { ch, .. }) = body.first() {
+        let centre = if stretchy {
+            bf.w / 2.0
+        } else if let Some(Node::Symbol { ch, .. }) = body.first() {
             self.font
                 .glyph_id(*ch)
                 .map(|g| self.font.scale(self.font.top_accent(g), size))
@@ -752,7 +784,7 @@ impl<'f> Ctx<'f> {
         let acc_y = base_top - clearance + self.font.scale(am.depth(), size);
         f.glyphs.push(PlacedGlyph {
             gid: ag,
-            x: base_skew - acc_w / 2.0,
+            x: centre - acc_w / 2.0,
             y: acc_y,
             size,
         });
@@ -1051,5 +1083,414 @@ mod tests {
             let _ = lay(s, true);
             let _ = lay(s, false);
         }
+    }
+
+    const CORPUS: &[&str] = &[
+        "a + b - c",
+        "x^2 + y^2 = z^2",
+        "\\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+        "\\sqrt[3]{\\frac{x^2+1}{y-2}}",
+        "\\int_{0}^{\\infty} e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}",
+        "\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}",
+        "\\prod_{i=1}^{n} i = n!",
+        "e^{i\\pi} + 1 = 0",
+        "x^{y^{z^{w}}}",
+        "a_{i_{j_{k}}}",
+        "\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1",
+        "\\left( \\frac{1}{1-x^2} \\right)^{n}",
+        "\\left\\{ \\frac{a}{b} \\mid b \\neq 0 \\right\\}",
+        "\\hat{x}\\;\\bar{y}\\;\\vec{v}\\;\\tilde{n}\\;\\dot{q}",
+        "\\nabla \\times \\mathbf{F} = \\mu_0 \\mathbf{J}",
+        "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}",
+        "|x| = \\begin{cases} x & x \\ge 0 \\\\ -x & x < 0 \\end{cases}",
+        "\\overline{z} = a - bi",
+        "\\binom{n}{k} = \\frac{n!}{k!(n-k)!}",
+        "\\alpha\\beta\\gamma \\Gamma\\Delta\\Omega",
+        "",
+        "{}",
+        "x",
+        "\\unknownmacro \\frac{}{} \\sqrt[]{}",
+    ];
+
+    /// Pathologically deep nesting — size bottoms out at scriptscript,
+    /// so metrics must stay finite with no zero-glyph degeneracy.
+    fn deep_inputs() -> Vec<String> {
+        vec![
+            "\\frac{a}{".repeat(40) + "b" + &"}".repeat(40),
+            "x".to_string() + &"^{x".repeat(60) + &"}".repeat(60),
+            "\\sqrt{".repeat(40) + "x" + &"}".repeat(40),
+            "\\left(".repeat(30) + "z" + &"\\right)".repeat(30),
+        ]
+    }
+
+    /// Every fragment in both styles must have finite, non-negative
+    /// metrics and finite glyph / rule coordinates. This is the load-
+    /// bearing regression net: a degenerate glyph or a divide-by-zero
+    /// anywhere in layout surfaces here as a NaN/∞.
+    #[test]
+    fn metrics_and_coordinates_are_always_finite() {
+        let font = MathFont::new().unwrap();
+        let mut inputs: Vec<String> = CORPUS.iter().map(|s| s.to_string()).collect();
+        inputs.extend(deep_inputs());
+        for src in &inputs {
+            for display in [true, false] {
+                let ctx = Ctx::new(&font, 11.0);
+                let f = ctx.list(&parse(src), if display { Display } else { Text });
+                let tag = format!("{src:?} display={display}");
+                assert!(
+                    f.w.is_finite() && f.asc.is_finite() && f.desc.is_finite(),
+                    "non-finite metrics for {tag}: w={} asc={} desc={}",
+                    f.w,
+                    f.asc,
+                    f.desc
+                );
+                assert!(f.w >= 0.0 && f.asc >= 0.0 && f.desc >= 0.0, "negative for {tag}");
+                for g in &f.glyphs {
+                    assert!(
+                        g.x.is_finite() && g.y.is_finite() && g.size.is_finite(),
+                        "non-finite glyph in {tag}"
+                    );
+                    assert!(g.size > 0.0, "non-positive glyph size in {tag}");
+                }
+                for r in &f.rules {
+                    assert!(
+                        r.x.is_finite()
+                            && r.y_top.is_finite()
+                            && r.w.is_finite()
+                            && r.thickness.is_finite(),
+                        "non-finite rule in {tag}"
+                    );
+                    assert!(r.w >= 0.0 && r.thickness >= 0.0, "negative rule in {tag}");
+                }
+            }
+        }
+    }
+
+    /// Same input ⇒ byte-for-byte same layout (positions, sizes,
+    /// rules). Guards refactors against silent geometry drift.
+    #[test]
+    fn layout_is_deterministic() {
+        for &src in CORPUS {
+            let a = lay(src, true);
+            let b = lay(src, true);
+            assert_eq!(a.glyphs.len(), b.glyphs.len(), "{src}");
+            for (g1, g2) in a.glyphs.iter().zip(&b.glyphs) {
+                assert_eq!(
+                    (g1.gid, g1.x.to_bits(), g1.y.to_bits(), g1.size.to_bits()),
+                    (g2.gid, g2.x.to_bits(), g2.y.to_bits(), g2.size.to_bits()),
+                    "non-deterministic glyph for {src}"
+                );
+            }
+            assert_eq!(a.rules.len(), b.rules.len(), "{src}");
+        }
+    }
+
+    #[test]
+    fn style_sizes_are_monotonic() {
+        let font = MathFont::new().unwrap();
+        let c = Ctx::new(&font, 12.0);
+        let d = c.size(Display);
+        let t = c.size(Text);
+        let s = c.size(Script);
+        let ss = c.size(ScriptScript);
+        assert_eq!(d, t, "display and text are the same size");
+        assert!(s < t, "script ({s}) < text ({t})");
+        assert!(ss < s, "scriptscript ({ss}) < script ({s})");
+        assert!(ss > 0.0);
+    }
+
+    #[test]
+    fn spacing_table_and_bin_reclassification() {
+        use super::super::symbols::Class::*;
+        // The canonical TeX inter-atom table (mu codes).
+        assert_eq!(spacing_mu(Ord, Op), 1);
+        assert_eq!(spacing_mu(Ord, Bin), 2);
+        assert_eq!(spacing_mu(Ord, Rel), 3);
+        assert_eq!(spacing_mu(Rel, Ord), 3);
+        assert_eq!(spacing_mu(Bin, Ord), 2);
+        assert_eq!(spacing_mu(Open, Ord), 0);
+        assert_eq!(spacing_mu(Ord, Close), 0);
+        assert_eq!(spacing_mu(Punct, Ord), 1);
+
+        // A leading binary operator is re-typed Ord (no left operand);
+        // a medial one stays Bin.
+        let leading = reclassify(&parse("-x"));
+        assert_eq!(leading[0], Ord, "leading - must reclassify to Ord");
+        let medial = reclassify(&parse("a-b"));
+        assert_eq!(medial, vec![Ord, Bin, Ord]);
+    }
+
+    #[test]
+    fn script_styles_suppress_medium_thick_spacing() {
+        use super::super::symbols::Class::*;
+        let font = MathFont::new().unwrap();
+        let c = Ctx::new(&font, 11.0);
+        // Bin spacing (medium) is real in text style, gone in script.
+        assert!(c.spacing(Ord, Bin, Text) > 0.0);
+        assert_eq!(c.spacing(Ord, Bin, Script), 0.0);
+        assert_eq!(c.spacing(Ord, Rel, ScriptScript), 0.0);
+        // Thin space survives in every style.
+        assert!(c.spacing(Ord, Op, Script) > 0.0);
+    }
+
+    #[test]
+    fn binary_and_relation_spacing_widens_a_run() {
+        let plain = lay("ab", false).w;
+        let bin = lay("a+b", false).w;
+        let rel = lay("a=b", false).w;
+        assert!(bin > plain, "+ must add binary spacing ({bin} vs {plain})");
+        assert!(rel > plain, "= must add relation spacing ({rel} vs {plain})");
+    }
+
+    #[test]
+    fn fraction_geometry_is_sane() {
+        let f = lay("\\frac{abc}{d}", true);
+        assert_eq!(f.rules.len(), 1);
+        let rule = f.rules[0];
+        // Numerator sits above the bar, denominator below it.
+        assert!(
+            f.glyphs.iter().any(|g| g.y > rule.y_top),
+            "numerator above the rule"
+        );
+        assert!(
+            f.glyphs.iter().any(|g| g.y < rule.y_top - rule.thickness),
+            "denominator below the rule"
+        );
+        // Box is at least as wide as the wider part + the rule.
+        assert!(f.w >= rule.w);
+        assert!(f.asc > 0.0 && f.desc > 0.0);
+    }
+
+    #[test]
+    fn sqrt_shifts_body_past_the_radical() {
+        let f = lay("\\sqrt{x}", false);
+        assert!(!f.rules.is_empty(), "vinculum rule");
+        // Some glyph (the radicand) starts right of the surd's left.
+        let min_x = f.glyphs.iter().map(|g| g.x).fold(f32::MAX, f32::min);
+        assert!(
+            f.glyphs.iter().any(|g| g.x > min_x + 0.5),
+            "radicand must be inset past the radical sign"
+        );
+    }
+
+    #[test]
+    fn big_operator_limits_stack_in_display_only() {
+        let d = lay("\\sum_{i=1}^{n} i", true);
+        let t = lay("\\sum_{i=1}^{n} i", false);
+        // Display stacks the limits → taller; text sets them to the
+        // side → wider and shorter.
+        assert!(
+            d.asc + d.desc > t.asc + t.desc,
+            "display limits should be taller (d={} t={})",
+            d.asc + d.desc,
+            t.asc + t.desc
+        );
+        assert!(t.w > d.w, "text-style scripts should be wider");
+    }
+
+    #[test]
+    fn delimiters_grow_with_their_content() {
+        let small = lay("\\left( x \\right)", true);
+        let tall = lay(
+            "\\left( \\frac{\\frac{a}{b}}{\\frac{c}{d}} \\right)",
+            true,
+        );
+        assert!(
+            tall.asc + tall.desc > 2.0 * (small.asc + small.desc),
+            "fences must grow to a tall body ({} vs {})",
+            tall.asc + tall.desc,
+            small.asc + small.desc
+        );
+    }
+
+    #[test]
+    fn accent_sits_above_its_base() {
+        let f = lay("\\hat{x}", false);
+        assert!(f.glyphs.len() >= 2, "base + accent");
+        let top = f.glyphs.iter().map(|g| g.y).fold(f32::MIN, f32::max);
+        let base_like = f.glyphs.iter().filter(|g| g.y < top).count();
+        assert!(base_like >= 1, "accent must be the highest glyph");
+        assert!(f.asc > 0.0);
+    }
+
+    #[test]
+    fn simultaneous_super_and_subscript_never_collide() {
+        // Tall scripts on the same nucleus: the superscript cluster
+        // must stay strictly above the subscript cluster (TeXbook
+        // rule 18 / subSuperscriptGapMin). Before the coupled-shift
+        // fix these overlapped for fraction scripts.
+        for src in [
+            "x_{\\frac{a}{b}}^{\\frac{c}{d}}",
+            "X_{\\frac{1}{2}}^{\\frac{3}{4}}",
+            "\\sigma_{ij}^{kl}",
+            "A_{n+1}^{2}",
+        ] {
+            for display in [false, true] {
+                let f = lay(src, display);
+                let lo_sup = f
+                    .glyphs
+                    .iter()
+                    .filter(|g| g.y > 1.0)
+                    .map(|g| g.y)
+                    .fold(f32::MAX, f32::min);
+                let hi_sub = f
+                    .glyphs
+                    .iter()
+                    .filter(|g| g.y < -1.0)
+                    .map(|g| g.y)
+                    .fold(f32::MIN, f32::max);
+                if lo_sup.is_finite() && hi_sub.is_finite() {
+                    assert!(
+                        lo_sup > hi_sub,
+                        "{src} (display={display}): superscript bottom \
+                         {lo_sup} not above subscript top {hi_sub}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fraction_rule_spans_the_wider_part() {
+        let f = lay("\\frac{a+b+c+d}{x}", true);
+        let rule = f.rules[0];
+        let widest = f
+            .glyphs
+            .iter()
+            .map(|g| g.x)
+            .fold(0.0_f32, f32::max);
+        // The bar must reach at least to the rightmost glyph it spans.
+        assert!(
+            rule.x + rule.w >= widest,
+            "fraction rule (x={}, w={}) doesn't cover content to x={widest}",
+            rule.x,
+            rule.w
+        );
+        assert!(rule.x <= 1.0, "rule should start near the left edge");
+    }
+
+    #[test]
+    fn radical_vinculum_covers_the_radicand() {
+        let f = lay("\\sqrt{a+b+c}", true);
+        let rule = f.rules[0];
+        let max_x = f.glyphs.iter().map(|g| g.x).fold(0.0_f32, f32::max);
+        assert!(
+            rule.x + rule.w >= max_x,
+            "vinculum (x={}, w={}) must extend over the radicand to x={max_x}",
+            rule.x,
+            rule.w
+        );
+    }
+
+    #[test]
+    fn integral_keeps_scripts_to_the_side_even_in_display() {
+        // \int defaults to nolimits: scripts stay sup/sub, not stacked,
+        // unlike \sum. So display \int_0^1 is wider-than-tall relative
+        // to display \sum_0^1.
+        let i = lay("\\int_{0}^{1}", true);
+        let s = lay("\\sum_{0}^{1}", true);
+        assert!(
+            i.w >= s.w,
+            "∫ scripts to the side should be at least as wide as ∑'s ({} vs {})",
+            i.w,
+            s.w
+        );
+        assert!(
+            (s.asc + s.desc) > (i.asc + i.desc),
+            "stacked ∑ limits should be taller than ∫'s side scripts"
+        );
+    }
+
+    #[test]
+    fn accent_is_horizontally_within_the_base_span() {
+        let f = lay("\\hat{M}", false);
+        let base_right = f.w;
+        let accent = f
+            .glyphs
+            .iter()
+            .max_by(|a, b| a.y.partial_cmp(&b.y).unwrap())
+            .unwrap();
+        assert!(
+            accent.x >= -base_right && accent.x <= base_right * 1.5,
+            "accent x={} should sit over the base (w={base_right})",
+            accent.x
+        );
+    }
+
+    #[test]
+    fn limits_override_flips_script_placement() {
+        // \int\limits stacks (taller) like \sum; \sum\nolimits sets to
+        // the side (wider) like \int.
+        let int_side = lay("\\int_{0}^{1}", true);
+        let int_lim = lay("\\int\\limits_{0}^{1}", true);
+        assert!(
+            int_lim.asc + int_lim.desc > int_side.asc + int_side.desc,
+            "\\int\\limits must stack (taller): {} vs {}",
+            int_lim.asc + int_lim.desc,
+            int_side.asc + int_side.desc
+        );
+        let sum_stack = lay("\\sum_{0}^{1}", true);
+        let sum_nolim = lay("\\sum\\nolimits_{0}^{1}", true);
+        assert!(
+            sum_nolim.w > sum_stack.w,
+            "\\sum\\nolimits must set scripts to the side (wider): {} vs {}",
+            sum_nolim.w,
+            sum_stack.w
+        );
+    }
+
+    #[test]
+    fn stretchy_accent_widens_with_the_base() {
+        // \widehat over a wide base must select a wider accent glyph
+        // (different gid) than over a single letter; a plain \hat must
+        // not stretch.
+        let topmost = |f: &Frag| {
+            f.glyphs
+                .iter()
+                .max_by(|a, b| a.y.partial_cmp(&b.y).unwrap())
+                .unwrap()
+                .gid
+        };
+        let narrow = topmost(&lay("\\widehat{x}", false));
+        let wide = topmost(&lay("\\widehat{xxxxxxxx}", false));
+        assert_ne!(
+            narrow, wide,
+            "\\widehat must grow a wider variant over a wide base"
+        );
+        let hat_n = topmost(&lay("\\hat{x}", false));
+        let hat_w = topmost(&lay("\\hat{xxxxxxxx}", false));
+        assert_eq!(hat_n, hat_w, "\\hat is not stretchy");
+    }
+
+    #[test]
+    fn cramped_style_lowers_scripts_under_a_radical() {
+        // A superscript inside \sqrt{...} is laid out cramped, so it
+        // sits no higher than the same superscript in free flow.
+        let free = lay("x^{2}", false);
+        let crmp = lay("\\sqrt{x^{2}}", false);
+        let max_y = |f: &Frag| f.glyphs.iter().map(|g| g.y).fold(f32::MIN, f32::max);
+        assert!(
+            max_y(&crmp) <= max_y(&free) + 0.01,
+            "cramped superscript ({}) should not exceed free ({})",
+            max_y(&crmp),
+            max_y(&free)
+        );
+    }
+
+    #[test]
+    fn matrix_lays_out_a_grid_with_fences() {
+        let f = lay("\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}", true);
+        // 4 entries + 2 parens ⇒ at least 6 glyphs.
+        assert!(f.glyphs.len() >= 6, "got {}", f.glyphs.len());
+        let xs: Vec<i32> = f.glyphs.iter().map(|g| (g.x * 4.0) as i32).collect();
+        let ys: Vec<i32> = f.glyphs.iter().map(|g| (g.y * 4.0) as i32).collect();
+        let distinct = |v: &[i32]| {
+            let mut u = v.to_vec();
+            u.sort_unstable();
+            u.dedup();
+            u.len()
+        };
+        assert!(distinct(&xs) >= 2, "matrix needs ≥2 columns");
+        assert!(distinct(&ys) >= 2, "matrix needs ≥2 rows");
     }
 }

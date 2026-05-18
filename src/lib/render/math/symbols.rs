@@ -408,6 +408,15 @@ pub fn command(name: &str) -> Option<(char, Class)> {
         "Vert" => v('\u{2016}', Ord),
         "|" => v('\u{2016}', Ord),
         "backslash" => v('\u{005C}', Ord),
+        // Backslash-escaped literals (`\{`, `\%`, `\#`, …) — common in
+        // set-builder notation and units.
+        "{" => v('{', Open),
+        "}" => v('}', Close),
+        "%" => v('%', Ord),
+        "#" => v('#', Ord),
+        "&" => v('&', Ord),
+        "_" => v('_', Ord),
+        "$" => v('$', Ord),
         "uparrow " => v('\u{2191}', Ord),
         // Big operators (class Op; the layout gives them limits).
         "sum" => v('\u{2211}', Op),
@@ -494,5 +503,107 @@ pub fn char_remap(c: char) -> char {
         '*' => '\u{2217}', // asterisk operator
         '\'' => '\u{2032}', // prime
         _ => c,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_table_class_and_codepoint() {
+        // Greek lowercase is math-italic; uppercase upright.
+        assert_eq!(command("alpha"), Some(('\u{1D6FC}', Class::Ord)));
+        assert_eq!(command("Gamma"), Some(('\u{0393}', Class::Ord)));
+        // Big operators are Op (the layout gives them limits).
+        assert_eq!(command("sum"), Some(('\u{2211}', Class::Op)));
+        assert_eq!(command("int"), Some(('\u{222B}', Class::Op)));
+        assert_eq!(command("prod"), Some(('\u{220F}', Class::Op)));
+        // Relations / binops / delimiters land in the right class.
+        assert_eq!(command("leq"), Some(('\u{2264}', Class::Rel)));
+        assert_eq!(command("to"), Some(('\u{2192}', Class::Rel)));
+        assert_eq!(command("pm"), Some(('\u{00B1}', Class::Bin)));
+        assert_eq!(command("times"), Some(('\u{00D7}', Class::Bin)));
+        assert_eq!(command("langle"), Some(('\u{27E8}', Class::Open)));
+        assert_eq!(command("rangle"), Some(('\u{27E9}', Class::Close)));
+        // Aliases resolve identically.
+        assert_eq!(command("le"), command("leq"));
+        assert_eq!(command("ge"), command("geq"));
+        assert_eq!(command("land"), command("wedge"));
+        assert_eq!(command("rightarrow"), command("to"));
+        assert_eq!(command("neg"), command("lnot"));
+        // Backslash-escaped literals resolve to their glyph.
+        assert_eq!(command("{"), Some(('{', Class::Open)));
+        assert_eq!(command("}"), Some(('}', Class::Close)));
+        assert_eq!(command("%"), Some(('%', Class::Ord)));
+        assert_eq!(command("#"), Some(('#', Class::Ord)));
+        assert_eq!(command("_"), Some(('_', Class::Ord)));
+        // Structural commands are not symbols.
+        assert_eq!(command("frac"), None);
+        assert_eq!(command("totallybogus"), None);
+    }
+
+    #[test]
+    fn operator_names_and_limits() {
+        assert_eq!(operator_name("sin"), Some(("sin", false)));
+        assert_eq!(operator_name("log"), Some(("log", false)));
+        assert_eq!(operator_name("lim"), Some(("lim", true)));
+        assert_eq!(operator_name("max"), Some(("max", true)));
+        assert_eq!(operator_name("limsup"), Some(("lim sup", true)));
+        assert_eq!(operator_name("det"), Some(("det", true)));
+        assert_eq!(operator_name("frac"), None);
+    }
+
+    #[test]
+    fn literal_char_class_and_remap() {
+        assert_eq!(char_class('+'), Class::Bin);
+        assert_eq!(char_class('-'), Class::Bin);
+        assert_eq!(char_class('='), Class::Rel);
+        assert_eq!(char_class('<'), Class::Rel);
+        assert_eq!(char_class('('), Class::Open);
+        assert_eq!(char_class(')'), Class::Close);
+        assert_eq!(char_class(','), Class::Punct);
+        assert_eq!(char_class('x'), Class::Ord);
+        // Prettier math glyphs for a few ASCII chars.
+        assert_eq!(char_remap('-'), '\u{2212}');
+        assert_eq!(char_remap('*'), '\u{2217}');
+        assert_eq!(char_remap('\''), '\u{2032}');
+        assert_eq!(char_remap('x'), 'x');
+    }
+
+    #[test]
+    fn styled_letter_contiguous_ranges() {
+        use Variant::*;
+        assert_eq!(styled_letter('x', Italic), '\u{1D465}');
+        assert_eq!(styled_letter('A', Italic), '\u{1D434}');
+        assert_eq!(styled_letter('a', Bold), '\u{1D41A}');
+        assert_eq!(styled_letter('0', Bold), '\u{1D7CE}');
+        assert_eq!(styled_letter('z', SansSerif), '\u{1D5D3}');
+        assert_eq!(styled_letter('a', Mono), '\u{1D68A}');
+        // Normal / Roman pass through; non-letters always pass through.
+        assert_eq!(styled_letter('x', Normal), 'x');
+        assert_eq!(styled_letter('x', Roman), 'x');
+        assert_eq!(styled_letter('+', Bold), '+');
+        assert_eq!(styled_letter('5', Italic), '5'); // italic digits don't exist
+    }
+
+    #[test]
+    fn styled_letter_unicode_holes() {
+        use Variant::*;
+        // Letterlike-symbols carve holes out of the Plane-1 ranges.
+        assert_eq!(styled_letter('h', Italic), '\u{210E}'); // ℎ Planck
+        assert_eq!(styled_letter('C', DoubleStruck), '\u{2102}'); // ℂ
+        assert_eq!(styled_letter('N', DoubleStruck), '\u{2115}'); // ℕ
+        assert_eq!(styled_letter('R', DoubleStruck), '\u{211D}'); // ℝ
+        assert_eq!(styled_letter('Z', DoubleStruck), '\u{2124}'); // ℤ
+        assert_eq!(styled_letter('n', DoubleStruck), '\u{1D55F}'); // contiguous
+        assert_eq!(styled_letter('B', Script), '\u{212C}'); // ℬ
+        assert_eq!(styled_letter('L', Script), '\u{2112}'); // ℒ
+        assert_eq!(styled_letter('e', Script), '\u{212F}'); // ℯ
+        assert_eq!(styled_letter('A', Script), '\u{1D49C}'); // contiguous
+        assert_eq!(styled_letter('H', Fraktur), '\u{210C}'); // ℌ
+        assert_eq!(styled_letter('R', Fraktur), '\u{211C}'); // ℜ
+        assert_eq!(styled_letter('C', Fraktur), '\u{212D}'); // ℭ
+        assert_eq!(styled_letter('a', Fraktur), '\u{1D51E}'); // contiguous
     }
 }

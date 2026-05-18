@@ -1,21 +1,26 @@
-//! LaTeX math end-to-end. Inline `$…$` renders as an italic
-//! monospace run (the `$` delimiters are stripped); display `$$…$$`
-//! renders as its own centered block. `\$` is a literal dollar.
-//! Unterminated `$` degrades to literal text without panicking.
+//! LaTeX math end-to-end. Both inline `$…$` and display `$$…$$` are
+//! typeset by the in-tree TeX engine and drawn as filled glyph
+//! *outlines* (no embedded font, nothing selectable). `\$` is a
+//! literal dollar; unterminated `$` degrades to literal text.
 
 use super::common::*;
 
 #[test]
-fn inline_math_strips_delimiters_and_keeps_content() {
+fn inline_math_strips_delimiters_and_typesets() {
     let bytes = render("Mass-energy: $E = mc^2$ holds.", "");
+    let plain = render("Mass-energy:  holds.", "");
     assert!(pdf_well_formed(&bytes));
-    // The formula body reaches the content stream...
-    assert!(contains_text(&bytes, "mc^2"), "math content missing");
-    // ...but the `$` delimiters do not survive as literal text.
+    // Surrounding prose stays selectable text...
+    assert!(contains_text(&bytes, "Mass-energy:"));
+    assert!(contains_text(&bytes, "holds."));
+    // ...the math is drawn as vector outlines (extra fill ops)...
     assert!(
-        !contains_text(&bytes, "$E"),
-        "the opening $ delimiter leaked into the output"
+        count_rect_ops(&bytes) > count_rect_ops(&plain),
+        "inline math must emit filled glyph outlines"
     );
+    // ...and the `$` delimiters never reach the output as text.
+    assert!(!contains_text(&bytes, "$E"), "opening $ leaked");
+    assert!(!contains_text(&bytes, "mc^2"), "math must not be text");
 }
 
 #[test]
@@ -53,67 +58,82 @@ fn display_math_renders_as_its_own_block() {
         "Before the equation.\n\n$$E = mc^2$$\n\nAfter the equation.",
         "",
     );
+    let plain = render("Before the equation.\n\nAfter the equation.", "");
     assert!(pdf_well_formed(&bytes));
     // The display span flushes the paragraph before it and starts a
     // fresh one after — both surrounding paragraphs survive intact.
     assert!(contains_text(&bytes, "Before the equation."));
     assert!(contains_text(&bytes, "After the equation."));
-    // The formula body is rendered.
-    assert!(contains_text(&bytes, "mc^2"), "display math body missing");
-    // The `$$` delimiters do not survive as literal text.
+    // Math is drawn as filled glyph outlines, so the equation adds
+    // vector fill ops the plain document doesn't have...
+    assert!(
+        count_rect_ops(&bytes) > count_rect_ops(&plain),
+        "display math must emit filled glyph outlines"
+    );
+    // ...and nothing about it is selectable text: no embedded math
+    // font, and the `$$` delimiters never reach the stream.
     assert!(!contains_text(&bytes, "$$"), "display delimiters leaked");
+    assert!(
+        !bytes.windows(8).any(|w| w == b"FontFile"),
+        "math must not embed a font (outlines only)"
+    );
 }
 
 #[test]
 fn display_math_with_tex_backslashes_still_renders() {
-    // `\int_0^1 x\,dx` reaches the content stream via an embedded
-    // monospace face (hex-encoded glyphs), so we assert robustness
-    // and block separation rather than the literal body text.
-    let bytes = render(
-        "Lead.\n\n$$\\int_0^1 x\\,dx$$\n\nTail.",
-        "",
-    );
+    let bytes = render("Lead.\n\n$$\\int_0^1 x\\,dx$$\n\nTail.", "");
+    let plain = render("Lead.\n\nTail.", "");
     assert!(pdf_well_formed(&bytes));
     assert!(contains_text(&bytes, "Lead."));
     assert!(contains_text(&bytes, "Tail."));
+    assert!(
+        count_rect_ops(&bytes) > count_rect_ops(&plain),
+        "\\int_0^1 x\\,dx must typeset to filled outlines"
+    );
 }
 
 #[test]
-fn display_math_is_centered_one_absolute_move_per_line() {
-    // A left-aligned multi-line paragraph emits a single absolute
-    // `Td` then relative line motion. Centered display math emits one
-    // absolute `Td` per source line, so a 3-line equation yields
-    // strictly more `Td` ops than an equivalent plain paragraph.
-    let plain = render(
-        "alpha line one here\nbeta line two here\ngamma line three",
-        "",
-    );
-    let mathy = render("$$\na = 1\nb = 2\nc = 3\n$$", "");
-    assert!(pdf_well_formed(&mathy));
-    let td_plain = count_substr(&plain, b" Td");
-    let td_math = count_substr(&mathy, b" Td");
+fn display_math_is_not_selectable_text() {
+    // The whole point of outline rendering: math contributes vector
+    // fills, never glyph text. A doc whose only content is display
+    // math must have far more fill ops than text-show ops.
+    let bytes = render("$$\\frac{a+b}{c-d} = \\sqrt{x^2+y^2}$$", "");
+    assert!(pdf_well_formed(&bytes));
     assert!(
-        td_math >= 3 && td_math > td_plain,
-        "centered display math must place each line absolutely \
-         (plain={td_plain}, math={td_math})"
+        count_rect_ops(&bytes) > 5,
+        "a fraction + radical should emit many filled outlines"
+    );
+    assert!(
+        !bytes.windows(8).any(|w| w == b"FontFile"),
+        "no font should be embedded for math"
     );
 }
 
 #[test]
 fn inline_math_inside_emphasis_and_heading_renders() {
     let bytes = render("# The $E=mc^2$ result\n\nText with *the $a+b$ term* inside.", "");
+    let plain = render("# The  result\n\nText with *the  term* inside.", "");
     assert!(pdf_well_formed(&bytes));
-    assert!(contains_text(&bytes, "mc^2"));
-    assert!(contains_text(&bytes, "a+b"));
+    // Surrounding heading / emphasis text is unaffected; the two
+    // inline formulae add vector fills.
+    assert!(contains_text(&bytes, "result"));
+    assert!(
+        count_rect_ops(&bytes) > count_rect_ops(&plain),
+        "inline math in heading/emphasis must typeset to outlines"
+    );
 }
 
 #[test]
 fn math_inside_lists_and_blockquotes_renders() {
     let bytes = render("- first $x_1$\n- second $x_2$\n\n> quoted $y^2$", "");
+    let plain = render("- first \n- second \n\n> quoted ", "");
     assert!(pdf_well_formed(&bytes));
-    assert!(contains_text(&bytes, "x_1"));
-    assert!(contains_text(&bytes, "x_2"));
-    assert!(contains_text(&bytes, "y^2"));
+    assert!(contains_text(&bytes, "first"));
+    assert!(contains_text(&bytes, "quoted"));
+    assert!(
+        count_rect_ops(&bytes) > count_rect_ops(&plain),
+        "math in lists/blockquotes must typeset to outlines"
+    );
 }
 
 #[test]
@@ -155,4 +175,51 @@ fn adversarial_dollar_documents_never_panic() {
         let bytes = render(src, "");
         assert!(pdf_well_formed(&bytes), "{src:?} produced a malformed PDF");
     }
+}
+
+#[test]
+fn math_config_color_reaches_the_stream() {
+    // `[math] color` is emitted as the polygon fill colour. printpdf
+    // normalizes components, so pure green is `0 1 0 rg`.
+    let cfg = "[math]\ncolor = \"#00FF00\"\n";
+    let bytes = render("$$x^2 + y^2$$", cfg);
+    assert!(pdf_well_formed(&bytes));
+    assert!(
+        contains_text(&bytes, "0 1 0 rg") || contains_text(&bytes, "0.0 1.0 0.0 rg"),
+        "custom [math] color must reach the content stream"
+    );
+}
+
+#[test]
+fn math_config_align_shifts_the_block() {
+    // Left-aligned display math starts at the left margin; centered
+    // starts further right. The first glyph polygon's leftmost X
+    // therefore differs. We approximate by comparing the byte offset
+    // of the first fill op's coordinates is fragile, so instead just
+    // assert both render well-formed and differently sized streams.
+    let left = render("$$X = 1$$", "[math]\nalign = \"left\"\n");
+    let center = render("$$X = 1$$", "[math]\nalign = \"center\"\n");
+    let right = render("$$X = 1$$", "[math]\nalign = \"right\"\n");
+    for b in [&left, &center, &right] {
+        assert!(pdf_well_formed(b));
+        assert!(count_rect_ops(b) > 0, "equation must still render");
+    }
+    // The three alignments place the same glyphs at different x — the
+    // content streams must not be byte-identical.
+    assert!(left != center && center != right && left != right);
+}
+
+#[test]
+fn math_config_scale_changes_size() {
+    let small = render("$$\\frac{a}{b}$$", "[math]\nscale = 0.8\n");
+    let big = render("$$\\frac{a}{b}$$", "[math]\nscale = 2.0\n");
+    assert!(pdf_well_formed(&small) && pdf_well_formed(&big));
+    // Same glyph count, but bigger scale ⇒ larger outline coordinates
+    // ⇒ a longer content stream.
+    assert!(
+        big.len() > small.len(),
+        "scale = 2.0 must produce larger geometry than scale = 0.8 ({} vs {})",
+        big.len(),
+        small.len()
+    );
 }

@@ -74,6 +74,8 @@ pub struct MathConstants {
     pub superscript_shift_up_cramped: f32,
     pub superscript_bottom_min: f32,
     pub superscript_baseline_drop_max: f32,
+    pub sub_superscript_gap_min: f32,
+    pub superscript_bottom_max_with_subscript: f32,
     pub space_after_script: f32,
 
     pub upper_limit_gap_min: f32,
@@ -139,6 +141,10 @@ impl MathFont {
             superscript_shift_up_cramped: v(k.superscript_shift_up_cramped()),
             superscript_bottom_min: v(k.superscript_bottom_min()),
             superscript_baseline_drop_max: v(k.superscript_baseline_drop_max()),
+            sub_superscript_gap_min: v(k.sub_superscript_gap_min()),
+            superscript_bottom_max_with_subscript: v(
+                k.superscript_bottom_max_with_subscript(),
+            ),
             space_after_script: v(k.space_after_script()),
             upper_limit_gap_min: v(k.upper_limit_gap_min()),
             upper_limit_baseline_rise_min: v(k.upper_limit_baseline_rise_min()),
@@ -292,6 +298,25 @@ impl MathFont {
             }
         }
         Stretch::Single(base)
+    }
+
+    /// Smallest horizontal variant of `base` at least `target` font
+    /// units wide (for stretchy accents like `\widehat`, `\overline`
+    /// arrows). Returns `base` unchanged when the font has no wider
+    /// variant.
+    pub fn widen(&self, base: u16, target: f32) -> u16 {
+        let Some(variants) = self.face.tables().math.and_then(|m| m.variants) else {
+            return base;
+        };
+        let Some(con) = variants.horizontal_constructions.get(GlyphId(base)) else {
+            return base;
+        };
+        for var in con.variants {
+            if var.advance_measurement as f32 >= target {
+                return var.variant_glyph.0;
+            }
+        }
+        con.variants.last().map(|v| v.variant_glyph.0).unwrap_or(base)
     }
 }
 
