@@ -231,6 +231,16 @@ pub enum Token {
     /// inline styles; the renderer paints a configurable background
     /// behind the run.
     Highlight(Vec<Token>),
+    /// LaTeX-style math. `$...$` is inline (`inline: true`), `$$...$$`
+    /// is a display block (`inline: false`). `content` is the raw TeX
+    /// between the delimiters, stored verbatim — no markdown parsing
+    /// and no escape decoding happen inside, so `\,`, `\int`, `^`, `_`
+    /// reach a math typesetter unmodified. Delimiter handling follows
+    /// Pandoc: an inline opener needs a non-space immediately after
+    /// `$`, an inline closer needs a non-space immediately before `$`
+    /// and must not be directly followed by a digit; `\$` is a literal
+    /// dollar; an unterminated `$` degrades to literal text.
+    Math { inline: bool, content: String },
     /// Unknown or malformed token
     Unknown(String),
 }
@@ -328,6 +338,7 @@ impl Token {
                     token.collect_text_recursive(result);
                 }
             }
+            Token::Math { content, .. } => result.push_str(content),
             Token::FootnoteReference(label) => {
                 // Markers are rendered visually as numbers; for text-
                 // extraction purposes (validation, title fallback) we
@@ -1388,6 +1399,7 @@ fn last_meaningful_char(tok: &Token) -> Option<char> {
         Token::Text(s) => s.chars().last(),
         Token::DelimRun { ch, .. } => Some(*ch),
         Token::Code { content, .. } => content.chars().last().or(Some('`')),
+        Token::Math { content, .. } => content.chars().last().or(Some('$')),
         Token::HtmlInline(s) | Token::HtmlComment(s) => s.chars().last(),
         Token::Emphasis { content, .. } => last_meaningful_in_slice(content),
         Token::StrongEmphasis(content) => last_meaningful_in_slice(content),
@@ -1407,6 +1419,7 @@ fn first_meaningful_char(tok: &Token) -> Option<char> {
         Token::Text(s) => s.chars().next(),
         Token::DelimRun { ch, .. } => Some(*ch),
         Token::Code { content, .. } => content.chars().next().or(Some('`')),
+        Token::Math { content, .. } => content.chars().next().or(Some('$')),
         Token::HtmlInline(s) | Token::HtmlComment(s) => s.chars().next(),
         Token::Emphasis { content, .. } => first_meaningful_in_slice(content),
         Token::StrongEmphasis(content) => first_meaningful_in_slice(content),
@@ -1513,6 +1526,20 @@ fn is_ascii_punctuation(c: char) -> bool {
             | '}'
             | '~'
     )
+}
+
+/// True when the character at `idx` is preceded by an odd number of
+/// consecutive backslashes, i.e. it is backslash-escaped. Used by the
+/// math scanner so a TeX `\$` inside `$…$` isn't mistaken for a
+/// closing delimiter.
+fn is_backslash_escaped(chars: &[char], idx: usize) -> bool {
+    let mut backslashes = 0usize;
+    let mut p = idx;
+    while p > 0 && chars[p - 1] == '\\' {
+        backslashes += 1;
+        p -= 1;
+    }
+    backslashes % 2 == 1
 }
 
 /// GitHub-style heading slug: lowercase, ASCII letters + digits kept,
@@ -2236,6 +2263,7 @@ impl Lexer {
                     self.parse_text(ctx)?
                 }
             }
+            '$' if self.scan_math().is_some() => self.parse_math(),
             _ => self.parse_text(ctx)?,
         };
 
@@ -2604,6 +2632,109 @@ impl Lexer {
         let mut content = content;
         resolve_emphasis(&mut content);
         Ok(Token::Highlight(content))
+    }
+
+    /// Pandoc-style math delimiter scan. Assumes
+    /// `self.input[self.position] == '$'`. Returns
+    /// `Some((inline, content_start, content_end, after_close))` when a
+    /// well-formed span is present:
+    ///
+    /// * **Display** — `$$ … $$`. Opener and closer are exactly two
+    ///   `$`. The body may span lines, but a blank line (`\n\n`) ends
+    ///   the surrounding paragraph and so terminates the span.
+    /// * **Inline** — `$ … $`. The char after the opener must be
+    ///   non-whitespace; the char before the closer must be
+    ///   non-whitespace and the char after it must not be an ASCII
+    ///   digit (so `$5 and $6` is not math). A backslash-escaped `\$`
+    ///   is not a delimiter, and inline math does not cross a line
+    ///   break.
+    ///
+    /// Returns `None` when no valid closer exists — the caller then
+    /// keeps the `$` as literal text, so an unterminated `$` never
+    /// panics.
+    fn scan_math(&self) -> Option<(bool, usize, usize, usize)> {
+        if self.current_char() != '$' {
+            return None;
+        }
+        let n = self.input.len();
+        let dollars = self.count_consecutive('$');
+
+        if dollars >= 2 {
+            // Display: opener `$$`, closer `$$`.
+            let content_start = self.position + 2;
+            let mut i = content_start;
+            while i + 1 < n {
+                if self.input[i] == '\n' && self.input[i + 1] == '\n' {
+                    return None;
+                }
+                if self.input[i] == '$'
+                    && self.input[i + 1] == '$'
+                    && !is_backslash_escaped(&self.input, i)
+                {
+                    return Some((false, content_start, i, i + 2));
+                }
+                i += 1;
+            }
+            return None;
+        }
+
+        // Inline: single `$`. The opener must be followed by a
+        // non-space, non-`$` character.
+        let after_open = *self.input.get(self.position + 1)?;
+        if after_open.is_whitespace() || after_open == '$' {
+            return None;
+        }
+        let content_start = self.position + 1;
+        let mut i = content_start;
+        while i < n {
+            let c = self.input[i];
+            if c == '\n' {
+                return None;
+            }
+            if c == '$' && !is_backslash_escaped(&self.input, i) {
+                let before = self.input[i - 1];
+                let after = self.input.get(i + 1).copied();
+                if !before.is_whitespace()
+                    && !matches!(after, Some(d) if d.is_ascii_digit())
+                {
+                    return Some((true, content_start, i, i + 1));
+                }
+                // A `$` that fails the closer test (`$5 and $6`)
+                // isn't a closer; keep looking for a later one.
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Consumes a `$…$` / `$$…$$` math span. The caller has confirmed
+    /// via [`Self::scan_math`] that a valid span starts here; we
+    /// re-scan and fall back to emitting the literal `$` run if that
+    /// ever changes, so this can never panic or stall.
+    fn parse_math(&mut self) -> Token {
+        match self.scan_math() {
+            Some((inline, content_start, content_end, after_close)) => {
+                let content: String =
+                    self.input[content_start..content_end].iter().collect();
+                self.position = after_close;
+                // Display math is centered as a block, so surrounding
+                // whitespace/newlines are noise; inline content is
+                // kept verbatim.
+                let content = if inline {
+                    content
+                } else {
+                    content.trim().to_string()
+                };
+                Token::Math { inline, content }
+            }
+            None => {
+                let run = self.count_consecutive('$');
+                for _ in 0..run.max(1) {
+                    self.advance();
+                }
+                Token::Text("$".repeat(run.max(1)))
+            }
+        }
     }
 
     /// Parses a `~~~`-fenced code block. Mirrors the backtick fence path but
@@ -4968,6 +5099,12 @@ impl Lexer {
             // but we still break so the dispatcher can decide.
             '=' => self.count_consecutive('=') >= 2,
 
+            // `$` only breaks the text run when it actually opens a
+            // well-formed math span (Pandoc delimiter rules). A lone
+            // `$` (prices, shell vars) stays glued to the text so it
+            // doesn't fragment into separate runs.
+            '$' => self.scan_math().is_some(),
+
             // `^[` may open a Pandoc inline footnote; a lone `^`
             // (`2^3`, `a ^ b`) stays literal text.
             '^' => {
@@ -5067,7 +5204,7 @@ impl Lexer {
         }
         matches!(
             self.input[self.position - 1],
-            '`' | ')' | ']' | '>' | '*' | '_' | '~' | '='
+            '`' | ')' | ']' | '>' | '*' | '_' | '~' | '=' | '$'
         )
     }
 

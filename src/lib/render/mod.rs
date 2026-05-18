@@ -55,6 +55,7 @@ mod hyphenate;
 mod ir;
 mod layout;
 mod lower;
+mod math;
 mod postprocess;
 
 use crate::markdown::Token;
@@ -157,6 +158,10 @@ pub fn render_to_bytes(
         Some(lang) => postprocess::inject_lang(bytes, lang),
         None => bytes,
     };
+
+    // printpdf 0.9 never compresses streams; deflate them ourselves
+    // (math vector outlines make raw page streams very large).
+    let bytes = postprocess::compress(bytes);
 
     Ok(bytes)
 }

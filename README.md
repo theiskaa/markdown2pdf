@@ -2,18 +2,25 @@
 
 <p align="center">
 
-[![Crates.io](https://img.shields.io/crates/v/markdown2pdf)](https://crates.io/crates/markdown2pdf)
+[![CI](https://github.com/theiskaa/markdown2pdf/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/theiskaa/markdown2pdf/actions/workflows/ci.yml)
 [![Documentation](https://img.shields.io/docsrs/markdown2pdf)](https://docs.rs/markdown2pdf)
-[![License](https://img.shields.io/crates/l/markdown2pdf)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/markdown2pdf?color=orange)](https://crates.io/crates/markdown2pdf)
+[![Release](https://img.shields.io/github/v/release/theiskaa/markdown2pdf)](https://github.com/theiskaa/markdown2pdf/releases)
+[![MSRV](https://img.shields.io/crates/msrv/markdown2pdf?color=orange)](Cargo.toml)
+[![License](https://img.shields.io/crates/l/markdown2pdf?color=blue)](LICENSE)
 [![Downloads](https://img.shields.io/crates/d/markdown2pdf)](https://crates.io/crates/markdown2pdf)
 
 </p>
 
-markdown2pdf converts Markdown to PDF with a lexical analyzer and an in-tree rendering engine built directly on `printpdf`. The library tokenizes Markdown into semantic elements, resolves styling from a TOML configuration, and lays out the PDF itself — no third-party document engine in between.
+markdown2pdf converts Markdown to PDF through a fully in-tree pipeline: a CommonMark/GFM lexer, a TOML-driven style resolver, and a layout engine built directly on `printpdf`. There is no intermediate HTML and no third-party document engine.
 
-Both a binary and a library are provided. The binary offers CLI conversion from files, URLs, or strings. The library enables programmatic PDF generation with full control over styling and fonts. Configuration can be loaded at runtime or embedded at compile time for containerized deployments.
+It ships as both a binary and a library. The binary converts from a file, URL, or string on the command line; the library exposes programmatic generation with full control over styling and fonts. Configuration is loaded at runtime or embedded at compile time for containerized deployments.
 
-The lexer targets CommonMark 0.31.2 with the GitHub Flavored Markdown extensions plus note-tool extensions (WikiLinks, `==highlight==`); it passes 649 of the 652 CommonMark spec examples, the 3 exceptions being deliberate where the WikiLink syntax reclaims `[[…]]` (which CommonMark treats as nested brackets). The renderer covers headings with bookmarks and anchors, inline emphasis (bold, italic, monospace, strikethrough, underline, highlight, superscript, subscript, small-caps), ordered/unordered/task lists with arbitrary nesting, GFM tables with per-column alignment and header repeat, blockquotes, fenced and indented code, images (local, URL, and SVG), footnotes, definition lists, cross-references, WikiLinks, and inline HTML. Document features include six bundled themes, per-block styling, configurable page setup, headers and footers, an auto-generated table of contents, a title page, YAML/TOML frontmatter, and PDF metadata. Multiple input sources; output to a file or to bytes for in-memory processing.
+The lexer targets CommonMark 0.31.2 plus GFM and note-tool extensions such as WikiLinks, `==highlight==`, and LaTeX math, and passes 649 of the 652 CommonMark spec examples. The exceptions are deliberate, where the WikiLink syntax reclaims `[[…]]` (which CommonMark treats as nested brackets). Conformance is held in place by the full CommonMark spec runner alongside the lexer-unit, stress, and adversarial renderer suites.
+
+The renderer covers headings with bookmarks and anchors, the full inline-emphasis set (bold, italic, monospace, strikethrough, underline, highlight, super/subscript, small-caps), nested ordered/unordered/task lists, GFM tables with per-column alignment and header repeat, blockquotes, fenced and indented code, images (local, URL, SVG), footnotes, definition lists, cross-references, and inline HTML. Mathematics is typeset by a built-in TeX engine — real fraction bars, radicals, script stacks, big operators with limits, growing delimiters, matrices, and accents — drawn as vector outlines and configurable through a `[math]` style block.
+
+Documents are styled per block with six bundled themes, configurable page setup, running headers and footers, an auto-generated table of contents, a title page, YAML/TOML frontmatter, and PDF metadata. Output is written to a file or returned as an in-memory byte buffer.
 
 ## Install binary
 
@@ -68,10 +75,10 @@ Or, in `Cargo.toml`:
 
 ```toml
 # Minimal — local files only, no network, no SVG
-markdown2pdf = "1.1.0"
+markdown2pdf = "1.2.0"
 
 # Or with URL fetching + SVG rasterization
-markdown2pdf = { version = "1.1.0", features = ["fetch", "svg"] }
+markdown2pdf = { version = "1.2.0", features = ["fetch", "svg"] }
 ```
 
 See [docs/library.md](docs/library.md) for the programmatic API.
@@ -119,9 +126,8 @@ copy-and-tweak reference config is **[`docs/config.toml`](docs/config.toml)**.
 
 ## Usage
 
-`markdown2pdf` converts a file (`-p`), a string (`-s`), or a URL
-(`-u`, requires the `fetch` build feature) to a PDF (`-o`, default
-`./output.pdf`).
+The binary converts a file (`-p`), a string (`-s`), or a URL (`-u`,
+with the `fetch` feature) to a PDF (`-o`, default `./output.pdf`).
 
 ```bash
 markdown2pdf -p docs/resume.md -o resume.pdf
@@ -129,16 +135,17 @@ markdown2pdf -s "**bold** *italic*." -o out.pdf
 markdown2pdf -p doc.md --theme academic --page-numbers -o out.pdf
 ```
 
-`--verbose` / `--quiet` control output; `--dry-run` validates
-without writing; `--print-effective-config` prints the resolved
-style as TOML. Full flag reference, the config-override system, and
-font selection: **[`docs/cli.md`](docs/cli.md)**.
+`--dry-run` validates input without writing; `--print-effective-config`
+emits the resolved style as TOML; `--verbose` and `--quiet` adjust
+logging. The complete flag reference, config-override precedence, and
+font selection are in **[`docs/cli.md`](docs/cli.md)**.
 
 ## Library Usage
 
-`parse_into_file` writes a PDF; `parse_into_bytes` returns a
-`Vec<u8>` for web services. `ConfigSource` selects styling
-(`Default`, `Theme("github")`, `File(path)`, `Embedded(toml)`).
+`parse_into_file` writes a PDF to disk; `parse_into_bytes` returns the
+document as a `Vec<u8>` for in-memory use. `ConfigSource` selects
+styling — `Default`, `Theme("github")`, `File(path)`, or
+`Embedded(toml)`.
 
 ```rust
 use markdown2pdf::{parse_into_file, config::ConfigSource};
@@ -147,13 +154,9 @@ parse_into_file("# Hello".into(), "out.pdf", ConfigSource::Default, None)?;
 parse_into_file("# Doc".into(), "out.pdf", ConfigSource::Theme("academic"), None)?;
 ```
 
-Pre-resolved styles + runtime overrides, fonts (name / path /
-embedded bytes), frontmatter, and the error model are covered in
-**[`docs/library.md`](docs/library.md)**.
-
-## Markdown Coverage
-
-Targets [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) + [GFM](https://github.github.com/gfm/), plus the WikiLink and `==highlight==` note-tool extensions. CommonMark spec pass rate: **649/652** — the 3 exceptions are deliberate, where the WikiLink extension reclaims `[[…]]` (CommonMark treats it as nested/shortcut-reference brackets). Backed by ~800 inline lexer unit tests in `tests/markdown/`, the full spec runner in `tests/commonmark_spec.rs`, a robustness suite in `tests/stress.rs`, and an adversarial / structural renderer test suite in `tests/render/` (object-graph validation, malformed input, image-pipeline, and config-validation cases).
+Pre-resolved styles and runtime overrides, font selection (by name,
+path, or embedded bytes), frontmatter, and the error model are
+covered in **[`docs/library.md`](docs/library.md)**.
 
 ## Contributing
 For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.

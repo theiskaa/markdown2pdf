@@ -7,14 +7,13 @@
 //! how many lines the text occupied and where breaks landed.
 
 use super::common::*;
-use markdown2pdf::config::ConfigSource;
 
 /// Render `md` with `cfg` (embedded TOML) and return each `Tj`
-/// show-text operand in document order.
+/// show-text operand in document order. `render` returns the
+/// stream-expanded PDF — the renderer Flate-compresses content, so
+/// the operators are only visible after expansion.
 fn show_text_lines(md: &str, cfg: &str) -> Vec<String> {
-    let bytes =
-        markdown2pdf::parse_into_bytes(md.to_string(), ConfigSource::Embedded(cfg), None)
-            .expect("render");
+    let bytes = render(md, cfg);
     let s = String::from_utf8_lossy(&bytes);
     s.lines()
         .map(|l| l.trim())
@@ -29,9 +28,7 @@ fn show_text_lines(md: &str, cfg: &str) -> Vec<String> {
 /// Count `Td` text-position ops — a proxy for "number of laid-out
 /// lines / segments".
 fn td_count(md: &str, cfg: &str) -> usize {
-    let bytes =
-        markdown2pdf::parse_into_bytes(md.to_string(), ConfigSource::Embedded(cfg), None)
-            .expect("render");
+    let bytes = render(md, cfg);
     let s = String::from_utf8_lossy(&bytes);
     s.lines().filter(|l| l.trim().ends_with(" Td")).count()
 }

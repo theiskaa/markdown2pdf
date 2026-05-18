@@ -1,14 +1,15 @@
 //! End-to-end regression tests for the renderer's font handling.
 //!
 //! These tests assert on bytes emitted into the rendered PDF. The
-//! FontDescriptor block printpdf emits is decompressed (no Flate
-//! filter), so byte-level scans against it are cheap and stable.
+//! post-process ships compressed object + cross-reference streams, so
+//! `extract_named_numbers` first routes through `scan` to expand the
+//! PDF back to plain individual objects before the byte-level scan.
 
 use markdown2pdf::config::ConfigSource;
 use markdown2pdf::fonts::{FontConfig, FontSource};
 use markdown2pdf::parse_into_bytes;
 
-use super::common::any_system_font;
+use super::common::{any_system_font, scan};
 
 /// Read every `/Ascent <number>` value emitted in the PDF.
 ///
@@ -23,6 +24,10 @@ fn descents(bytes: &[u8]) -> Vec<i32> {
 }
 
 fn extract_named_numbers(bytes: &[u8], key: &[u8]) -> Vec<i32> {
+    // The post-process packs FontDescriptors into a compressed object
+    // stream; expand back to individual classic objects so the
+    // `/Ascent <n>` byte scan still sees them.
+    let bytes = &scan(bytes);
     let mut out = Vec::new();
     let mut pos = 0;
     while let Some(rel) = bytes[pos..].windows(key.len()).position(|w| w == key) {

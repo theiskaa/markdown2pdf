@@ -368,6 +368,61 @@ Some ==important== text, and a ==**bold mark**==.
 `---`) still underlines the paragraph above it as a Setext heading, and
 an unterminated `==` renders as literal text.
 
+### Math (`$…$`, `$$…$$`)
+
+`$…$` is inline math and `$$…$$` is a centered display block:
+
+```markdown
+The identity $a^2 + b^2 = c^2$ holds, and
+
+$$\int_0^1 x\,dx$$
+```
+
+The content between the delimiters is opaque TeX — no markdown
+parsing or escape decoding happens inside. A built-in TeX engine
+typesets it (TeXbook Appendix-G layout over STIX Two Math's OpenType
+MATH metrics): real fraction bars, radicals with indices, sub/
+superscript stacks, big operators with limits, delimiters that grow
+to their content, matrices, `cases`, accents, Greek, and
+`\mathbb`/`\mathbf`/`\mathcal`/… alphabets. Inline math sits on the
+text baseline and wraps as one indivisible box; display math is its
+own block. A command the engine doesn't know degrades to literal
+text rather than failing.
+
+The glyphs are drawn as filled **vector outlines**, not text — no
+font is embedded and the equation is not selectable, so it behaves
+like a figure in every PDF viewer (this matches how LaTeX-, MathJax-,
+and KaTeX-to-PDF pipelines treat math; selectable math would require
+tagged-PDF `/ActualText`).
+
+Delimiter handling follows Pandoc, so prose with dollar signs is not
+mistaken for math:
+
+- The opening `$` must be followed by a non-space character, and the
+  closing `$` must be preceded by one and not directly followed by a
+  digit — `$5 and $6` stays literal text.
+- `\$` is a literal dollar (`\$5.00` renders as `$5.00`).
+- Inline math is single-line; display math may span lines but a blank
+  line ends it.
+- An unterminated `$` or `$$` degrades to literal text rather than
+  breaking the export.
+
+Display blocks are configurable via `[math]`:
+
+```toml
+[math]
+align = "center"   # center (default) | left | right
+scale = 1.08        # display size as a multiple of the body size
+color = "#1A1A1A"   # math ink (defaults to the paragraph text color)
+margin_before_pt = 6
+margin_after_pt = 6
+```
+
+`scale` applies to display blocks; inline math always tracks the
+surrounding text size. With no `[math]` table, display math is
+centered at `1.08×` the body size in the paragraph color, with the
+paragraph's block spacing.
+
 ### Horizontal rule (`---`)
 
 ```toml

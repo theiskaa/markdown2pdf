@@ -498,6 +498,19 @@ fn render_inline_token(t: &Token, out: &mut String) {
             }
             out.push_str("</dl>");
         }
+        Token::Math { inline, content } => {
+            // Pandoc / MathJax-compatible delimiters. No CommonMark
+            // spec example produces math, so this only needs to be
+            // sensible and compile.
+            let (open, close) = if *inline {
+                ("\\(", "\\)")
+            } else {
+                ("\\[", "\\]")
+            };
+            out.push_str(open);
+            out.push_str(&escape_text(content));
+            out.push_str(close);
+        }
     }
 }
 

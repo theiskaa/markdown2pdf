@@ -483,6 +483,18 @@ impl Token {
                     indent
                 )
             }
+            Token::Math { inline, content } => {
+                format!(
+                    "{}{{\n{}\"type\": \"Math\",\n{}\"inline\": {},\n{}\"content\": \"{}\"\n{}}}",
+                    indent,
+                    inner_indent,
+                    inner_indent,
+                    inline,
+                    inner_indent,
+                    content.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n"),
+                    indent
+                )
+            }
         }
     }
 
@@ -631,6 +643,10 @@ impl Token {
                 format!("DefinitionList([{}])", es.join(", "))
             }
             Token::Unknown(s) => format!("Unknown({})", quote(s)),
+            Token::Math { inline, content } => {
+                let kind = if *inline { "inline" } else { "display" };
+                format!("Math({}, {})", kind, quote(content))
+            }
         }
     }
 

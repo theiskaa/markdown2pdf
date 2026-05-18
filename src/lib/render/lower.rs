@@ -130,6 +130,16 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 out.push(Block::DefinitionList { entries: ir_entries });
                 i += 1;
             }
+            Token::Math {
+                inline: false,
+                content,
+            } => {
+                flush_paragraph(&mut out, &mut buffered_inline);
+                out.push(Block::MathBlock {
+                    content: content.clone(),
+                });
+                i += 1;
+            }
             Token::FootnoteDefinition { label, content } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 // Definitions don't produce a Block at their source
@@ -860,6 +870,18 @@ fn flatten_one(
             let mono = flags.with_monospace();
             push_text(out, content, mono, link);
         }
+        Token::Math { content, .. } => {
+            // Inline math is one indivisible typeset box on the text
+            // baseline. A display-math token only reaches here when it
+            // isn't at the top level (e.g. inside a list item / table
+            // cell); the top-level lower loop promotes standalone
+            // display math to a centered `Block::MathBlock`.
+            out.push(InlineRun::math(
+                content.clone(),
+                flags,
+                link.map(|s| s.to_string()),
+            ));
+        }
         Token::Link { content, url, .. } => {
             // The link styling (underline + color) is applied at the
             // layout pass — here we just propagate the URL and mark
@@ -882,7 +904,7 @@ fn flatten_one(
                 .unwrap_or_else(|| label.clone());
             let anchor_link = number.map(|n| format!("#footnote-{}", n));
             let sup_flags = flags.with_superscript();
-            out.push(InlineRun {
+            out.push(InlineRun { math: None,
                 text: display,
                 flags: sup_flags,
                 link: anchor_link,
@@ -896,7 +918,7 @@ fn flatten_one(
             // numbering somehow missed it we emit nothing rather than
             // leak the control-prefixed id.
             if let Some(n) = footnotes.get(label).copied() {
-                out.push(InlineRun {
+                out.push(InlineRun { math: None,
                     text: n.to_string(),
                     flags: flags.with_superscript(),
                     link: Some(format!("#footnote-{}", n)),
@@ -971,12 +993,12 @@ fn push_text(out: &mut Vec<InlineRun>, text: &str, flags: RunFlags, link: Option
     }
     let link_owned = link.map(|s| s.to_string());
     if let Some(last) = out.last_mut() {
-        if last.flags == flags && last.link == link_owned {
+        if last.math.is_none() && last.flags == flags && last.link == link_owned {
             last.text.push_str(text);
             return;
         }
     }
-    out.push(InlineRun {
+    out.push(InlineRun { math: None,
         text: text.to_string(),
         flags,
         link: link_owned,
@@ -1058,6 +1080,60 @@ mod tests {
             panic!();
         };
         assert!(runs.iter().any(|r| r.text == "foo" && r.flags.monospace));
+    }
+
+    #[test]
+    fn inline_math_becomes_a_math_run() {
+        let blocks = lower(&[
+            Token::Text("when ".into()),
+            Token::Math {
+                inline: true,
+                content: "x^2".into(),
+            },
+        ]);
+        let Block::Paragraph { runs } = &blocks[0] else {
+            panic!("expected paragraph");
+        };
+        // The math run carries the raw TeX and no flowing text — the
+        // layout pass typesets + draws it as outlines.
+        assert!(runs
+            .iter()
+            .any(|r| r.math.as_deref() == Some("x^2") && r.text.is_empty()));
+    }
+
+    #[test]
+    fn display_math_becomes_centered_block_and_flushes_paragraphs() {
+        let blocks = lower(&[
+            Token::Text("intro".into()),
+            Token::Math {
+                inline: false,
+                content: "E = mc^2".into(),
+            },
+            Token::Text("outro".into()),
+        ]);
+        // Paragraph("intro"), MathBlock, Paragraph("outro").
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(blocks[0], Block::Paragraph { .. }));
+        let Block::MathBlock { content } = &blocks[1] else {
+            panic!("expected a MathBlock, got {:?}", blocks[1]);
+        };
+        assert_eq!(content, "E = mc^2");
+        assert!(matches!(blocks[2], Block::Paragraph { .. }));
+    }
+
+    #[test]
+    fn display_math_in_list_item_falls_back_to_inline_run() {
+        // A display token that isn't at the top level (here, inside a
+        // list item) must still render — as an inline math box —
+        // rather than vanish.
+        let blocks = lower(&lex("- see $$a+b$$ here"));
+        let Block::List { entries } = &blocks[0] else {
+            panic!("expected list");
+        };
+        assert!(entries[0]
+            .runs
+            .iter()
+            .any(|r| r.math.as_deref() == Some("a+b")));
     }
 
     #[test]

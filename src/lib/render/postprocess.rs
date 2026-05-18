@@ -8,7 +8,7 @@
 //! the user just doesn't get the polish.
 
 use crate::markdown::Token;
-use lopdf::{Dictionary, Document, Object};
+use lopdf::{Dictionary, Document, Object, SaveOptions};
 use std::collections::HashMap;
 
 /// Walk the token tree and collect a URL → tooltip map from
@@ -166,6 +166,76 @@ pub fn inject_lang(bytes: Vec<u8>, lang: &str) -> Vec<u8> {
         out
     } else {
         bytes
+    }
+}
+
+/// Shrink the PDF as much as is lossless. Two independent passes:
+///
+/// 1. `doc.compress()` — Flate-deflate every content / object
+///    *stream*. printpdf 0.9's `optimize` flag is a no-op (its
+///    `doc.compress()` call is commented out), so it ships raw,
+///    uncompressed page streams; math drawn as vector outlines makes
+///    those huge.
+/// 2. `save_with_options(use_object_streams + use_xref_streams)` —
+///    pack the non-stream indirect objects (page dicts, annotations,
+///    destinations, metadata) into a Flate-compressed object stream
+///    and replace the verbose ASCII xref table with a compact binary
+///    cross-reference stream (PDF 1.5+). Once the content streams are
+///    deflated this structural ASCII is the *majority* of the file,
+///    so this is the larger remaining win — and it is purely how
+///    objects are *stored*, never how anything renders.
+///
+/// Both are standard, viewer-universal mechanisms. The result is kept
+/// only if it is actually smaller; any parse / serialize failure
+/// degrades silently to the input bytes, so no document is ever lost.
+pub fn compress(bytes: Vec<u8>) -> Vec<u8> {
+    let Ok(mut doc) = Document::load_mem(&bytes) else {
+        return bytes;
+    };
+    fix_form_xobjects(&mut doc);
+    doc.compress();
+    let opts = SaveOptions {
+        use_object_streams: true,
+        use_xref_streams: true,
+        ..Default::default()
+    };
+    let mut out = Vec::new();
+    if doc.save_with_options(&mut out, opts).is_ok() && out.len() < bytes.len() {
+        out
+    } else {
+        bytes
+    }
+}
+
+/// printpdf 0.9's `FormXObject` serializer omits the spec-required
+/// `/BBox` and writes `/FormType` as a name instead of the integer
+/// `1`. The math engine emits one Form XObject per glyph (its outline
+/// in raw font units, scaled by a `1/upem` `/Matrix`), so patch every
+/// `/Subtype /Form` stream: add a generous font-unit bounding box
+/// (well beyond any glyph; `/BBox` only clips) and a numeric
+/// `/FormType`. Without `/BBox`, conformant viewers drop the form.
+fn fix_form_xobjects(doc: &mut Document) {
+    for obj in doc.objects.values_mut() {
+        let Object::Stream(stream) = obj else { continue };
+        let is_form = matches!(
+            stream.dict.get(b"Subtype"),
+            Ok(Object::Name(n)) if n == b"Form"
+        );
+        if !is_form {
+            continue;
+        }
+        stream.dict.set("FormType", Object::Integer(1));
+        if stream.dict.get(b"BBox").is_err() {
+            stream.dict.set(
+                "BBox",
+                Object::Array(vec![
+                    Object::Integer(-2000),
+                    Object::Integer(-2000),
+                    Object::Integer(4000),
+                    Object::Integer(4000),
+                ]),
+            );
+        }
     }
 }
 
