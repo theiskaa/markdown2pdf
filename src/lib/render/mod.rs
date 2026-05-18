@@ -55,6 +55,7 @@ mod hyphenate;
 mod ir;
 mod layout;
 mod lower;
+mod math;
 mod postprocess;
 
 use crate::markdown::Token;
