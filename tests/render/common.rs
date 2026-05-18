@@ -216,12 +216,23 @@ pub fn any_system_font() -> Option<String> {
 /// don't carry the untracked `examples/` directory.
 pub fn temp_jpeg_path() -> String {
     use image::{DynamicImage, ImageFormat, RgbImage};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    // Unique path per call. Image tests run in parallel; a fixed
+    // shared filename races — `fs::write` truncates then fills, so a
+    // concurrent test can read a half-written JPEG, the image silently
+    // fails to decode, and it takes its caption with it (flaky under
+    // full-suite load, fine in isolation). pid + counter isolates
+    // every call.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "m2p_test_fixture_image_{}_{n}.jpg",
+        std::process::id()
+    ));
     // Wide enough that a short caption renders on one line — captions
     // are wrap-constrained to the rendered image width, so a narrow
     // fixture would split `(This is a caption)` across multiple `Tj`
-    // operands and break caption tests. Always (re)written so a
-    // dimension change here can't be masked by a stale temp file.
-    let path = std::env::temp_dir().join("m2p_test_fixture_image.jpg");
+    // operands and break caption tests.
     let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
         1400,
         900,
