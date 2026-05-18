@@ -1254,24 +1254,39 @@ impl<'a> Engine<'a> {
         }
         let font = self.math.as_ref()?.as_ref()?;
         let upem = font.font.upem;
-        let contours = font.font.outline(gid);
-        if contours.is_empty() {
+        let segs = font.font.outline(gid);
+        if segs.is_empty() {
             return None;
         }
-        let mut s = String::with_capacity(contours.len() * 48);
-        for c in &contours {
-            if c.len() < 2 {
-                continue;
+        use super::math::font::PathSeg;
+        // Font units (~±2000) rounded to integers: ≈0.01 pt at body
+        // size after the 1/upem form matrix — sub-pixel, and the most
+        // compact encoding. Curves stay curves — one `c` per cubic
+        // instead of eight flattened `l` segments: far fewer bytes,
+        // and exact at any scale.
+        let mut s = String::with_capacity(segs.len() * 16);
+        let r = |v: f32| v.round() as i32;
+        for seg in &segs {
+            match *seg {
+                PathSeg::Move(x, y) => {
+                    s.push_str(&format!("{} {} m\n", r(x), r(y)));
+                }
+                PathSeg::Line(x, y) => {
+                    s.push_str(&format!("{} {} l\n", r(x), r(y)));
+                }
+                PathSeg::Cubic(x1, y1, x2, y2, x, y) => {
+                    s.push_str(&format!(
+                        "{} {} {} {} {} {} c\n",
+                        r(x1),
+                        r(y1),
+                        r(x2),
+                        r(y2),
+                        r(x),
+                        r(y)
+                    ));
+                }
+                PathSeg::Close => s.push_str("h\n"),
             }
-            let (x, y) = c[0];
-            // Font units (~±2000); integer precision is ≈0.01 pt at
-            // body size after the 1/upem form matrix — sub-pixel, and
-            // very compact.
-            s.push_str(&format!("{} {} m\n", x.round() as i32, y.round() as i32));
-            for &(x, y) in &c[1..] {
-                s.push_str(&format!("{} {} l\n", x.round() as i32, y.round() as i32));
-            }
-            s.push_str("h\n");
         }
         s.push_str("f\n");
         let form = printpdf::FormXObject {
@@ -1339,6 +1354,14 @@ impl<'a> Engine<'a> {
             .iter()
             .map(|g| (g.gid, x0 + g.x, base_pdf_y + g.y, g.size))
             .collect();
+        // The fill colour is the same for every glyph in the
+        // fragment, so set it once outside the per-glyph save/restore
+        // pairs (each `q`/`Q` preserves it) instead of re-emitting it
+        // per glyph.
+        if !glyphs.is_empty() {
+            self.page_ops
+                .push(Op::SetFillColor { col: color.clone() });
+        }
         for (gid, ox, oy, size) in glyphs {
             let Some(id) = self.math_glyph_xobject(gid) else {
                 continue;
@@ -1348,7 +1371,6 @@ impl<'a> Engine<'a> {
             // font units → em, so this lands the glyph at `size` pt,
             // origin `(ox, oy)`. Colour is inherited by the form.
             self.page_ops.push(Op::SaveGraphicsState);
-            self.page_ops.push(Op::SetFillColor { col: color.clone() });
             self.page_ops.push(Op::SetTransformationMatrix {
                 matrix: printpdf::CurTransMat::Raw([size, 0.0, 0.0, size, ox, oy]),
             });

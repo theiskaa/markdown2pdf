@@ -36,6 +36,17 @@ impl Glyph {
     }
 }
 
+/// One path segment of a glyph outline, in font units (y up, origin
+/// at the baseline). A `Move` opens a sub-contour and `Close` shuts
+/// it; cubic control points are absolute (PDF `c` semantics).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PathSeg {
+    Move(f32, f32),
+    Line(f32, f32),
+    Cubic(f32, f32, f32, f32, f32, f32),
+    Close,
+}
+
 /// One piece of an extensible-glyph assembly (e.g. a tall brace built
 /// from top / middle-extender / bottom segments).
 #[derive(Debug, Clone, Copy)]
@@ -246,20 +257,21 @@ impl MathFont {
             .unwrap_or_else(|| self.glyph(gid).advance / 2.0)
     }
 
-    /// Glyph outline as flattened contours in font units (y up,
-    /// origin at the glyph's baseline). Béziers are subdivided into
-    /// line segments so the renderer can fill them with the proven
-    /// polygon path — math is drawn as vector graphics, never as
-    /// selectable text, so it behaves like a figure in every viewer.
-    pub fn outline(&self, gid: u16) -> Vec<Vec<(f32, f32)>> {
+    /// Glyph outline as exact path segments in font units (y up,
+    /// origin at the glyph's baseline). Curves are preserved as cubic
+    /// Béziers (TrueType quadratics are elevated to cubics
+    /// losslessly), so the renderer fills them with native PDF curve
+    /// operators — sharper than flattened polylines at every scale
+    /// and a fraction of the bytes. Math is drawn as vector graphics,
+    /// never as selectable text, so it behaves like a figure in every
+    /// viewer.
+    pub fn outline(&self, gid: u16) -> Vec<PathSeg> {
         let mut b = Outliner {
-            contours: Vec::new(),
-            cur: Vec::new(),
+            segs: Vec::new(),
             last: (0.0, 0.0),
         };
         self.face.outline_glyph(GlyphId(gid), &mut b);
-        b.flush();
-        b.contours
+        b.segs
     }
 
     /// Choose a vertical realisation of `base` at least `target` font
@@ -320,67 +332,42 @@ impl MathFont {
     }
 }
 
-/// Flattens a glyph outline into polylines. Quadratic / cubic
-/// Béziers are subdivided at a fixed step — at print resolution the
-/// segments are visually indistinguishable from true curves.
+/// Collects a glyph outline as exact path segments. CFF cubics
+/// (STIX is CFF) pass through unchanged; TrueType quadratics are
+/// elevated to cubics with the standard exact formula so the emitter
+/// only ever deals with one curve type.
 struct Outliner {
-    contours: Vec<Vec<(f32, f32)>>,
-    cur: Vec<(f32, f32)>,
+    segs: Vec<PathSeg>,
     last: (f32, f32),
 }
 
-impl Outliner {
-    fn flush(&mut self) {
-        if self.cur.len() >= 2 {
-            self.contours.push(std::mem::take(&mut self.cur));
-        } else {
-            self.cur.clear();
-        }
-    }
-}
-
-const BEZIER_STEPS: usize = 8;
-
 impl ttf_parser::OutlineBuilder for Outliner {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.flush();
         self.last = (x, y);
-        self.cur.push((x, y));
+        self.segs.push(PathSeg::Move(x, y));
     }
     fn line_to(&mut self, x: f32, y: f32) {
         self.last = (x, y);
-        self.cur.push((x, y));
+        self.segs.push(PathSeg::Line(x, y));
     }
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        // Exact quadratic→cubic elevation: a degree-2 Bézier is the
+        // degree-3 one whose inner controls are 2/3 of the way from
+        // each endpoint to the shared quadratic control point.
         let (x0, y0) = self.last;
-        for i in 1..=BEZIER_STEPS {
-            let t = i as f32 / BEZIER_STEPS as f32;
-            let u = 1.0 - t;
-            let px = u * u * x0 + 2.0 * u * t * x1 + t * t * x;
-            let py = u * u * y0 + 2.0 * u * t * y1 + t * t * y;
-            self.cur.push((px, py));
-        }
+        let c1x = x0 + 2.0 / 3.0 * (x1 - x0);
+        let c1y = y0 + 2.0 / 3.0 * (y1 - y0);
+        let c2x = x + 2.0 / 3.0 * (x1 - x);
+        let c2y = y + 2.0 / 3.0 * (y1 - y);
+        self.segs.push(PathSeg::Cubic(c1x, c1y, c2x, c2y, x, y));
         self.last = (x, y);
     }
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        let (x0, y0) = self.last;
-        for i in 1..=BEZIER_STEPS {
-            let t = i as f32 / BEZIER_STEPS as f32;
-            let u = 1.0 - t;
-            let px = u * u * u * x0
-                + 3.0 * u * u * t * x1
-                + 3.0 * u * t * t * x2
-                + t * t * t * x;
-            let py = u * u * u * y0
-                + 3.0 * u * u * t * y1
-                + 3.0 * u * t * t * y2
-                + t * t * t * y;
-            self.cur.push((px, py));
-        }
+        self.segs.push(PathSeg::Cubic(x1, y1, x2, y2, x, y));
         self.last = (x, y);
     }
     fn close(&mut self) {
-        self.flush();
+        self.segs.push(PathSeg::Close);
     }
 }
 
@@ -396,6 +383,30 @@ mod tests {
         assert!(f.c.axis_height > 100.0 && f.c.axis_height < 400.0);
         assert!(f.c.fraction_rule_thickness > 0.0);
         assert!(f.c.script_percent > 0.5 && f.c.script_percent < 1.0);
+    }
+
+    #[test]
+    fn outline_preserves_curves_as_cubics() {
+        let f = MathFont::new().unwrap();
+        // A round glyph ('e') must come back with cubic Béziers, not
+        // a flood of line segments — that is the whole point of the
+        // curve-preserving emit (smaller + exact at any scale).
+        let g = f.glyph_id('e').expect("'e' in cmap");
+        let segs = f.outline(g);
+        assert!(!segs.is_empty(), "'e' must have an outline");
+        let cubics = segs
+            .iter()
+            .filter(|s| matches!(s, PathSeg::Cubic(..)))
+            .count();
+        assert!(cubics > 0, "curves must survive as cubic segments");
+        // Every sub-contour opens with a Move and the path is filled
+        // once (the emitter appends a single `f`); a glyph with no
+        // outline (space) yields nothing.
+        assert!(matches!(segs.first(), Some(PathSeg::Move(..))));
+        assert!(f
+            .glyph_id(' ')
+            .map(|sp| f.outline(sp).is_empty())
+            .unwrap_or(true));
     }
 
     #[test]
