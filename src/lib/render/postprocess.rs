@@ -8,7 +8,7 @@
 //! the user just doesn't get the polish.
 
 use crate::markdown::Token;
-use lopdf::{Dictionary, Document, Object};
+use lopdf::{Dictionary, Document, Object, SaveOptions};
 use std::collections::HashMap;
 
 /// Walk the token tree and collect a URL → tooltip map from
@@ -169,20 +169,38 @@ pub fn inject_lang(bytes: Vec<u8>, lang: &str) -> Vec<u8> {
     }
 }
 
-/// Flate-compress every content / object stream. printpdf 0.9's
-/// `optimize` flag is a no-op (its `doc.compress()` call is commented
-/// out), so it ships raw, uncompressed page streams — math drawn as
-/// vector outlines makes those huge. lopdf's `compress()` deflates
-/// them (typically ~8× on the ASCII-number-heavy content). Degrades
-/// silently to the input bytes on any parse / serialize failure.
+/// Shrink the PDF as much as is lossless. Two independent passes:
+///
+/// 1. `doc.compress()` — Flate-deflate every content / object
+///    *stream*. printpdf 0.9's `optimize` flag is a no-op (its
+///    `doc.compress()` call is commented out), so it ships raw,
+///    uncompressed page streams; math drawn as vector outlines makes
+///    those huge.
+/// 2. `save_with_options(use_object_streams + use_xref_streams)` —
+///    pack the non-stream indirect objects (page dicts, annotations,
+///    destinations, metadata) into a Flate-compressed object stream
+///    and replace the verbose ASCII xref table with a compact binary
+///    cross-reference stream (PDF 1.5+). Once the content streams are
+///    deflated this structural ASCII is the *majority* of the file,
+///    so this is the larger remaining win — and it is purely how
+///    objects are *stored*, never how anything renders.
+///
+/// Both are standard, viewer-universal mechanisms. The result is kept
+/// only if it is actually smaller; any parse / serialize failure
+/// degrades silently to the input bytes, so no document is ever lost.
 pub fn compress(bytes: Vec<u8>) -> Vec<u8> {
     let Ok(mut doc) = Document::load_mem(&bytes) else {
         return bytes;
     };
     fix_form_xobjects(&mut doc);
     doc.compress();
+    let opts = SaveOptions {
+        use_object_streams: true,
+        use_xref_streams: true,
+        ..Default::default()
+    };
     let mut out = Vec::new();
-    if doc.save_to(&mut out).is_ok() && out.len() < bytes.len() {
+    if doc.save_with_options(&mut out, opts).is_ok() && out.len() < bytes.len() {
         out
     } else {
         bytes

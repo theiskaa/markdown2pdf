@@ -30,15 +30,19 @@ pub fn render(md: &str, cfg_toml: &str) -> Vec<u8> {
     bytes
 }
 
-/// The PDF with every stream Flate-*decompressed* in place — the
-/// 100%-valid uncompressed shape printpdf used to emit before we
-/// added the deflate post-process (printpdf 0.9 never compresses).
-/// Each stream's content appears exactly once (streams are *replaced*,
-/// not appended), so substring counts match the pre-compression
-/// behaviour exactly. Idempotent: a no-op on an already-uncompressed
-/// PDF (so it composes safely with `render`, which also expands), and
-/// falls back to the input on any parse / serialize failure.
-fn scan(bytes: &[u8]) -> Vec<u8> {
+/// The PDF flattened back to the plain, fully-expanded shape printpdf
+/// originally emitted: every stream Flate-*decompressed* in place and
+/// every object-stream-packed object written back out as an
+/// individual classic object (the post-process now ships PDF 1.5
+/// object + cross-reference streams). `Document::load_mem` resolves
+/// object streams into the object map and the classic `save_to`
+/// re-serializes each object individually, so structural scans for
+/// `/Type/Page`, `/Ascent`, … keep working unchanged. Each stream's
+/// content appears exactly once (streams are *replaced*, not
+/// appended). Idempotent: a no-op on an already-plain PDF (so it
+/// composes safely with `render`, which also expands), and falls back
+/// to the input on any parse / serialize failure.
+pub fn scan(bytes: &[u8]) -> Vec<u8> {
     if let Ok(mut doc) = lopdf::Document::load_mem(bytes) {
         doc.decompress();
         let mut out = Vec::new();
@@ -156,7 +160,8 @@ pub fn pdf_well_formed(bytes: &[u8]) -> bool {
 /// `/Type/Pages` for the page tree root; this only counts the
 /// singular form.
 pub fn page_count(bytes: &[u8]) -> usize {
-    let s = String::from_utf8_lossy(bytes);
+    let bytes = scan(bytes);
+    let s = String::from_utf8_lossy(&bytes);
     let needle = "/Type/Page";
     let mut total = 0usize;
     let mut start = 0usize;
