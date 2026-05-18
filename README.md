@@ -2,9 +2,12 @@
 
 <p align="center">
 
-[![Crates.io](https://img.shields.io/crates/v/markdown2pdf)](https://crates.io/crates/markdown2pdf)
+[![CI](https://github.com/theiskaa/markdown2pdf/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/theiskaa/markdown2pdf/actions/workflows/ci.yml)
 [![Documentation](https://img.shields.io/docsrs/markdown2pdf)](https://docs.rs/markdown2pdf)
-[![License](https://img.shields.io/crates/l/markdown2pdf)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/markdown2pdf?color=orange)](https://crates.io/crates/markdown2pdf)
+[![Release](https://img.shields.io/github/v/release/theiskaa/markdown2pdf)](https://github.com/theiskaa/markdown2pdf/releases)
+[![MSRV](https://img.shields.io/crates/msrv/markdown2pdf?color=orange)](Cargo.toml)
+[![License](https://img.shields.io/crates/l/markdown2pdf?color=blue)](LICENSE)
 [![Downloads](https://img.shields.io/crates/d/markdown2pdf)](https://crates.io/crates/markdown2pdf)
 
 </p>
