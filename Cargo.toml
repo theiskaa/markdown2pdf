@@ -1,6 +1,6 @@
 [package]
 name = "markdown2pdf"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Ismael Sh <me@theiskaa.com>"]

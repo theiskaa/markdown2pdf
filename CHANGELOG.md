@@ -6,6 +6,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Each release section below is what ships as the GitHub Release notes.
 
+## [1.2.0] - 2026-05-18
+
+A mathematics release. `$…$` (inline) and `$$…$$` (display) LaTeX
+math are now parsed and **typeset** rather than leaking through as
+literal text — markdown2pdf gains a small in-tree TeX math engine
+instead of deferring to an external typesetter. Fractions, radicals,
+sub/superscript stacks, big operators with limits, delimiters that
+grow to their content, matrices, accents, and the
+blackboard/script/fraktur alphabets all render the way TeX sets them,
+laid out over STIX Two Math's OpenType MATH metrics.
+
+The math is drawn as filled **vector outlines**, so no font is
+embedded and the equation is not selectable — it behaves like a
+figure in every PDF viewer, which matches how LaTeX-, MathJax-, and
+KaTeX-to-PDF pipelines treat math and keeps output PDFs small.
+Display blocks are configurable through a new `[math]` style block.
+No breaking changes; purely additive.
+
+Delimiter handling follows Pandoc (a `$` opener needs a non-space
+after it, a closer a non-space before it and no trailing digit, `\$`
+is a literal dollar, an unterminated `$`/`$$` degrades to text), and
+the engine covers `\frac`/`\binom`, `\sqrt[n]{}`, coupled sub/super-
+script stacks, big operators with `\limits`/`\nolimits`, growing
+`\left…\right`/`\big` delimiters, `pmatrix`/`cases`/`aligned`
+environments, accents (incl. stretchy `\widehat`), the `\mathbb`/
+`\mathbf`/`\mathcal`/… alphabets, and operator names — unknown
+commands degrade to literal text, and input depth is bounded so
+adversarial markup can't blow up layout. The `[math]` block takes
+`align` (`center`/`left`/`right`), `scale`, `color`, and block
+margins; see `docs/configuration.md`.
+
+Resolves [#78](https://github.com/theiskaa/markdown2pdf/issues/78).
+
 ## [1.1.0] - 2026-05-18
 
 A note-vault syntax release. Three Markdown extensions that are
@@ -338,9 +371,11 @@ Initial release: a Markdown lexer and a `genpdfi`-backed PDF
 converter with basic styling, configuration via `mdprc`, code blocks,
 emphasis, links, and nested tokens.
 
+[1.2.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.2.0
 [1.1.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.1.0
 [1.0.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.0.0
 
+[#78]: https://github.com/theiskaa/markdown2pdf/issues/78
 [#79]: https://github.com/theiskaa/markdown2pdf/issues/79
 [#80]: https://github.com/theiskaa/markdown2pdf/issues/80
 [#82]: https://github.com/theiskaa/markdown2pdf/issues/82
