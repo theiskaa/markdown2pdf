@@ -159,6 +159,10 @@ pub fn render_to_bytes(
         None => bytes,
     };
 
+    // printpdf 0.9 never compresses streams; deflate them ourselves
+    // (math vector outlines make raw page streams very large).
+    let bytes = postprocess::compress(bytes);
+
     Ok(bytes)
 }
 

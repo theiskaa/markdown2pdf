@@ -169,6 +169,25 @@ pub fn inject_lang(bytes: Vec<u8>, lang: &str) -> Vec<u8> {
     }
 }
 
+/// Flate-compress every content / object stream. printpdf 0.9's
+/// `optimize` flag is a no-op (its `doc.compress()` call is commented
+/// out), so it ships raw, uncompressed page streams — math drawn as
+/// vector outlines makes those huge. lopdf's `compress()` deflates
+/// them (typically ~8× on the ASCII-number-heavy content). Degrades
+/// silently to the input bytes on any parse / serialize failure.
+pub fn compress(bytes: Vec<u8>) -> Vec<u8> {
+    let Ok(mut doc) = Document::load_mem(&bytes) else {
+        return bytes;
+    };
+    doc.compress();
+    let mut out = Vec::new();
+    if doc.save_to(&mut out).is_ok() && out.len() < bytes.len() {
+        out
+    } else {
+        bytes
+    }
+}
+
 fn is_link_annotation(d: &Dictionary) -> bool {
     let subtype_link = d
         .get(b"Subtype")

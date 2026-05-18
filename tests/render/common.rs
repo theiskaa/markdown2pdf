@@ -11,13 +11,48 @@ use markdown2pdf::parse_into_bytes;
 /// Render markdown + an embedded TOML config to PDF bytes. Panics on
 /// any error so individual tests don't have to unwrap.
 pub fn render(md: &str, cfg_toml: &str) -> Vec<u8> {
-    parse_into_bytes(md.to_string(), ConfigSource::Embedded(cfg_toml), None)
-        .expect("render must succeed")
+    let bytes = parse_into_bytes(md.to_string(), ConfigSource::Embedded(cfg_toml), None)
+        .expect("render must succeed");
+    // The renderer Flate-compresses streams (printpdf 0.9 never does,
+    // so we deflate in post-process). Tests inspect drawing operators
+    // and visible text in the byte stream, so expand it back to the
+    // (still 100%-valid) uncompressed form printpdf used to emit —
+    // size doesn't matter in tests and this keeps every assertion,
+    // helper-based or inline, working unchanged. Lossless and a no-op
+    // if already uncompressed.
+    if let Ok(mut doc) = lopdf::Document::load_mem(&bytes) {
+        doc.decompress();
+        let mut out = Vec::new();
+        if doc.save_to(&mut out).is_ok() && out.starts_with(b"%PDF-") {
+            return out;
+        }
+    }
+    bytes
 }
 
-/// `true` if `needle` appears anywhere in `bytes`.
+/// The PDF with every stream Flate-*decompressed* in place — the
+/// 100%-valid uncompressed shape printpdf used to emit before we
+/// added the deflate post-process (printpdf 0.9 never compresses).
+/// Each stream's content appears exactly once (streams are *replaced*,
+/// not appended), so substring counts match the pre-compression
+/// behaviour exactly. Idempotent: a no-op on an already-uncompressed
+/// PDF (so it composes safely with `render`, which also expands), and
+/// falls back to the input on any parse / serialize failure.
+fn scan(bytes: &[u8]) -> Vec<u8> {
+    if let Ok(mut doc) = lopdf::Document::load_mem(bytes) {
+        doc.decompress();
+        let mut out = Vec::new();
+        if doc.save_to(&mut out).is_ok() && out.starts_with(b"%PDF-") {
+            return out;
+        }
+    }
+    bytes.to_vec()
+}
+
+/// `true` if `needle` appears anywhere in the PDF (raw structure or
+/// decompressed content).
 pub fn contains(bytes: &[u8], needle: &[u8]) -> bool {
-    bytes.windows(needle.len()).any(|w| w == needle)
+    scan(bytes).windows(needle.len()).any(|w| w == needle)
 }
 
 /// Count filled rectangles in the content stream. Block backgrounds
@@ -28,6 +63,7 @@ pub fn contains(bytes: &[u8], needle: &[u8]) -> bool {
 /// non-zero-winding fill with `h` then `f`). We count standalone
 /// `f` fill ops, which only the background-rect path emits.
 pub fn count_rect_ops(bytes: &[u8]) -> usize {
+    let bytes = scan(bytes);
     let mut hits = 0usize;
     let mut i = 0usize;
     // Match a line that is exactly `f` (preceded and followed by a
@@ -52,6 +88,7 @@ pub fn count_rect_ops(bytes: &[u8]) -> usize {
 /// `true` if the content stream contains a path-stroke op (`S` or `s`
 /// preceded by whitespace) — borders and HR lines emit one.
 pub fn bytes_have_stroke_op(bytes: &[u8]) -> bool {
+    let bytes = scan(bytes);
     let mut i = 0usize;
     while i + 2 <= bytes.len() {
         let c = bytes[i];
@@ -89,6 +126,7 @@ pub fn multi_page_markdown(n_paragraphs: usize) -> String {
 /// tests that assert a string appears N times (e.g. a heading appears
 /// once in TOC and once in body).
 pub fn count_substr(bytes: &[u8], needle: &[u8]) -> usize {
+    let bytes = scan(bytes);
     let mut count = 0usize;
     let mut i = 0usize;
     while i + needle.len() <= bytes.len() {
@@ -138,7 +176,7 @@ pub fn page_count(bytes: &[u8]) -> usize {
 /// text — uses lossy UTF-8 decoding which is fine since we only ever
 /// search for ASCII fragments in the printpdf-emitted content.
 pub fn contains_text(bytes: &[u8], needle: &str) -> bool {
-    String::from_utf8_lossy(bytes).contains(needle)
+    String::from_utf8_lossy(&scan(bytes)).contains(needle)
 }
 
 /// First installed system font from a cross-platform candidate list,

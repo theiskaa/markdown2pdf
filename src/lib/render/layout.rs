@@ -1273,9 +1273,14 @@ impl<'a> Engine<'a> {
                     points: c
                         .into_iter()
                         .map(|(fx, fy)| LinePoint {
+                            // 0.01 pt ≈ 1/7200 in — far below a
+                            // device pixel, but the short fixed
+                            // decimal keeps the (uncompressed-by-
+                            // printpdf) content stream lean and
+                            // deflates better.
                             p: Point {
-                                x: Pt(ox + fx * scale),
-                                y: Pt(oy + fy * scale),
+                                x: Pt(round2(ox + fx * scale)),
+                                y: Pt(round2(oy + fy * scale)),
                             },
                             bezier: false,
                         })
@@ -3279,6 +3284,12 @@ const MM_TO_PT: f32 = 72.0 / 25.4;
 
 fn mm_to_pt(mm: f32) -> f32 {
     mm * MM_TO_PT
+}
+
+/// Round to 0.01 pt — trims math-outline coordinate noise from the
+/// content stream without any visible change.
+fn round2(v: f32) -> f32 {
+    (v * 100.0).round() / 100.0
 }
 
 fn pt_to_mm(pt: f32) -> f32 {

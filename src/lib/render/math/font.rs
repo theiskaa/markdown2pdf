@@ -339,7 +339,7 @@ impl Outliner {
     }
 }
 
-const BEZIER_STEPS: usize = 12;
+const BEZIER_STEPS: usize = 8;
 
 impl ttf_parser::OutlineBuilder for Outliner {
     fn move_to(&mut self, x: f32, y: f32) {
