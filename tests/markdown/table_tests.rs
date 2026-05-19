@@ -7,7 +7,7 @@ use markdown2pdf::markdown::*;
 use super::common::parse;
 
 
-fn first_table(tokens: &[Token]) -> (&Vec<Vec<Token>>, &Vec<markdown2pdf::markdown::TableAlignment>, &Vec<Vec<Vec<Token>>>) {
+fn first_table(tokens: &[Token]) -> (&Vec<TableCell<Token>>, &Vec<markdown2pdf::markdown::TableAlignment>, &Vec<Vec<TableCell<Token>>>) {
     let Some(Token::Table { headers, aligns, rows }) =
         tokens.iter().find(|t| matches!(t, Token::Table { .. }))
     else {
@@ -39,7 +39,7 @@ fn single_column_table() {
     let (headers, _, rows) = first_table(&tokens);
     assert_eq!(headers.len(), 1);
     assert_eq!(rows[0].len(), 1);
-    assert_eq!(Token::collect_all_text(&rows[0][0]), "x");
+    assert_eq!(Token::collect_all_text(&rows[0][0].content), "x");
 }
 
 #[test]
@@ -116,28 +116,28 @@ fn escaped_pipe_currently_still_splits_known_gap() {
 fn cell_with_emphasis() {
     let tokens = parse("| a |\n| --- |\n| *x* |\n");
     let (_, _, rows) = first_table(&tokens);
-    assert!(rows[0][0].iter().any(|t| matches!(t, Token::Emphasis { .. })));
+    assert!(rows[0][0].content.iter().any(|t| matches!(t, Token::Emphasis { .. })));
 }
 
 #[test]
 fn cell_with_inline_code() {
     let tokens = parse("| a |\n| --- |\n| `x` |\n");
     let (_, _, rows) = first_table(&tokens);
-    assert!(rows[0][0].iter().any(|t| matches!(t, Token::Code { block: false, .. })));
+    assert!(rows[0][0].content.iter().any(|t| matches!(t, Token::Code { block: false, .. })));
 }
 
 #[test]
 fn cell_with_link() {
     let tokens = parse("| a |\n| --- |\n| [t](u) |\n");
     let (_, _, rows) = first_table(&tokens);
-    assert!(rows[0][0].iter().any(|t| matches!(t, Token::Link { .. })));
+    assert!(rows[0][0].content.iter().any(|t| matches!(t, Token::Link { .. })));
 }
 
 #[test]
 fn cell_with_strikethrough() {
     let tokens = parse("| a |\n| --- |\n| ~~x~~ |\n");
     let (_, _, rows) = first_table(&tokens);
-    assert!(rows[0][0].iter().any(|t| matches!(t, Token::Strikethrough(_))));
+    assert!(rows[0][0].content.iter().any(|t| matches!(t, Token::Strikethrough(_))));
 }
 
 #[test]
@@ -159,5 +159,131 @@ fn two_back_to_back_tables() {
 fn empty_cell() {
     let tokens = parse("| a | b |\n| --- | --- |\n|  | x |\n");
     let (_, _, rows) = first_table(&tokens);
-    assert_eq!(Token::collect_all_text(&rows[0][0]), "");
+    assert_eq!(Token::collect_all_text(&rows[0][0].content), "");
+}
+
+#[test]
+fn plain_gfm_cells_have_unit_spans() {
+    let tokens = parse("| a | b | c |\n| --- | --- | --- |\n| 1 |  | 3 |\n");
+    let (headers, _, rows) = first_table(&tokens);
+    for cell in headers.iter().chain(rows.iter().flatten()) {
+        assert_eq!(cell.colspan, 1);
+        assert_eq!(cell.rowspan, 1);
+        assert!(!cell.covered);
+    }
+}
+
+#[test]
+fn marker_cell_extends_colspan() {
+    let tokens = parse("| Group | > | Regular |\n| --- | --- | --- |\n| A | B | C |\n");
+    let (headers, _, _) = first_table(&tokens);
+    assert_eq!(headers.len(), 3);
+    assert_eq!(Token::collect_all_text(&headers[0].content), "Group");
+    assert_eq!(headers[0].colspan, 2);
+    assert!(headers[1].covered);
+    assert_eq!(Token::collect_all_text(&headers[2].content), "Regular");
+}
+
+#[test]
+fn caret_cell_extends_rowspan_from_cell_above() {
+    let tokens = parse("| Key | Value |\n| --- | --- |\n| A | one |\n| ^ | two |\n");
+    let (_, _, rows) = first_table(&tokens);
+    assert_eq!(Token::collect_all_text(&rows[0][0].content), "A");
+    assert_eq!(rows[0][0].rowspan, 2);
+    assert!(rows[1][0].covered);
+    assert_eq!(Token::collect_all_text(&rows[1][1].content), "two");
+}
+
+#[test]
+fn rowspan_chains_across_three_rows() {
+    let tokens =
+        parse("| Key | Value |\n| --- | --- |\n| A | 1 |\n| ^ | 2 |\n| ^ | 3 |\n");
+    let (_, _, rows) = first_table(&tokens);
+    assert_eq!(Token::collect_all_text(&rows[0][0].content), "A");
+    assert_eq!(rows[0][0].rowspan, 3);
+    assert!(rows[1][0].covered);
+    assert!(rows[2][0].covered);
+    assert_eq!(Token::collect_all_text(&rows[2][1].content), "3");
+}
+
+#[test]
+fn rowspan_binds_to_nearest_cell_above_not_topmost() {
+    // The `^` continues the cell directly above (B), not the one two
+    // rows up (A).
+    let tokens =
+        parse("| K | V |\n| --- | --- |\n| A | x |\n| B | y |\n| ^ | z |\n");
+    let (_, _, rows) = first_table(&tokens);
+    assert_eq!(rows[0][0].rowspan, 1, "A should not span");
+    assert_eq!(Token::collect_all_text(&rows[1][0].content), "B");
+    assert_eq!(rows[1][0].rowspan, 2, "B continues into the ^ row");
+    assert!(rows[2][0].covered);
+}
+
+#[test]
+fn colspan_and_rowspan_combine_without_misbinding() {
+    // Header spans cols 0..2; the `^` in the second body row sits in
+    // physical column 0, which must resolve to the col-spanning origin
+    // above it (the regression the logical-column walk got wrong).
+    let tokens = parse(
+        "| Span | > | Tail |\n| --- | --- | --- |\n| Merged | > | a |\n| ^ | > | b |\n",
+    );
+    let (headers, _, rows) = first_table(&tokens);
+    assert_eq!(headers[0].colspan, 2);
+    assert!(headers[1].covered);
+    // Row 0: "Merged" colspan 2, then a covered slot, then "a".
+    assert_eq!(Token::collect_all_text(&rows[0][0].content), "Merged");
+    assert_eq!(rows[0][0].colspan, 2);
+    assert_eq!(rows[0][0].rowspan, 2, "Merged extends into the ^ row");
+    assert!(rows[0][1].covered);
+    assert_eq!(Token::collect_all_text(&rows[0][2].content), "a");
+    // Row 1: the `^` and its trailing `>` are both covered; only "b"
+    // remains as real content.
+    assert!(rows[1][0].covered);
+    assert!(rows[1][1].covered);
+    assert_eq!(Token::collect_all_text(&rows[1][2].content), "b");
+}
+
+#[test]
+fn escaped_gt_is_literal_not_a_colspan_marker() {
+    let tokens =
+        parse("| a | \\> | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n");
+    let (headers, _, _) = first_table(&tokens);
+    assert_eq!(headers.len(), 3);
+    assert_eq!(headers[0].colspan, 1, "escaped marker must not extend");
+    assert!(!headers[1].covered);
+    assert_eq!(Token::collect_all_text(&headers[1].content), ">");
+}
+
+#[test]
+fn escaped_caret_is_literal_not_a_rowspan_marker() {
+    let tokens =
+        parse("| K | V |\n| --- | --- |\n| A | one |\n| \\^ | two |\n");
+    let (_, _, rows) = first_table(&tokens);
+    assert_eq!(rows[0][0].rowspan, 1, "escaped marker must not extend");
+    assert!(!rows[1][0].covered);
+    assert_eq!(Token::collect_all_text(&rows[1][0].content), "^");
+}
+
+#[test]
+fn leading_marker_with_no_origin_stays_literal() {
+    let tokens = parse("| > | a | b |\n| --- | --- | --- |\n| ^ | x | y |\n");
+    let (headers, _, rows) = first_table(&tokens);
+    assert!(!headers[0].covered);
+    assert_eq!(Token::collect_all_text(&headers[0].content), ">");
+    assert_eq!(headers[0].colspan, 1);
+    // A `^` in column 0 has no real cell above it (the header `>` is
+    // literal but headers are not a rowspan source), so it stays
+    // literal too rather than panicking or vanishing.
+    assert!(!rows[0][0].covered);
+    assert_eq!(Token::collect_all_text(&rows[0][0].content), "^");
+}
+
+#[test]
+fn colspan_in_a_data_row() {
+    let tokens = parse("| a | b | c |\n| --- | --- | --- |\n| wide | > | end |\n");
+    let (_, _, rows) = first_table(&tokens);
+    assert_eq!(Token::collect_all_text(&rows[0][0].content), "wide");
+    assert_eq!(rows[0][0].colspan, 2);
+    assert!(rows[0][1].covered);
+    assert_eq!(Token::collect_all_text(&rows[0][2].content), "end");
 }

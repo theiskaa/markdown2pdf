@@ -246,9 +246,9 @@ impl Token {
                 result.push_str(&format!("{}\"headers\": [\n", inner_indent));
                 for (i, header_cell) in headers.iter().enumerate() {
                     result.push_str(&format!("{}[\n", "  ".repeat(indent_level + 2)));
-                    for (j, token) in header_cell.iter().enumerate() {
+                    for (j, token) in header_cell.content.iter().enumerate() {
                         result.push_str(&token.to_readable_json(indent_level + 3));
-                        if j < header_cell.len() - 1 {
+                        if j < header_cell.content.len() - 1 {
                             result.push(',');
                         }
                         result.push('\n');
@@ -287,9 +287,9 @@ impl Token {
                     result.push_str(&format!("{}[\n", "  ".repeat(indent_level + 2)));
                     for (j, cell) in row.iter().enumerate() {
                         result.push_str(&format!("{}[\n", "  ".repeat(indent_level + 3)));
-                        for (k, token) in cell.iter().enumerate() {
+                        for (k, token) in cell.content.iter().enumerate() {
                             result.push_str(&token.to_readable_json(indent_level + 4));
-                            if k < cell.len() - 1 {
+                            if k < cell.content.len() - 1 {
                                 result.push(',');
                             }
                             result.push('\n');
@@ -593,7 +593,7 @@ impl Token {
                 aligns,
                 rows,
             } => {
-                let hs: Vec<String> = headers.iter().map(|c| list(c)).collect();
+                let hs: Vec<String> = headers.iter().map(|c| list(&c.content)).collect();
                 let aligns_s: Vec<&str> = aligns
                     .iter()
                     .map(|a| match a {
@@ -605,7 +605,7 @@ impl Token {
                 let rs: Vec<String> = rows
                     .iter()
                     .map(|row| {
-                        let cells: Vec<String> = row.iter().map(|c| list(c)).collect();
+                        let cells: Vec<String> = row.iter().map(|c| list(&c.content)).collect();
                         format!("[{}]", cells.join(", "))
                     })
                     .collect();

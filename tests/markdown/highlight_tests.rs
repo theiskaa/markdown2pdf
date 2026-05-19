@@ -27,11 +27,11 @@ fn highlights(tokens: &[Token]) -> Vec<String> {
                 | Token::Link { content, .. } => walk(content, out),
                 Token::Table { headers, rows, .. } => {
                     for cell in headers {
-                        walk(cell, out);
+                        walk(&cell.content, out);
                     }
                     for row in rows {
                         for cell in row {
-                            walk(cell, out);
+                            walk(&cell.content, out);
                         }
                     }
                 }

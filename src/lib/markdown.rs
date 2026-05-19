@@ -57,6 +57,77 @@ pub enum TableAlignment {
     Right,
 }
 
+/// A table cell with optional merged-region metadata.
+///
+/// `covered` marks a physical grid slot occupied by a cell that began
+/// earlier in the row/column. Renderers should skip covered cells.
+#[derive(Debug, PartialEq, Clone)]
+pub struct TableCell<T> {
+    pub content: Vec<T>,
+    pub colspan: usize,
+    pub rowspan: usize,
+    pub covered: bool,
+}
+
+impl<T> TableCell<T> {
+    pub fn new(content: Vec<T>) -> Self {
+        Self {
+            content,
+            colspan: 1,
+            rowspan: 1,
+            covered: false,
+        }
+    }
+
+    pub fn covered() -> Self {
+        Self {
+            content: Vec::new(),
+            colspan: 1,
+            rowspan: 1,
+            covered: true,
+        }
+    }
+
+    /// Build a cell with the same span metadata but its content mapped
+    /// through `f`. Lets lowering/rendering transform cell content
+    /// without re-threading `colspan` / `rowspan` / `covered` by hand.
+    pub fn map_content<U>(&self, f: impl FnOnce(&[T]) -> Vec<U>) -> TableCell<U> {
+        TableCell {
+            content: f(&self.content),
+            colspan: self.colspan,
+            rowspan: self.rowspan,
+            covered: self.covered,
+        }
+    }
+}
+
+/// One physical grid slot while resolving spans, before any inline
+/// parsing. `text` is the raw cell source still to be parsed, or
+/// `None` for a slot covered by a span originating elsewhere.
+struct TableCellPlan {
+    text: Option<String>,
+    colspan: usize,
+    rowspan: usize,
+}
+
+impl TableCellPlan {
+    fn origin(text: String) -> Self {
+        Self {
+            text: Some(text),
+            colspan: 1,
+            rowspan: 1,
+        }
+    }
+
+    fn covered() -> Self {
+        Self {
+            text: None,
+            colspan: 1,
+            rowspan: 1,
+        }
+    }
+}
+
 include!(concat!(env!("OUT_DIR"), "/entities_table.rs"));
 
 /// Tag names that open a raw-content HTML block (CommonMark §4.6).
@@ -202,9 +273,9 @@ pub enum Token {
     },
     /// Table with header, alignment info, and rows
     Table {
-        headers: Vec<Vec<Token>>,
+        headers: Vec<TableCell<Token>>,
         aligns: Vec<TableAlignment>,
-        rows: Vec<Vec<Vec<Token>>>,
+        rows: Vec<Vec<TableCell<Token>>>,
     },
     /// Text alignment for table columns
     TableAlignment(TableAlignment),
@@ -369,13 +440,13 @@ impl Token {
                 rows,
             } => {
                 for header in headers {
-                    for token in header {
+                    for token in &header.content {
                         token.collect_text_recursive(result);
                     }
                 }
                 for row in rows {
                     for cell in row {
-                        for token in cell {
+                        for token in &cell.content {
                             token.collect_text_recursive(result);
                         }
                     }
@@ -6247,11 +6318,7 @@ impl Lexer {
     fn parse_table(&mut self) -> Result<Token, LexerError> {
         // Parse header row
         let header_line = self.read_until_newline();
-        let header_cells: Vec<String> = header_line
-            .trim_matches('|')
-            .split('|')
-            .map(|s| s.trim().to_string())
-            .collect();
+        let header_cells = Self::split_table_line(&header_line);
 
         if self.current_char() == '\n' {
             self.advance();
@@ -6259,9 +6326,8 @@ impl Lexer {
 
         // Parse alignment row
         let align_line = self.read_until_newline();
-        let aligns: Vec<TableAlignment> = align_line
-            .trim_matches('|')
-            .split('|')
+        let aligns: Vec<TableAlignment> = Self::split_table_line(&align_line)
+            .into_iter()
             .map(|s| {
                 let s = s.trim();
                 match (s.starts_with(':'), s.ends_with(':')) {
@@ -6277,41 +6343,31 @@ impl Lexer {
             self.advance();
         }
 
-        // Convert header strings to token vectors
-        let mut headers = Vec::new();
-        for cell in header_cells {
-            let mut cell_lexer = self.sub_lexer(cell);
-            let parsed = cell_lexer.parse_with_context(ParseContext::TableCell)?;
-            headers.push(parsed);
-        }
+        // A `>` cell extends the previous real cell across columns; a
+        // `^` cell continues the cell above down a row. Both markers are
+        // matched against the *raw* (pre-inline-parse) cell text, so a
+        // backslash-escaped `\>` / `\^` is a literal cell, never a span.
+        let header_plan = Self::plan_colspans(header_cells);
 
-        // Parse rows until blank or non-table start
-        let mut rows = Vec::new();
+        // Plan the data rows on raw text first so the column grid is
+        // known before any inline parsing happens.
+        let mut row_plans: Vec<Vec<TableCellPlan>> = Vec::new();
         while self.position < self.input.len() {
             let line = self.read_until_newline();
             if line.trim().is_empty() {
                 break;
             }
 
-            let cell_texts: Vec<String> = line
-                .trim_matches('|')
-                .split('|')
-                .map(|s| s.trim().to_string())
-                .collect();
-
-            let mut row_tokens = Vec::new();
-            for cell in cell_texts {
-                // FIX: large unbreakable words don't fit in cells
-                let mut cell_lexer = self.sub_lexer(cell);
-                let parsed = cell_lexer.parse_with_context(ParseContext::TableCell)?;
-                row_tokens.push(parsed);
-            }
-            rows.push(row_tokens);
+            row_plans.push(Self::plan_colspans(Self::split_table_line(&line)));
 
             if self.current_char() == '\n' {
                 self.advance();
             }
         }
+        Self::resolve_rowspans(&mut row_plans);
+
+        let headers = self.materialize_row(header_plan)?;
+        let rows = self.materialize_grid(row_plans)?;
 
         // Per GFM, header column count drives the table shape. Truncate
         // or pad `aligns` to match so downstream consumers (renderers,
@@ -6333,6 +6389,114 @@ impl Lexer {
             aligns,
             rows,
         })
+    }
+
+    fn split_table_line(line: &str) -> Vec<String> {
+        let trimmed = line.trim();
+        let without_lead = trimmed.strip_prefix('|').unwrap_or(trimmed);
+        let without_edges = without_lead.strip_suffix('|').unwrap_or(without_lead);
+        without_edges
+            .split('|')
+            .map(|s| s.trim().to_string())
+            .collect()
+    }
+
+    /// Resolve `>` colspan markers for one raw row into a physical grid
+    /// of plan slots. A non-covered slot carries the raw text still to
+    /// be inline-parsed; a `>` immediately following a real cell widens
+    /// that cell's `colspan` and emits a covered placeholder so the
+    /// physical slot index keeps matching the grid column. A leading
+    /// `>` with no cell to extend is kept as literal content.
+    fn plan_colspans(raw: Vec<String>) -> Vec<TableCellPlan> {
+        let mut out: Vec<TableCellPlan> = Vec::with_capacity(raw.len());
+        let mut origin: Option<usize> = None;
+        for cell in raw {
+            if cell == ">" {
+                if let Some(o) = origin {
+                    out[o].colspan += 1;
+                    out.push(TableCellPlan::covered());
+                    continue;
+                }
+            }
+            out.push(TableCellPlan::origin(cell));
+            origin = Some(out.len() - 1);
+        }
+        out
+    }
+
+    /// Resolve `^` rowspan markers across the planned grid. Each marker
+    /// is bound to the nearest non-covered cell above whose colspan
+    /// range covers the marker's column, growing that cell's `rowspan`
+    /// and turning the marker into a covered placeholder. A marker with
+    /// no cell above (e.g. first row, or no covering cell) is kept as
+    /// literal content.
+    fn resolve_rowspans(grid: &mut [Vec<TableCellPlan>]) {
+        for r in 0..grid.len() {
+            for c in 0..grid[r].len() {
+                if grid[r][c].text.as_deref() != Some("^") {
+                    continue;
+                }
+                if let Some((origin_r, origin_c)) = Self::rowspan_origin(grid, r, c) {
+                    let span = r - origin_r + 1;
+                    grid[origin_r][origin_c].rowspan = grid[origin_r][origin_c].rowspan.max(span);
+                    grid[r][c] = TableCellPlan::covered();
+                }
+            }
+        }
+    }
+
+    /// Find the cell that a `^` at grid column `marker_c` in row
+    /// `marker_r` should continue. Because covered placeholders are
+    /// retained, the physical slot index equals the grid column, so a
+    /// cell at column `c` with `colspan` n owns columns `c..c+n`.
+    fn rowspan_origin(
+        grid: &[Vec<TableCellPlan>],
+        marker_r: usize,
+        marker_c: usize,
+    ) -> Option<(usize, usize)> {
+        for r in (0..marker_r).rev() {
+            for (c, cell) in grid[r].iter().enumerate() {
+                if cell.text.is_none() {
+                    continue;
+                }
+                if marker_c >= c && marker_c < c + cell.colspan {
+                    return Some((r, c));
+                }
+            }
+        }
+        None
+    }
+
+    fn materialize_row(
+        &self,
+        plan_row: Vec<TableCellPlan>,
+    ) -> Result<Vec<TableCell<Token>>, LexerError> {
+        let mut out = Vec::with_capacity(plan_row.len());
+        for plan in plan_row {
+            match plan.text {
+                Some(text) => {
+                    let mut cell_lexer = self.sub_lexer(text);
+                    let content = cell_lexer.parse_with_context(ParseContext::TableCell)?;
+                    out.push(TableCell {
+                        content,
+                        colspan: plan.colspan.max(1),
+                        rowspan: plan.rowspan.max(1),
+                        covered: false,
+                    });
+                }
+                None => out.push(TableCell::covered()),
+            }
+        }
+        Ok(out)
+    }
+
+    fn materialize_grid(
+        &self,
+        grid: Vec<Vec<TableCellPlan>>,
+    ) -> Result<Vec<Vec<TableCell<Token>>>, LexerError> {
+        grid.into_iter()
+            .map(|row| self.materialize_row(row))
+            .collect()
     }
 
     /// True if `self.position` is at the start of a document, or at the start

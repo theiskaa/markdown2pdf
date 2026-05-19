@@ -9,7 +9,7 @@
 //! a paragraph containing their collected text — the content still
 //! appears, just without distinctive layout.
 
-use crate::markdown::Token;
+use crate::markdown::{TableCell, Token};
 
 use super::ir::{Block, DefinitionEntry, FootnoteEntry, InlineRun, ListBullet, ListEntry, RunFlags};
 use std::collections::HashMap;
@@ -198,17 +198,16 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 rows,
             } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
-                let head_runs: Vec<Vec<InlineRun>> = headers
-                    .iter()
-                    .map(|cell| flatten_inline(cell, RunFlags::default(), None, &footnote_numbers))
-                    .collect();
-                let row_runs: Vec<Vec<Vec<InlineRun>>> = rows
-                    .iter()
-                    .map(|row| {
-                        row.iter()
-                            .map(|cell| flatten_inline(cell, RunFlags::default(), None, &footnote_numbers))
-                            .collect()
+                let to_runs = |cell: &TableCell<Token>| {
+                    cell.map_content(|c| {
+                        flatten_inline(c, RunFlags::default(), None, &footnote_numbers)
                     })
+                };
+                let head_runs: Vec<TableCell<InlineRun>> =
+                    headers.iter().map(to_runs).collect();
+                let row_runs: Vec<Vec<TableCell<InlineRun>>> = rows
+                    .iter()
+                    .map(|row| row.iter().map(to_runs).collect())
                     .collect();
                 out.push(Block::Table {
                     headers: head_runs,
@@ -548,13 +547,13 @@ fn collect_footnote_numbering(tokens: &[Token]) -> HashMap<String, usize> {
             }
             Token::Table { headers, rows, .. } => {
                 for header in headers {
-                    for c in header {
+                    for c in &header.content {
                         walk(c, map);
                     }
                 }
                 for row in rows {
                     for cell in row {
-                        for c in cell {
+                        for c in &cell.content {
                             walk(c, map);
                         }
                     }
@@ -624,13 +623,13 @@ fn collect_inline_footnote_defs(
             }
             Token::Table { headers, rows, .. } => {
                 for header in headers {
-                    for c in header {
+                    for c in &header.content {
                         walk(c, footnotes, out);
                     }
                 }
                 for row in rows {
                     for cell in row {
-                        for c in cell {
+                        for c in &cell.content {
                             walk(c, footnotes, out);
                         }
                     }
