@@ -30,11 +30,11 @@ fn links(tokens: &[Token]) -> Vec<(String, String)> {
                 }
                 Token::Table { headers, rows, .. } => {
                     for cell in headers {
-                        walk(cell, out);
+                        walk(&cell.content, out);
                     }
                     for row in rows {
                         for cell in row {
-                            walk(cell, out);
+                            walk(&cell.content, out);
                         }
                     }
                 }

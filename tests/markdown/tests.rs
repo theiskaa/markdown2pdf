@@ -486,21 +486,21 @@ fn test_tables() {
         tokens,
         vec![Token::Table {
             headers: vec![
-                vec![Token::Text("Name".to_string())],
-                vec![Token::Text("Age".to_string())],
-                vec![Token::Text("City".to_string())],
+                TableCell::new(vec![Token::Text("Name".to_string())]),
+                TableCell::new(vec![Token::Text("Age".to_string())]),
+                TableCell::new(vec![Token::Text("City".to_string())]),
             ],
             aligns: vec![Alignment::Left, Alignment::Center, Alignment::Right],
             rows: vec![
                 vec![
-                    vec![Token::Text("Alice".to_string())],
-                    vec![Token::Text("30".to_string())],
-                    vec![Token::Text("Paris".to_string())],
+                    TableCell::new(vec![Token::Text("Alice".to_string())]),
+                    TableCell::new(vec![Token::Text("30".to_string())]),
+                    TableCell::new(vec![Token::Text("Paris".to_string())]),
                 ],
                 vec![
-                    vec![Token::Text("Bob".to_string())],
-                    vec![Token::Text("25".to_string())],
-                    vec![Token::Text("Lyon".to_string())],
+                    TableCell::new(vec![Token::Text("Bob".to_string())]),
+                    TableCell::new(vec![Token::Text("25".to_string())]),
+                    TableCell::new(vec![Token::Text("Lyon".to_string())]),
                 ],
             ],
         }]
