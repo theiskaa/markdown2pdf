@@ -6,6 +6,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Each release section below is what ships as the GitHub Release notes.
 
+## [1.3.0] - 2026-05-19
+
+A table release. GFM tables are strictly one value per cell, which
+breaks merged header groups and summary rows in documents converted
+from HTML or authored with extended table syntax. markdown2pdf now
+understands **merged cells**: a cell can span columns and/or rows, and
+the layout engine computes the merged rectangle — column width
+distributed across the spanned columns, the cell vertically centered
+across spanned rows, a single border around the merged region, and a
+spanned group kept whole when it would otherwise cross a page break.
+
+The authoring syntax is pragmatic and stays inside the pipe-table
+grammar: a `>` cell extends the cell before it across one more column,
+and a `^` cell continues the cell directly above it down one more row.
+Markers are matched against the **raw** cell source, so a
+backslash-escaped `\>` / `\^` is always literal content and a real
+`>` / `^` value is never silently merged. Markers chain (`^` over
+several rows, several `>` in a row) and combine (a cell that spans
+both columns and rows). Column alignment and per-cell inline styling
+still apply to the cells around a span, and a plain GFM table with no
+markers renders exactly as it did before — purely additive, no
+breaking changes.
+
+Resolves [#83](https://github.com/theiskaa/markdown2pdf/issues/83).
+
 ## [1.2.0] - 2026-05-18
 
 A mathematics release. `$…$` (inline) and `$$…$$` (display) LaTeX
@@ -371,10 +396,12 @@ Initial release: a Markdown lexer and a `genpdfi`-backed PDF
 converter with basic styling, configuration via `mdprc`, code blocks,
 emphasis, links, and nested tokens.
 
+[1.3.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.3.0
 [1.2.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.2.0
 [1.1.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.1.0
 [1.0.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.0.0
 
+[#83]: https://github.com/theiskaa/markdown2pdf/issues/83
 [#78]: https://github.com/theiskaa/markdown2pdf/issues/78
 [#79]: https://github.com/theiskaa/markdown2pdf/issues/79
 [#80]: https://github.com/theiskaa/markdown2pdf/issues/80

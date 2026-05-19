@@ -75,10 +75,10 @@ Or, in `Cargo.toml`:
 
 ```toml
 # Minimal — local files only, no network, no SVG
-markdown2pdf = "1.2.0"
+markdown2pdf = "1.3.0"
 
 # Or with URL fetching + SVG rasterization
-markdown2pdf = { version = "1.2.0", features = ["fetch", "svg"] }
+markdown2pdf = { version = "1.3.0", features = ["fetch", "svg"] }
 ```
 
 See [docs/library.md](docs/library.md) for the programmatic API.
