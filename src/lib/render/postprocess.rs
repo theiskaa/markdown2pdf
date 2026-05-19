@@ -46,11 +46,11 @@ fn walk(tokens: &[Token], map: &mut HashMap<String, String>) {
             Token::Image { alt, .. } => walk(alt, map),
             Token::Table { headers, rows, .. } => {
                 for h in headers {
-                    walk(h, map);
+                    walk(&h.content, map);
                 }
                 for r in rows {
                     for c in r {
-                        walk(c, map);
+                        walk(&c.content, map);
                     }
                 }
             }

@@ -25,9 +25,9 @@ pub enum Block {
     BlockQuote { body: Vec<Block> },
     /// A GFM table.
     Table {
-        headers: Vec<Vec<InlineRun>>,
+        headers: Vec<crate::markdown::TableCell<InlineRun>>,
         aligns: Vec<crate::markdown::TableAlignment>,
-        rows: Vec<Vec<Vec<InlineRun>>>,
+        rows: Vec<Vec<crate::markdown::TableCell<InlineRun>>>,
     },
     /// A block-level image. The lowering pass promotes a paragraph
     /// containing only an image to this variant; inline images keep
@@ -202,13 +202,13 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
                 u.body_bold = true;
             }
             for header in headers {
-                for r in header {
+                for r in &header.content {
                     walk_run(r, u);
                 }
             }
             for row in rows {
                 for cell in row {
-                    for r in cell {
+                    for r in &cell.content {
                         walk_run(r, u);
                     }
                 }

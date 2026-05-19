@@ -17,7 +17,7 @@ use crate::styling::{
     ResolvedPage, ResolvedPageFurniture, ResolvedStyle, ResolvedToc, TextAlignment,
 };
 
-use crate::markdown::slugify;
+use crate::markdown::{slugify, TableCell};
 
 use super::font::FontSet;
 use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
@@ -1820,9 +1820,9 @@ impl<'a> Engine<'a> {
 
     fn render_table(
         &mut self,
-        headers: &[Vec<InlineRun>],
+        headers: &[TableCell<InlineRun>],
         aligns: &[crate::markdown::TableAlignment],
-        rows: &[Vec<Vec<InlineRun>>],
+        rows: &[Vec<TableCell<InlineRun>>],
     ) {
         if headers.is_empty() {
             return;
@@ -1864,6 +1864,8 @@ impl<'a> Engine<'a> {
         let header_top = self.y_from_top_pt;
         self.draw_row(
             headers,
+            0,
+            &[header_height],
             aligns,
             s_header.font_size_pt,
             s_header.line_height,
@@ -1872,28 +1874,33 @@ impl<'a> Engine<'a> {
             s_header.text_color_rgb(),
         );
         let header_bottom = header_top + header_height;
-        self.draw_row_borders(header_top, header_bottom, col_count, col_width);
         self.y_from_top_pt = header_bottom;
         self.advance_y(row_gap_pt);
 
         // Data rows.
-        for row in rows {
-            // Pad / truncate to header column count.
-            let mut padded: Vec<Vec<InlineRun>> = row.clone();
-            padded.resize(col_count, Vec::new());
-            let row_height = self.measure_row_height(
-                &padded,
-                s_cell.font_size_pt,
-                s_cell.line_height,
-                col_width,
-                false,
-            );
-            if self.y_from_top_pt + row_height + self.bottom_margin_pt() > self.page_height_pt() {
+        let mut table_rows: Vec<Vec<TableCell<InlineRun>>> = rows.to_vec();
+        for row in &mut table_rows {
+            row.resize_with(col_count, || TableCell::new(Vec::new()));
+            row.truncate(col_count);
+        }
+        let row_heights = self.measure_table_row_heights(
+            &table_rows,
+            s_cell.font_size_pt,
+            s_cell.line_height,
+            col_width,
+        );
+        let mut row_idx = 0usize;
+        while row_idx < table_rows.len() {
+            let group_end = rowspan_group_end(&table_rows, row_idx);
+            let group_height: f32 = row_heights[row_idx..group_end].iter().sum();
+            if self.y_from_top_pt + group_height + self.bottom_margin_pt() > self.page_height_pt() {
                 self.start_new_page();
                 // Reprint headers on the new page.
                 let header_top = self.y_from_top_pt;
                 self.draw_row(
                     headers,
+                    0,
+                    &[header_height],
                     aligns,
                     s_header.font_size_pt,
                     s_header.line_height,
@@ -1902,24 +1909,28 @@ impl<'a> Engine<'a> {
                     s_header.text_color_rgb(),
                 );
                 let header_bottom = header_top + header_height;
-                self.draw_row_borders(header_top, header_bottom, col_count, col_width);
                 self.y_from_top_pt = header_bottom;
                 self.advance_y(row_gap_pt);
             }
-            let row_top = self.y_from_top_pt;
-            self.draw_row(
-                &padded,
-                aligns,
-                s_cell.font_size_pt,
-                s_cell.line_height,
-                col_width,
-                false,
-                s_cell.text_color_rgb(),
-            );
-            let row_bottom = row_top + row_height;
-            self.draw_row_borders(row_top, row_bottom, col_count, col_width);
-            self.y_from_top_pt = row_bottom;
+            let group_top = self.y_from_top_pt;
+            let group_heights = &row_heights[row_idx..group_end];
+            for local_idx in 0..(group_end - row_idx) {
+                self.y_from_top_pt = group_top + group_heights[..local_idx].iter().sum::<f32>();
+                self.draw_row(
+                    &table_rows[row_idx + local_idx],
+                    local_idx,
+                    group_heights,
+                    aligns,
+                    s_cell.font_size_pt,
+                    s_cell.line_height,
+                    col_width,
+                    false,
+                    s_cell.text_color_rgb(),
+                );
+            }
+            self.y_from_top_pt = group_top + group_height;
             self.advance_y(row_gap_pt);
+            row_idx = group_end;
         }
 
         let _ = CELL_PAD_PT;
@@ -1928,7 +1939,7 @@ impl<'a> Engine<'a> {
 
     fn measure_row_height(
         &self,
-        cells: &[Vec<InlineRun>],
+        cells: &[TableCell<InlineRun>],
         font_size: f32,
         line_height_mult: f32,
         col_width: f32,
@@ -1937,17 +1948,56 @@ impl<'a> Engine<'a> {
         let line_h = font_size * line_height_mult.max(0.5);
         let mut max_lines = 1usize;
         for cell in cells {
+            if cell.covered {
+                continue;
+            }
             let n_lines = count_wrapped_lines(
-                cell,
+                &cell.content,
                 font_size,
                 line_height_mult,
-                col_width - 8.0,
+                col_width * cell.colspan.max(1) as f32 - 8.0,
                 self.font_set,
                 bold,
             );
             max_lines = max_lines.max(n_lines);
         }
         max_lines as f32 * line_h + 6.0
+    }
+
+    fn measure_table_row_heights(
+        &self,
+        rows: &[Vec<TableCell<InlineRun>>],
+        font_size: f32,
+        line_height_mult: f32,
+        col_width: f32,
+    ) -> Vec<f32> {
+        let mut heights: Vec<f32> = rows
+            .iter()
+            .map(|row| self.measure_row_height(row, font_size, line_height_mult, col_width, false))
+            .collect();
+        for (r, row) in rows.iter().enumerate() {
+            for cell in row {
+                let span = cell.rowspan.max(1);
+                if cell.covered || span <= 1 || r + span > rows.len() {
+                    continue;
+                }
+                let need = self.measure_row_height(
+                    std::slice::from_ref(cell),
+                    font_size,
+                    line_height_mult,
+                    col_width,
+                    false,
+                );
+                let have: f32 = heights[r..r + span].iter().sum();
+                if need > have {
+                    let extra = (need - have) / span as f32;
+                    for h in &mut heights[r..r + span] {
+                        *h += extra;
+                    }
+                }
+            }
+        }
+        heights
     }
 
     /// Sum the rendered widths of a cell's inline runs (no wrapping).
@@ -1967,7 +2017,9 @@ impl<'a> Engine<'a> {
 
     fn draw_row(
         &mut self,
-        cells: &[Vec<InlineRun>],
+        cells: &[TableCell<InlineRun>],
+        row_offset: usize,
+        row_heights: &[f32],
         aligns: &[crate::markdown::TableAlignment],
         font_size: f32,
         line_height_mult: f32,
@@ -1979,13 +2031,18 @@ impl<'a> Engine<'a> {
         let saved_left = self.indent_left_pt;
         let saved_right = self.indent_right_pt;
         let row_top = self.y_from_top_pt;
-        let mut max_bottom = row_top;
         let col_count = cells.len();
         for (i, cell) in cells.iter().enumerate() {
+            if cell.covered {
+                continue;
+            }
+            let colspan = cell.colspan.max(1).min(col_count - i);
+            let rowspan = cell.rowspan.max(1).min(row_heights.len() - row_offset);
+            let region_height: f32 = row_heights[row_offset..row_offset + rowspan].iter().sum();
             let cell_left = saved_left + col_width * i as f32 + CELL_PAD;
-            let cell_right = saved_left + col_width * (i + 1) as f32 - CELL_PAD;
+            let cell_right = saved_left + col_width * (i + colspan) as f32 - CELL_PAD;
             let inner_width = cell_right - cell_left;
-            let mut runs = cell.clone();
+            let mut runs = cell.content.clone();
             if bold {
                 for r in &mut runs {
                     r.flags = r.flags.with_bold();
@@ -2009,7 +2066,25 @@ impl<'a> Engine<'a> {
             };
             self.indent_left_pt = cell_left + shift;
             self.indent_right_pt = cell_right;
-            self.y_from_top_pt = row_top + 3.0;
+            // A row-spanning cell is vertically centered within the
+            // merged region. Every other cell keeps the original
+            // top-aligned `row_top + 3.0` so plain GFM and colspan-only
+            // tables render exactly as they did before spans existed.
+            self.y_from_top_pt = if rowspan > 1 {
+                let content_lines = count_wrapped_lines(
+                    &runs,
+                    font_size,
+                    line_height_mult,
+                    inner_width,
+                    self.font_set,
+                    false,
+                );
+                let content_height =
+                    content_lines as f32 * font_size * line_height_mult.max(0.5);
+                row_top + ((region_height - content_height) / 2.0).max(3.0)
+            } else {
+                row_top + 3.0
+            };
             self.write_wrapped_runs(
                 &runs,
                 font_size,
@@ -2017,32 +2092,33 @@ impl<'a> Engine<'a> {
                 RunFlags::default(),
                 Some(rgb_color(color)),
             );
-            if self.y_from_top_pt > max_bottom {
-                max_bottom = self.y_from_top_pt;
-            }
+            self.indent_left_pt = saved_left;
+            self.draw_cell_border(row_top, row_top + region_height, i, i + colspan, col_width);
         }
         self.indent_left_pt = saved_left;
         self.indent_right_pt = saved_right;
-        let _ = col_count;
         self.y_from_top_pt = row_top;
     }
 
-    fn draw_row_borders(
+    fn draw_cell_border(
         &mut self,
         row_top: f32,
         row_bottom: f32,
-        col_count: usize,
+        col_start: usize,
+        col_end: usize,
         col_width: f32,
     ) {
         self.close_text_section();
         let page_h = self.page_height_pt();
         let border_color = rgb_color((180, 180, 180));
         let left = self.indent_left_pt;
+        let x0 = left + col_width * col_start as f32;
+        let x1 = left + col_width * col_end as f32;
         // Horizontal lines: top and bottom of the row.
         draw_horizontal_line(
             &mut self.page_ops,
-            left,
-            left + col_width * col_count as f32,
+            x0,
+            x1,
             row_top,
             border_color.clone(),
             0.5,
@@ -2050,18 +2126,15 @@ impl<'a> Engine<'a> {
         );
         draw_horizontal_line(
             &mut self.page_ops,
-            left,
-            left + col_width * col_count as f32,
+            x0,
+            x1,
             row_bottom,
             border_color.clone(),
             0.5,
             page_h,
         );
-        // Vertical lines: col_count + 1 dividers.
-        for i in 0..=col_count {
-            let x = left + col_width * i as f32;
-            draw_vertical_line(&mut self.page_ops, x, row_top, row_bottom, page_h);
-        }
+        draw_vertical_line(&mut self.page_ops, x0, row_top, row_bottom, page_h);
+        draw_vertical_line(&mut self.page_ops, x1, row_top, row_bottom, page_h);
     }
 
     fn render_list(&mut self, entries: &[ListEntry]) {
@@ -3140,6 +3213,20 @@ fn dash_pattern_for(style: BorderStyle) -> LineDashPattern {
             gap_3: None,
         },
     }
+}
+
+fn rowspan_group_end(rows: &[Vec<TableCell<InlineRun>>], start: usize) -> usize {
+    let mut end = (start + 1).min(rows.len());
+    let mut r = start;
+    while r < end {
+        for cell in &rows[r] {
+            if !cell.covered {
+                end = end.max((r + cell.rowspan.max(1)).min(rows.len()));
+            }
+        }
+        r += 1;
+    }
+    end
 }
 
 /// Generalized line draw with explicit color / thickness / dash.
