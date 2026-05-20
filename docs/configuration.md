@@ -290,6 +290,20 @@ See [the spec](https://example.com/spec "Hover tooltip here").
 The tooltip lands in the PDF's `/Contents` entry on the link
 annotation; supported PDF viewers display it on hover.
 
+Inline HTML anchors are recognised too, which is handy when content
+comes from HTML-converted sources:
+
+```markdown
+Visit <a href="https://example.com" title="Hover tooltip here">the site</a>.
+```
+
+The `href` becomes the link target and the optional `title` flows
+through the same tooltip path. Hrefs may use single or double quotes
+and the tag name / attributes are case-insensitive
+(`<A HREF="…">…</A>` works). An `<a>` without `href`, a self-closing
+`<a … />`, an unclosed opener, or a stray `</a>` degrades to literal
+markup rather than producing a broken annotation.
+
 Internal cross-references resolve automatically:
 
 ```markdown
@@ -530,6 +544,50 @@ Second page content.
 ```
 
 The marker is case-insensitive and whitespace-tolerant.
+
+## Inline HTML
+
+markdown2pdf understands a small, deliberately conservative subset of
+inline HTML. Anything outside the subset passes through as literal
+text — no scripting, no arbitrary HTML execution.
+
+**Inline styling tags** apply to the wrapped text:
+
+| Tag | Effect |
+| --- | ------ |
+| `<sup>` | superscript |
+| `<sub>` | subscript |
+| `<u>` | underline |
+| `<s>`, `<del>`, `<strike>` | strikethrough |
+| `<small>` | smaller text |
+| `<kbd>` | monospace (keyboard input) |
+| `<br>` / `<br/>` | soft line break |
+
+**Anchors** — `<a href="…" title="…">…</a>` becomes a clickable PDF
+link annotation; see the [Links](#links) section above.
+
+**Structural block wrappers** drop out so their children render as
+normal paragraphs: `<div>`, `<section>`, `<figure>`, `<figcaption>`,
+`<p>`, and `<center>` (with or without attributes). This is what
+lets documents converted from HTML keep working without showing
+literal `<div>` markup.
+
+```markdown
+<section>
+
+Inner **markdown** still renders, including [links](https://example.com).
+
+</section>
+```
+
+**Comments** (`<!-- … -->`) are invisible per CommonMark, and the
+special marker `<!-- pagebreak -->` forces a page break (see
+[Page breaks](#page-breaks)).
+
+Everything else — `<span>`, `<aside>`, custom elements, raw
+`<script>` / `<style>` / `<pre>` / `<textarea>` blocks — renders
+verbatim as a monospace HTML block, so the source stays visible
+rather than being silently dropped or interpreted.
 
 ## Loading methods
 

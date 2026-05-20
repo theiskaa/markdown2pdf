@@ -8,14 +8,15 @@ Each release section below is what ships as the GitHub Release notes.
 
 ## [1.3.0] - 2026-05-19
 
-A table release. GFM tables are strictly one value per cell, which
-breaks merged header groups and summary rows in documents converted
-from HTML or authored with extended table syntax. markdown2pdf now
-understands **merged cells**: a cell can span columns and/or rows, and
-the layout engine computes the merged rectangle — column width
-distributed across the spanned columns, the cell vertically centered
-across spanned rows, a single border around the merged region, and a
-spanned group kept whole when it would otherwise cross a page break.
+A table + HTML interop release. GFM tables are strictly one value
+per cell, which breaks merged header groups and summary rows in
+documents converted from HTML or authored with extended table
+syntax. markdown2pdf now understands **merged cells**: a cell can
+span columns and/or rows, and the layout engine computes the merged
+rectangle — column width distributed across the spanned columns,
+the cell vertically centered across spanned rows, a single border
+around the merged region, and a spanned group kept whole when it
+would otherwise cross a page break.
 
 The authoring syntax is pragmatic and stays inside the pipe-table
 grammar: a `>` cell extends the cell before it across one more column,
@@ -29,7 +30,26 @@ still apply to the cells around a span, and a plain GFM table with no
 markers renders exactly as it did before — purely additive, no
 breaking changes.
 
-Resolves [#83](https://github.com/theiskaa/markdown2pdf/issues/83).
+Alongside the table work this release also closes the inline-HTML
+gap that left `<a href="…">…</a>` and structural block wrappers
+rendering as literal markup. Inline anchors are now recognised
+before lowering and rewritten into a real link token, so they
+become clickable PDF annotations like any markdown link — an
+optional `title="…"` flows through the same postprocess path that
+already serves `[text](url "title")` tooltips. Structural block
+wrappers (`<div>`, `<section>`, `<figure>`, `<figcaption>`, joining
+the existing `<p>` and `<center>`) drop out so their children flow
+as normal paragraphs instead of rendering as monospace HTML. The
+recogniser handles single- and double-quoted hrefs and
+case-insensitive tag/attribute names; nested `<a>`, missing `href`,
+self-closing `<a … />`, unclosed openers, orphan `</a>`, and
+openers split across a blank-line paragraph break all bail and
+degrade to the existing pass-through, and everything outside this
+subset (`<span>`, `<aside>`, custom elements, …) keeps the previous
+pass-through with no scripting or arbitrary HTML execution
+introduced.
+
+Resolves [#83](https://github.com/theiskaa/markdown2pdf/issues/83) and [#84](https://github.com/theiskaa/markdown2pdf/issues/84).
 
 ## [1.2.0] - 2026-05-18
 
@@ -401,6 +421,7 @@ emphasis, links, and nested tokens.
 [1.1.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.1.0
 [1.0.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.0.0
 
+[#84]: https://github.com/theiskaa/markdown2pdf/issues/84
 [#83]: https://github.com/theiskaa/markdown2pdf/issues/83
 [#78]: https://github.com/theiskaa/markdown2pdf/issues/78
 [#79]: https://github.com/theiskaa/markdown2pdf/issues/79
