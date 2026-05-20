@@ -43,3 +43,31 @@ left = { width_pt = 3.0, color = "#D0D7DE", style = "solid" }
 [link]
 text_color = "#0969DA"
 underline = false
+
+# Match GitHub's actual alert palette.
+[admonition]
+text_color = "#1F2328"
+
+[admonition.note]
+accent_color = "#0969DA"
+background_color = "#DDF4FF"
+
+[admonition.info]
+accent_color = "#8250DF"   # GitHub's "important" colour family
+background_color = "#FBEFFF"
+
+[admonition.tip]
+accent_color = "#1A7F37"
+background_color = "#DAFBE1"
+
+[admonition.warning]
+accent_color = "#9A6700"
+background_color = "#FFF8C5"
+
+[admonition.danger]
+accent_color = "#CF222E"   # GitHub's "caution"
+background_color = "#FFEBE9"
+
+[admonition.generic]
+accent_color = "#57606A"
+background_color = "#F6F8FA"

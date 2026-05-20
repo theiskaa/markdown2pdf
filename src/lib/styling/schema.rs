@@ -24,6 +24,13 @@ pub struct DocumentConfig {
     pub code_block: Option<BlockConfig>,
     pub code_inline: Option<InlineConfig>,
     pub blockquote: Option<BlockConfig>,
+    /// Per-kind callout / admonition styling. The top-level
+    /// `[admonition]` block holds shared shape fields (padding,
+    /// margins, font defaults). The nested `[admonition.note]`,
+    /// `[admonition.info]`, `[admonition.tip]`, `[admonition.warning]`,
+    /// `[admonition.danger]`, and `[admonition.generic]` blocks layer
+    /// per-kind colour and label overrides on top.
+    pub admonition: Option<AdmonitionConfig>,
     pub list: Option<ListsConfig>,
     pub table: Option<TableConfig>,
     pub image: Option<ImageConfig>,
@@ -110,6 +117,39 @@ pub struct InlineConfig {
     pub padding: Option<Sides<f32>>,
     pub strikethrough: Option<bool>,
     pub underline: Option<bool>,
+}
+
+/// Per-kind admonition styling. The top-level [admonition] block
+/// flattens a [`BlockConfig`] so shared shape fields (padding, margins,
+/// font defaults) can be set in one place; the per-kind sub-blocks
+/// layer colour and label overrides on top.
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct AdmonitionConfig {
+    #[serde(flatten)]
+    pub defaults: BlockConfig,
+    pub note: Option<AdmonitionKindConfig>,
+    pub info: Option<AdmonitionKindConfig>,
+    pub tip: Option<AdmonitionKindConfig>,
+    pub warning: Option<AdmonitionKindConfig>,
+    pub danger: Option<AdmonitionKindConfig>,
+    /// Catch-all for unknown kinds (`!!! bug "…"`). Inherits from
+    /// [admonition] defaults; the renderer surfaces the author's raw
+    /// label name as the header when no per-kind label override is set.
+    pub generic: Option<AdmonitionKindConfig>,
+}
+
+/// Per-kind admonition overrides. Shape comes from the parent
+/// [admonition] defaults; this block layers colour (`accent_color`
+/// drives the icon + left border) and an optional explicit label
+/// override on top.
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct AdmonitionKindConfig {
+    #[serde(flatten)]
+    pub block: BlockConfig,
+    pub accent_color: Option<Color>,
+    pub label: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
