@@ -112,6 +112,43 @@ impl Token {
                 result
             }
 
+            Token::Admonition {
+                kind,
+                raw_label,
+                title,
+                body,
+            } => {
+                let mut result = format!("{}{{\n", indent);
+                result.push_str(&format!("{}\"type\": \"Admonition\",\n", inner_indent));
+                result.push_str(&format!("{}\"kind\": \"{}\",\n", inner_indent, kind));
+                result.push_str(&format!(
+                    "{}\"raw_label\": \"{}\",\n",
+                    inner_indent, raw_label
+                ));
+                if let Some(t) = title {
+                    result.push_str(&format!("{}\"title\": [\n", inner_indent));
+                    for (i, token) in t.iter().enumerate() {
+                        result.push_str(&token.to_readable_json(indent_level + 2));
+                        if i < t.len() - 1 {
+                            result.push(',');
+                        }
+                        result.push('\n');
+                    }
+                    result.push_str(&format!("{}],\n", inner_indent));
+                }
+                result.push_str(&format!("{}\"body\": [\n", inner_indent));
+                for (i, token) in body.iter().enumerate() {
+                    result.push_str(&token.to_readable_json(indent_level + 2));
+                    if i < body.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}]\n", inner_indent));
+                result.push_str(&format!("{}}}", indent));
+                result
+            }
+
             Token::ListItem {
                 content,
                 ordered,
@@ -537,6 +574,24 @@ impl Token {
                 format!("{}({}, {})", kind, quote(language), quote(content))
             }
             Token::BlockQuote(body) => format!("BlockQuote({})", list(body)),
+            Token::Admonition {
+                kind,
+                raw_label,
+                title,
+                body,
+            } => {
+                let title_s = match title {
+                    Some(t) => list(t),
+                    None => "_".to_string(),
+                };
+                format!(
+                    "Admonition(kind={}, raw={}, title={}, body={})",
+                    quote(kind),
+                    quote(raw_label),
+                    title_s,
+                    list(body)
+                )
+            }
             Token::ListItem {
                 content,
                 ordered,

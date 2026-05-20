@@ -153,6 +153,90 @@ const BLOCK_ELEMENT_TAG_NAMES: &[&str] = &[
     "thead", "title", "tr", "track", "ul",
 ];
 
+/// Map a raw admonition label (the word right after `!!!` or inside
+/// `[!…]`) to the canonical kind used by the renderer. Case-insensitive.
+/// Returns `"generic"` for anything unrecognised so unknown labels
+/// still get the styled-box treatment (with their raw label as the
+/// header) instead of erroring out.
+pub(crate) fn canonical_admonition_kind(raw: &str) -> &'static str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "note" => "note",
+        "info" | "important" => "info",
+        "tip" | "hint" => "tip",
+        "warning" | "warn" | "attention" => "warning",
+        "danger" | "caution" | "error" => "danger",
+        _ => "generic",
+    }
+}
+
+/// Detects a GFM alert marker (`[!KIND]`) on the first body line of a
+/// blockquote. On match returns `(canonical_kind, raw_label,
+/// stripped_body_lines)`: the marker is removed and any inline content
+/// that followed it on the same line is preserved as the new first
+/// line. Returns `None` for anything else (regular blockquote stays
+/// a blockquote).
+///
+/// The first line is the only place the marker is recognised; up to
+/// 3 leading spaces are tolerated (matching CommonMark's block-marker
+/// indent rule). Empty kinds (`[!]`) are rejected.
+pub(crate) fn extract_gfm_alert_marker(
+    body_lines: &[String],
+) -> Option<(String, String, Vec<String>)> {
+    let first = body_lines.first()?;
+    let bytes: Vec<char> = first.chars().collect();
+    let mut p = 0usize;
+    // Up to 3 leading spaces.
+    let mut spaces = 0usize;
+    while p < bytes.len() && bytes[p] == ' ' && spaces < 3 {
+        spaces += 1;
+        p += 1;
+    }
+    if p + 1 >= bytes.len() || bytes[p] != '[' || bytes[p + 1] != '!' {
+        return None;
+    }
+    let name_start = p + 2;
+    let mut q = name_start;
+    while q < bytes.len() {
+        let c = bytes[q];
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            q += 1;
+        } else {
+            break;
+        }
+    }
+    if q == name_start || q >= bytes.len() || bytes[q] != ']' {
+        return None;
+    }
+    let raw_label: String = bytes[name_start..q]
+        .iter()
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let kind = canonical_admonition_kind(&raw_label).to_string();
+    let after_marker = q + 1;
+    // The marker must be the last token on the line, or be followed by
+    // whitespace + optional inline content. `[!NOTE]text` (no
+    // separator) stays a blockquote.
+    if after_marker < bytes.len() {
+        let next = bytes[after_marker];
+        if next != ' ' && next != '\t' {
+            return None;
+        }
+    }
+    let trailing: String = bytes[after_marker..]
+        .iter()
+        .collect::<String>()
+        .trim_start()
+        .to_string();
+
+    let mut stripped: Vec<String> = body_lines.iter().cloned().collect();
+    if trailing.is_empty() {
+        stripped.remove(0);
+    } else {
+        stripped[0] = trailing;
+    }
+    Some((kind, raw_label, stripped))
+}
+
 /// Internal parsing-state context — which tokens are valid where.
 /// Not exposed: consumers use [`Lexer::parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +271,32 @@ pub enum Token {
     /// Block quote whose body is itself a sequence of tokens (so emphasis,
     /// links, code, etc. inside `> …` lines are properly parsed).
     BlockQuote(Vec<Token>),
+    /// A semantic callout / admonition block. Produced by either the
+    /// MkDocs-style `!!! kind "Optional title"` opener or the GFM alert
+    /// form `> [!KIND]` inside a blockquote. The renderer paints a
+    /// tinted box with a per-kind icon + label header and lays out
+    /// `body` as a nested block sequence (so admonitions can contain
+    /// lists, code blocks, even nested admonitions).
+    Admonition {
+        /// Canonical kind: `note`, `info`, `tip`, `warning`, `danger`,
+        /// or `generic` for unrecognised labels. Aliases collapse
+        /// here (`caution`/`error` → `danger`, `important` → `info`,
+        /// `warn` → `warning`, `hint` → `tip`).
+        kind: String,
+        /// The kind name the author actually typed, lowercased. Stays
+        /// available so the renderer can surface unknown labels
+        /// (`!!! bug "…"` becomes a generic box headed `BUG`) instead
+        /// of erasing the author's wording.
+        raw_label: String,
+        /// Parsed inline content of the MkDocs `"Optional title"`
+        /// bit, or `None` for the GFM alert form (where the kind
+        /// alone is the header) and for `!!!` openers without a
+        /// quoted title.
+        title: Option<Vec<Token>>,
+        /// Sub-lexed body. Always parsed in block context, so
+        /// paragraphs, lists, fences, tables, etc. all work inside.
+        body: Vec<Token>,
+    },
     /// List item with nested content and type information
     ListItem {
         content: Vec<Token>,
@@ -378,6 +488,16 @@ impl Token {
             }
             Token::Code { content, .. } => result.push_str(content),
             Token::BlockQuote(body) => {
+                for token in body {
+                    token.collect_text_recursive(result);
+                }
+            }
+            Token::Admonition { title, body, .. } => {
+                if let Some(t) = title {
+                    for token in t {
+                        token.collect_text_recursive(result);
+                    }
+                }
                 for token in body {
                     token.collect_text_recursive(result);
                 }
@@ -2266,9 +2386,20 @@ impl Lexer {
             }
             '[' => self.parse_bracket_dispatch(is_block_start)?,
             '!' => {
-                // Check if this is a valid image start (! followed by [)
+                // Image (`![alt](url)`) wins over admonition because
+                // the patterns are disjoint (`![` vs `!!!`).
                 if self.position + 1 < self.input.len() && self.input[self.position + 1] == '[' {
                     self.parse_image()?
+                } else if is_block_start
+                    && allow_block_tokens(ctx)
+                    && self.position + 2 < self.input.len()
+                    && self.input[self.position + 1] == '!'
+                    && self.input[self.position + 2] == '!'
+                {
+                    match self.try_parse_mkdocs_admonition()? {
+                        Some(tok) => tok,
+                        None => self.parse_text(ctx)?,
+                    }
                 } else {
                     self.parse_text(ctx)?
                 }
@@ -3090,6 +3221,30 @@ impl Lexer {
             }
         }
 
+        // GFM alert: a blockquote whose first body line is `[!KIND]`
+        // (with up to 3 leading spaces, case-insensitive kind, optional
+        // inline content after a space) is a callout, not a quote.
+        // Unknown kinds still convert — the renderer's `generic` box
+        // gives the author visible feedback that the marker landed.
+        if let Some((kind, raw_label, stripped_body)) =
+            extract_gfm_alert_marker(&body_lines)
+        {
+            let body_text = stripped_body.join("\n");
+            let body = if body_text.trim().is_empty() {
+                Vec::new()
+            } else {
+                let mut sub = self.sub_lexer(body_text);
+                sub.suppress_setext = had_lazy;
+                sub.parse_with_context(ParseContext::BlockQuote)?
+            };
+            return Ok(Token::Admonition {
+                kind,
+                raw_label,
+                title: None,
+                body,
+            });
+        }
+
         let body_text = body_lines.join("\n");
         let mut sub = self.sub_lexer(body_text);
         // Lazy continuation lines can't form a setext underline (CommonMark
@@ -3099,6 +3254,182 @@ impl Lexer {
         sub.suppress_setext = had_lazy;
         let body = sub.parse_with_context(ParseContext::BlockQuote)?;
         Ok(Token::BlockQuote(body))
+    }
+
+    /// MkDocs-style admonition opener: `!!! kind "Optional title"` on
+    /// its own line, followed by zero or more body lines indented by
+    /// at least 4 columns (or 1 tab). The block ends at the first
+    /// non-indented non-blank line, or at EOF.
+    ///
+    /// Returns `Ok(None)` (without consuming input) when the opener
+    /// doesn't match — the dispatcher then falls through to paragraph
+    /// parsing. The opener must be at the start of a line (modulo up
+    /// to 3 leading spaces, which the caller has already skipped).
+    fn try_parse_mkdocs_admonition(&mut self) -> Result<Option<Token>, LexerError> {
+        let saved = self.position;
+
+        // Exactly three `!`s — `!!!!` is not an admonition opener.
+        if self.position + 2 >= self.input.len()
+            || self.input[self.position] != '!'
+            || self.input[self.position + 1] != '!'
+            || self.input[self.position + 2] != '!'
+        {
+            return Ok(None);
+        }
+        if self.input.get(self.position + 3) == Some(&'!') {
+            return Ok(None);
+        }
+        self.position += 3;
+
+        // A space or tab MUST separate `!!!` from the kind word.
+        // `!!!note` is not an admonition opener.
+        if self.position >= self.input.len()
+            || (self.current_char() != ' ' && self.current_char() != '\t')
+        {
+            self.position = saved;
+            return Ok(None);
+        }
+        while self.position < self.input.len()
+            && (self.current_char() == ' ' || self.current_char() == '\t')
+        {
+            self.advance();
+        }
+
+        // Kind identifier: ASCII letters / digits / hyphen / underscore.
+        let kind_start = self.position;
+        while self.position < self.input.len() {
+            let c = self.current_char();
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        if self.position == kind_start {
+            self.position = saved;
+            return Ok(None);
+        }
+        let raw_label: String = self.input[kind_start..self.position]
+            .iter()
+            .collect::<String>()
+            .to_ascii_lowercase();
+        let kind = canonical_admonition_kind(&raw_label).to_string();
+
+        // Optional `"title"`. Must be double-quoted and stay on this line.
+        while self.position < self.input.len()
+            && (self.current_char() == ' ' || self.current_char() == '\t')
+        {
+            self.advance();
+        }
+        let mut title_text: Option<String> = None;
+        if self.position < self.input.len() && self.current_char() == '"' {
+            self.advance();
+            let title_start = self.position;
+            while self.position < self.input.len()
+                && self.current_char() != '"'
+                && self.current_char() != '\n'
+            {
+                self.advance();
+            }
+            if self.position >= self.input.len() || self.current_char() != '"' {
+                // Unterminated / line-spanning quote — not a valid opener.
+                self.position = saved;
+                return Ok(None);
+            }
+            let raw_title: String =
+                self.input[title_start..self.position].iter().collect();
+            self.advance(); // closing `"`
+            title_text = Some(raw_title);
+        }
+
+        // Whitespace then newline (or EOF). Junk on the opener line
+        // disqualifies the whole construct.
+        while self.position < self.input.len()
+            && (self.current_char() == ' ' || self.current_char() == '\t')
+        {
+            self.advance();
+        }
+        if self.position < self.input.len() && self.current_char() != '\n' {
+            self.position = saved;
+            return Ok(None);
+        }
+        if self.position < self.input.len() {
+            self.advance(); // consume opener-line newline
+        }
+
+        // Collect dedented body lines. Each kept line is either blank
+        // or has at least 4 columns of leading indent (CommonMark tab
+        // expansion: `\t` reaches the next multiple of 4).
+        let mut body_lines: Vec<String> = Vec::new();
+        loop {
+            if self.position >= self.input.len() {
+                break;
+            }
+            let line_start = self.position;
+            let mut p = line_start;
+            let mut col = 0usize;
+            while p < self.input.len() && col < 4 {
+                match self.input[p] {
+                    ' ' => col += 1,
+                    '\t' => col = (col / 4 + 1) * 4,
+                    _ => break,
+                }
+                p += 1;
+            }
+            let is_blank = p >= self.input.len() || self.input[p] == '\n';
+            if !is_blank && col < 4 {
+                // Dedented content line — block ends here.
+                break;
+            }
+            if is_blank {
+                // Even partially-indented blank lines stay inside the
+                // body so paragraph breaks survive.
+                self.position = p;
+                if self.position < self.input.len() {
+                    self.advance(); // newline
+                }
+                body_lines.push(String::new());
+                continue;
+            }
+            self.position = p;
+            let line_content = self.read_until_newline();
+            if self.position < self.input.len() {
+                self.advance(); // newline
+            }
+            body_lines.push(line_content);
+        }
+
+        // Trim trailing blank lines so a stray empty paragraph isn't
+        // appended at the end of the body.
+        while body_lines
+            .last()
+            .map(|l| l.is_empty())
+            .unwrap_or(false)
+        {
+            body_lines.pop();
+        }
+
+        let title = if let Some(raw_title) = title_text {
+            let mut sub = self.sub_lexer(raw_title);
+            Some(sub.parse_with_context(ParseContext::Inline)?)
+        } else {
+            None
+        };
+
+        let body = if body_lines.is_empty() {
+            Vec::new()
+        } else {
+            let body_text = body_lines.join("\n");
+            let mut sub = self.sub_lexer(body_text);
+            sub.parse_with_context(ParseContext::BlockQuote)?
+        };
+
+        Ok(Some(Token::Admonition {
+            kind,
+            raw_label,
+            title,
+            body,
+        }))
     }
 
     /// Returns true if the line beginning at `pos` (already past any 0-3
