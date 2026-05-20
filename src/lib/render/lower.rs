@@ -114,6 +114,25 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 out.push(Block::BlockQuote { body: nested });
                 i += 1;
             }
+            Token::Admonition {
+                kind,
+                raw_label,
+                title,
+                body,
+            } => {
+                flush_paragraph(&mut out, &mut buffered_inline);
+                let title_runs = title.as_ref().map(|t| {
+                    flatten_inline(t, RunFlags::default(), None, &footnote_numbers)
+                });
+                let nested = lower(body);
+                out.push(Block::Admonition {
+                    kind: kind.clone(),
+                    raw_label: raw_label.clone(),
+                    title: title_runs,
+                    body: nested,
+                });
+                i += 1;
+            }
             Token::DefinitionList { entries } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 let ir_entries: Vec<DefinitionEntry> = entries
@@ -688,6 +707,7 @@ fn make_list_entry(
                 | Token::Code { block: true, .. }
                 | Token::HorizontalRule
                 | Token::BlockQuote(_)
+                | Token::Admonition { .. }
                 | Token::Table { .. }
         ) {
             inline_end = i;
@@ -973,6 +993,22 @@ fn flatten_one(
         | Token::BlockQuote(content)
         | Token::ListItem { content, .. } => {
             for t in content {
+                flatten_one(t, flags, link, out, footnotes);
+            }
+        }
+        // If an admonition ever reaches the inline flattener (it
+        // shouldn't — the top-level lower arm promotes it to
+        // Block::Admonition) we degrade gracefully by spilling its
+        // header label and body text into the surrounding run.
+        Token::Admonition { raw_label, title, body, .. } => {
+            if let Some(t) = title {
+                for tok in t {
+                    flatten_one(tok, flags, link, out, footnotes);
+                }
+            } else {
+                push_text(out, raw_label, flags, link);
+            }
+            for t in body {
                 flatten_one(t, flags, link, out, footnotes);
             }
         }

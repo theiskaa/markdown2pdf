@@ -23,6 +23,22 @@ pub enum Block {
     List { entries: Vec<ListEntry> },
     /// A block quote whose body is itself a sequence of [`Block`]s.
     BlockQuote { body: Vec<Block> },
+    /// A semantic callout / admonition block. `kind` is the canonical
+    /// kind name (`note` / `info` / `tip` / `warning` / `danger` /
+    /// `generic`) the renderer keys per-kind styling off; `raw_label`
+    /// is the author's lowercased original kind word, surfaced as the
+    /// header for unknown kinds so `!!! bug "…"` reads as a `BUG` box.
+    /// `title` is the optional inline header override from the MkDocs
+    /// `"Optional title"` form; when `None` the renderer falls back to
+    /// the kind's default label. `body` is a nested block sequence so
+    /// admonitions can contain lists, code, tables, even nested
+    /// admonitions.
+    Admonition {
+        kind: String,
+        raw_label: String,
+        title: Option<Vec<InlineRun>>,
+        body: Vec<Block>,
+    },
     /// A GFM table.
     Table {
         headers: Vec<crate::markdown::TableCell<InlineRun>>,
@@ -191,6 +207,19 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
             }
         }
         Block::BlockQuote { body } => {
+            for child in body {
+                walk_block(child, u);
+            }
+        }
+        Block::Admonition { title, body, .. } => {
+            // The header label is rendered bold uppercase, so any
+            // admonition contributes a body-bold requirement.
+            u.body_bold = true;
+            if let Some(runs) = title {
+                for r in runs {
+                    walk_run(r, u);
+                }
+            }
             for child in body {
                 walk_block(child, u);
             }

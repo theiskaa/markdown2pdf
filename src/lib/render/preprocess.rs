@@ -36,6 +36,12 @@ fn descend(tok: &mut Token) {
         | Token::InlineFootnote { content, .. } => rewrite_html_anchors(content),
         Token::Emphasis { content, .. } => rewrite_html_anchors(content),
         Token::Image { alt, .. } => rewrite_html_anchors(alt),
+        Token::Admonition { title, body, .. } => {
+            if let Some(t) = title {
+                rewrite_html_anchors(t);
+            }
+            rewrite_html_anchors(body);
+        }
         Token::Table { headers, rows, .. } => {
             for cell in headers {
                 rewrite_html_anchors(&mut cell.content);
