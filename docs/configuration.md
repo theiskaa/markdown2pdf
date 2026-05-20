@@ -382,6 +382,76 @@ Some ==important== text, and a ==**bold mark**==.
 `---`) still underlines the paragraph above it as a Setext heading, and
 an unterminated `==` renders as literal text.
 
+### Admonitions (`!!! kind` / `> [!KIND]`)
+
+```toml
+[admonition]
+padding = { top = 8.0, right = 12.0, bottom = 8.0, left = 14.0 }
+margin_before_pt = 4.0
+margin_after_pt = 4.0
+
+[admonition.note]
+accent_color = "#448AFF"
+background_color = "#E7F2FF"
+```
+
+Two authoring syntaxes are recognised and both produce the same
+styled box:
+
+```markdown
+!!! warning "Watch out"
+    A MkDocs-style admonition. The body is indented at least four
+    spaces; blank lines inside the body are preserved.
+
+> [!NOTE]
+> A GitHub-flavoured alert. The marker may stand alone on the
+> first line, or carry inline content after a space.
+```
+
+**First-class kinds** are `note`, `info`, `tip`, `warning`, and
+`danger`. The obvious aliases collapse to those so a document
+authored against either ecosystem renders the same way: `caution`
+and `error` map to `danger`, `important` maps to `info`, `warn`
+and `attention` map to `warning`, `hint` maps to `tip`.
+
+**Unknown kinds** (`!!! bug "Repro"`, `> [!QUESTION]`) fall back
+to a `generic` palette and surface the raw label uppercased as
+the header so the author's intent is never erased:
+
+```markdown
+!!! bug "Repro steps"
+    Renders in the generic grey box with "Repro steps" as the
+    header.
+
+!!! quirk
+    No title — the header reads "QUIRK" verbatim.
+```
+
+The `[admonition]` block holds shared shape (padding, margins,
+font defaults). Per-kind sub-blocks layer colour and label
+overrides on top:
+
+```toml
+[admonition.danger]
+accent_color = "#FF1744"
+background_color = "#FFEBEE"
+label = "STOP"        # overrides the default "DANGER" header
+```
+
+`accent_color` drives both the left border and the per-kind icon
+(`note` ●, `info` ⓘ, `tip` 💡, `warning` ⚠ +!, `danger` ⊗,
+`generic` ≡); icons are drawn as vector glyphs so they don't
+depend on any font's coverage. Each bundled theme ships its own
+palette — `github` matches GitHub's alert colours, `academic` /
+`minimal` stay restrained, `modern` leans vibrant.
+
+A custom `"…"` title on the MkDocs form replaces the default
+header; inline markdown inside the title (emphasis, code) is
+preserved. Admonition bodies are block sequences — lists, fenced
+code, tables, even nested admonitions all work — and inline
+`<a href="…">` anchors inside the body still become clickable
+links.
+
 ### Math (`$…$`, `$$…$$`)
 
 `$…$` is inline math and `$$…$$` is a centered display block:
