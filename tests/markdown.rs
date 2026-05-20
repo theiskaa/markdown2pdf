@@ -229,3 +229,6 @@ mod unmatched_emphasis_fallback_tests;
 
 #[path = "markdown/wikilink_tests.rs"]
 mod wikilink_tests;
+
+#[path = "markdown/admonition_tests.rs"]
+mod admonition_tests;
