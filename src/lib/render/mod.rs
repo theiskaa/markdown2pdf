@@ -57,6 +57,7 @@ mod layout;
 mod lower;
 mod math;
 mod postprocess;
+mod preprocess;
 
 use crate::markdown::Token;
 use crate::styling::ResolvedStyle;
@@ -84,10 +85,15 @@ pub fn render_to_file(
 
 /// Render a token stream to PDF bytes.
 pub fn render_to_bytes(
-    tokens: Vec<Token>,
+    mut tokens: Vec<Token>,
     style: ResolvedStyle,
     font_config: Option<&FontConfig>,
 ) -> Result<Vec<u8>, MdpError> {
+    // Recognise inline `<a href="…">…</a>` HTML up front so the
+    // renderer's normal link path (and the tooltip post-pass below)
+    // handles it like any markdown link.
+    preprocess::rewrite_html_anchors(&mut tokens);
+
     let doc_title = style
         .metadata
         .title

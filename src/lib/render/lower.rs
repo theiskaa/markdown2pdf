@@ -368,7 +368,7 @@ fn parse_html_img_block(s: &str) -> Option<HtmlImg> {
 /// tag name and the closing `>`). Returns `(name, value)` pairs.
 /// Tolerates double-quoted, single-quoted, and unquoted values, plus
 /// boolean attributes.
-fn parse_html_attrs(s: &str) -> Vec<(String, String)> {
+pub(super) fn parse_html_attrs(s: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -449,11 +449,12 @@ fn strip_html_comments(s: &str) -> String {
     out
 }
 
-/// True if the HTML block is just a framing tag with no real content
-/// — `<p>`, `</p>`, `<div>`, `</div>`, `<center>`, `</center>`,
-/// optionally with attributes. These wrap content in GitHub-flavored
-/// markdown to apply alignment; we'd rather drop them than render
-/// them as literal monospace.
+/// True if the HTML block is just a structural wrapper tag with no
+/// real content — `<p>`, `<div>`, `<section>`, `<figure>`,
+/// `<figcaption>`, `<center>` (plus their close tags), optionally
+/// with attributes. These wrap content in GitHub-flavored markdown
+/// for layout/grouping; we'd rather drop them than render them as
+/// literal monospace.
 fn is_framing_only_html(s: &str) -> bool {
     let trimmed = strip_html_comments(s);
     let trimmed = trimmed.trim();
@@ -466,7 +467,10 @@ fn is_framing_only_html(s: &str) -> bool {
         .find(|c: char| c.is_ascii_whitespace())
         .unwrap_or(inner.len());
     let tag = inner[..tag_end].to_ascii_lowercase();
-    matches!(tag.as_str(), "p" | "div" | "center")
+    matches!(
+        tag.as_str(),
+        "p" | "div" | "section" | "figure" | "figcaption" | "center"
+    )
 }
 
 /// True if `s` (trimmed) consists of zero or more `<!-- ... -->`
