@@ -31,3 +31,10 @@ padding = 2.0
 [table]
 row_gap_pt = 1.0
 cell_padding = { top = 1.5, right = 3.0, bottom = 1.5, left = 3.0 }
+
+# Inherit per-kind colours from the default theme; just tighten the
+# padding so the callout matches the compact body rhythm.
+[admonition]
+padding = { top = 3.0, right = 8.0, bottom = 3.0, left = 10.0 }
+margin_before_pt = 1.5
+margin_after_pt = 1.5

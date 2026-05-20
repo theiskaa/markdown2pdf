@@ -6,50 +6,52 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Each release section below is what ships as the GitHub Release notes.
 
-## [1.3.0] - 2026-05-19
+## [1.3.0] - 2026-05-20
 
-A table + HTML interop release. GFM tables are strictly one value
-per cell, which breaks merged header groups and summary rows in
-documents converted from HTML or authored with extended table
-syntax. markdown2pdf now understands **merged cells**: a cell can
-span columns and/or rows, and the layout engine computes the merged
-rectangle — column width distributed across the spanned columns,
-the cell vertically centered across spanned rows, a single border
-around the merged region, and a spanned group kept whole when it
-would otherwise cross a page break.
+Three additions: merged GFM table cells, inline HTML anchors and
+structural wrappers, and admonition callout boxes. Each closes a gap
+where converted or richer markdown previously leaked its source
+markup into the rendered output. All three are purely additive — the
+existing render path is unchanged for documents that don't use them.
 
-The authoring syntax is pragmatic and stays inside the pipe-table
-grammar: a `>` cell extends the cell before it across one more column,
-and a `^` cell continues the cell directly above it down one more row.
-Markers are matched against the **raw** cell source, so a
-backslash-escaped `\>` / `\^` is always literal content and a real
-`>` / `^` value is never silently merged. Markers chain (`^` over
-several rows, several `>` in a row) and combine (a cell that spans
-both columns and rows). Column alignment and per-cell inline styling
-still apply to the cells around a span, and a plain GFM table with no
-markers renders exactly as it did before — purely additive, no
-breaking changes.
+**Merged table cells.** GFM tables now accept two span markers
+inside the pipe-table grammar: a `>` cell extends the cell before it
+across one more column, and a `^` cell continues the cell directly
+above it down one more row. Markers are matched against the raw cell
+source so backslash-escaped `\>` / `\^` is always literal content,
+they chain (`^` over several rows, several `>` in a row) and combine
+(a cell that spans both columns and rows), and the layout engine
+keeps a spanned group whole when it would otherwise cross a page
+break. Plain tables with no markers render exactly as before.
 
-Alongside the table work this release also closes the inline-HTML
-gap that left `<a href="…">…</a>` and structural block wrappers
-rendering as literal markup. Inline anchors are now recognised
-before lowering and rewritten into a real link token, so they
-become clickable PDF annotations like any markdown link — an
-optional `title="…"` flows through the same postprocess path that
-already serves `[text](url "title")` tooltips. Structural block
-wrappers (`<div>`, `<section>`, `<figure>`, `<figcaption>`, joining
-the existing `<p>` and `<center>`) drop out so their children flow
-as normal paragraphs instead of rendering as monospace HTML. The
-recogniser handles single- and double-quoted hrefs and
-case-insensitive tag/attribute names; nested `<a>`, missing `href`,
-self-closing `<a … />`, unclosed openers, orphan `</a>`, and
-openers split across a blank-line paragraph break all bail and
-degrade to the existing pass-through, and everything outside this
-subset (`<span>`, `<aside>`, custom elements, …) keeps the previous
-pass-through with no scripting or arbitrary HTML execution
-introduced.
+**Inline HTML anchors and structural wrappers.** Inline
+`<a href="…" title="…">…</a>` is rewritten to a real link token
+before lowering, so it becomes a clickable PDF annotation on the
+same path as `[text](url "title")`, tooltip included. Structural
+block wrappers — `<div>`, `<section>`, `<figure>`, `<figcaption>`,
+joining the existing `<p>` and `<center>` — drop out so their
+children render as normal paragraphs instead of as literal HTML.
+Malformed input (no `href`, self-closing, unclosed, orphan `</a>`,
+opener split across a paragraph break) falls through to the existing
+pass-through, and tags outside the recognised subset still render
+verbatim; no scripting is introduced.
 
-Resolves [#83](https://github.com/theiskaa/markdown2pdf/issues/83) and [#84](https://github.com/theiskaa/markdown2pdf/issues/84).
+**Admonition / callout boxes.** Two authoring conventions are
+recognised and produce the same output: the MkDocs form
+`!!! note "Optional title"` with a 4-space-indented body, and the
+GitHub alert form `> [!WARNING]` inside a blockquote. Each kind
+renders as a tinted box with an accent left border, a bold header
+(default per kind or the author's custom title), and a vector icon —
+`note` ●, `info` ⓘ, `tip` 💡, `warning` ⚠, `danger` ⊗, generic ≡ for
+unknown kinds. Five first-class kinds absorb the obvious aliases
+(`caution`/`error` → `danger`, `important` → `info`, `warn` /
+`attention` → `warning`, `hint` → `tip`); unknown kinds fall back to
+a generic grey box with the raw label uppercased as the header. A
+new `[admonition]` config block holds shared shape, per-kind
+`[admonition.<kind>]` blocks layer colour and label on top, and
+every bundled theme ships its own palette.
+
+Resolves [#83](https://github.com/theiskaa/markdown2pdf/issues/83), [#84](https://github.com/theiskaa/markdown2pdf/issues/84), and [#86](https://github.com/theiskaa/markdown2pdf/issues/86).
 
 ## [1.2.0] - 2026-05-18
 
@@ -421,6 +423,7 @@ emphasis, links, and nested tokens.
 [1.1.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.1.0
 [1.0.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.0.0
 
+[#86]: https://github.com/theiskaa/markdown2pdf/issues/86
 [#84]: https://github.com/theiskaa/markdown2pdf/issues/84
 [#83]: https://github.com/theiskaa/markdown2pdf/issues/83
 [#78]: https://github.com/theiskaa/markdown2pdf/issues/78

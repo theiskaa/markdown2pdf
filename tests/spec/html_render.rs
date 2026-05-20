@@ -33,6 +33,15 @@ fn render_blocks(tokens: &[Token], out: &mut String, in_loose_list_item: bool) {
                 out.push_str("</blockquote>\n");
                 i += 1;
             }
+            Token::Admonition { kind, body, .. } => {
+                out.push_str(&format!(
+                    "<aside class=\"admonition admonition-{}\">\n",
+                    escape_attr(kind)
+                ));
+                render_blocks(body, out, false);
+                out.push_str("</aside>\n");
+                i += 1;
+            }
             Token::HorizontalRule => {
                 out.push_str("<hr />\n");
                 i += 1;
@@ -235,6 +244,15 @@ fn render_tight_blocks(tokens: &[Token], out: &mut String) {
                 out.push_str("<blockquote>\n");
                 render_blocks(body, out, false);
                 out.push_str("</blockquote>\n");
+                i += 1;
+            }
+            Token::Admonition { kind, body, .. } => {
+                out.push_str(&format!(
+                    "<aside class=\"admonition admonition-{}\">\n",
+                    escape_attr(kind)
+                ));
+                render_blocks(body, out, false);
+                out.push_str("</aside>\n");
                 i += 1;
             }
             Token::HorizontalRule => {
@@ -511,6 +529,9 @@ fn render_inline_token(t: &Token, out: &mut String) {
             out.push_str(&escape_text(content));
             out.push_str(close);
         }
+        // Block-level token; never reached from the inline renderer
+        // but the match needs to stay exhaustive.
+        Token::Admonition { .. } => {}
     }
 }
 

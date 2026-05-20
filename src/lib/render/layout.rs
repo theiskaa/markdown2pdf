@@ -13,7 +13,8 @@ use printpdf::{
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::styling::{
-    BorderStyle, ImageAlign, Orientation, PageSize, ResolvedBlock, ResolvedBorder, ResolvedList,
+    BorderStyle, ImageAlign, Orientation, PageSize, ResolvedBlock, ResolvedBorder,
+    ResolvedBorderSide, ResolvedList,
     ResolvedPage, ResolvedPageFurniture, ResolvedStyle, ResolvedToc, TextAlignment,
 };
 
@@ -1187,6 +1188,12 @@ impl<'a> Engine<'a> {
             Block::HorizontalRule => self.render_horizontal_rule(),
             Block::List { entries } => self.render_list(entries),
             Block::BlockQuote { body } => self.render_blockquote(body),
+            Block::Admonition {
+                kind,
+                raw_label,
+                title,
+                body,
+            } => self.render_admonition(kind, raw_label, title.as_deref(), body),
             Block::Table {
                 headers,
                 aligns,
@@ -2300,6 +2307,117 @@ impl<'a> Engine<'a> {
         self.end_block(ctx);
     }
 
+    /// Render a callout / admonition block: tinted background, accent
+    /// left border, bold uppercase header (or the author's title if
+    /// they supplied one), then the body laid out as nested blocks.
+    /// Per-kind colour comes from `[admonition.kind]`; unknown kinds
+    /// land on the `generic` palette and surface their raw label as
+    /// the header.
+    fn render_admonition(
+        &mut self,
+        kind: &str,
+        raw_label: &str,
+        title: Option<&[InlineRun]>,
+        body: &[Block],
+    ) {
+        let resolved = self.style.admonition.for_kind(kind).clone();
+        let accent = resolved.accent_color;
+
+        // Build a per-call ResolvedBlock that overlays the accent
+        // colour on top of the kind's resolved shape: the left border
+        // is always painted in the accent colour and is thick enough
+        // to read as a callout strip, regardless of what the theme
+        // configured on `[admonition].border`.
+        let mut block_style = resolved.block.clone();
+        block_style.border.left = Some(ResolvedBorderSide {
+            width_pt: 3.0,
+            color: accent,
+            style: BorderStyle::Solid,
+        });
+
+        let ctx = self.begin_block(&block_style);
+
+        // Header line: title runs (already inline-flattened by lower)
+        // if the author wrote a quoted title; otherwise the kind's
+        // configured label (e.g. "NOTE"); for unknown kinds, fall
+        // back to the raw label uppercased so `!!! bug "…"` reads as
+        // a BUG box.
+        let header_runs: Vec<InlineRun> = match title {
+            Some(runs) if !runs.is_empty() => {
+                // Title rendered bold + accent-coloured.
+                runs.iter()
+                    .map(|r| {
+                        let mut clone = r.clone();
+                        clone.flags = clone.flags.with_bold();
+                        clone
+                    })
+                    .collect()
+            }
+            _ => {
+                let label_text = if kind == "generic" && !raw_label.is_empty() {
+                    raw_label.to_ascii_uppercase()
+                } else {
+                    resolved.label.clone()
+                };
+                vec![InlineRun {
+                    math: None,
+                    text: label_text,
+                    flags: RunFlags::default().with_bold(),
+                    link: None,
+                }]
+            }
+        };
+
+        let header_color = Some(rgb_color((accent.r, accent.g, accent.b)));
+        let icon_size = block_style.font_size_pt * 0.95;
+        let icon_gap = block_style.font_size_pt * 0.40;
+        let header_top = self.y_from_top_pt;
+        let icon_left = self.indent_left_pt;
+        let saved_indent = self.indent_left_pt;
+        self.indent_left_pt += icon_size + icon_gap;
+        self.write_wrapped_runs(
+            &header_runs,
+            block_style.font_size_pt,
+            block_style.line_height,
+            RunFlags::default(),
+            header_color,
+        );
+        self.indent_left_pt = saved_indent;
+
+        // Draw the per-kind icon on top of the header row. PDF painter
+        // order doesn't matter here — the icon and the header glyphs
+        // live in distinct x ranges (the icon column was reserved by
+        // the temporary indent above). `cutout_color` is the negative
+        // space used inside the danger disc's X-mark; falls back to
+        // white when the admonition has no tinted background.
+        let cutout_color = block_style
+            .background_color
+            .map(|c| rgb_color((c.r, c.g, c.b)))
+            .unwrap_or(rgb_color((0xFF, 0xFF, 0xFF)));
+        self.close_text_section();
+        let icon_top = header_top + block_style.font_size_pt * 0.12;
+        let page_h = self.page_height_pt();
+        let accent_color = rgb_color((accent.r, accent.g, accent.b));
+        draw_admonition_icon(
+            &mut self.page_ops,
+            kind,
+            icon_left,
+            icon_top,
+            icon_size,
+            &accent_color,
+            &cutout_color,
+            page_h,
+        );
+
+        // Small gap between header and body.
+        self.advance_y(block_style.font_size_pt * 0.35);
+
+        for child in body {
+            self.render_block(child);
+        }
+        self.end_block(ctx);
+    }
+
     fn render_heading(&mut self, level: u8, runs: &[InlineRun]) {
         let idx = level.clamp(1, 6) as usize - 1;
         let s = self.style.headings[idx].clone();
@@ -3347,6 +3465,180 @@ fn draw_filled_disc(
         },
     });
     ops.push(Op::RestoreGraphicsState);
+}
+
+/// Approximate a circle outline by a closed 24-sided polyline. Used
+/// by admonition icons that want a ring shape without filling.
+fn draw_stroked_circle(
+    ops: &mut Vec<Op>,
+    cx_pt: f32,
+    cy_top_pt: f32,
+    r_pt: f32,
+    color: Color,
+    thickness_pt: f32,
+    page_height_pt: f32,
+) {
+    if r_pt <= 0.0 {
+        return;
+    }
+    let n = 24;
+    let pts: Vec<(f32, f32)> = (0..n)
+        .map(|i| {
+            let a = std::f32::consts::TAU * (i as f32) / (n as f32);
+            (cx_pt + r_pt * a.cos(), cy_top_pt + r_pt * a.sin())
+        })
+        .collect();
+    draw_stroked_path(ops, &pts, color, thickness_pt, true, page_height_pt);
+}
+
+/// Per-kind callout glyph drawn into the header row's leading
+/// 12pt-ish square. All icons render in `accent`; `cutout` is the
+/// negative-space colour used for the X-mark inside the filled
+/// `danger` disc (typically the admonition's background tint, so the
+/// X reads as a notch carved out of the disc).
+fn draw_admonition_icon(
+    ops: &mut Vec<Op>,
+    kind: &str,
+    x_left_pt: f32,
+    y_top_pt: f32,
+    size_pt: f32,
+    accent: &Color,
+    cutout: &Color,
+    page_height_pt: f32,
+) {
+    let cx = x_left_pt + size_pt * 0.5;
+    let cy = y_top_pt + size_pt * 0.5;
+    let s = size_pt;
+    let stroke = (s * 0.10).max(0.6);
+    match kind {
+        "note" => {
+            draw_filled_disc(ops, cx, cy, s * 0.36, accent.clone(), page_height_pt);
+        }
+        "info" => {
+            draw_stroked_circle(
+                ops,
+                cx,
+                cy,
+                s * 0.45,
+                accent.clone(),
+                stroke,
+                page_height_pt,
+            );
+            draw_filled_disc(
+                ops,
+                cx,
+                y_top_pt + s * 0.30,
+                s * 0.07,
+                accent.clone(),
+                page_height_pt,
+            );
+            draw_stroked_path(
+                ops,
+                &[(cx, y_top_pt + s * 0.43), (cx, y_top_pt + s * 0.72)],
+                accent.clone(),
+                stroke,
+                false,
+                page_height_pt,
+            );
+        }
+        "tip" => {
+            draw_filled_disc(
+                ops,
+                cx,
+                y_top_pt + s * 0.38,
+                s * 0.30,
+                accent.clone(),
+                page_height_pt,
+            );
+            draw_filled_rect(
+                ops,
+                cx - s * 0.16,
+                y_top_pt + s * 0.62,
+                cx + s * 0.16,
+                y_top_pt + s * 0.78,
+                accent.clone(),
+                page_height_pt,
+            );
+            draw_filled_rect(
+                ops,
+                cx - s * 0.10,
+                y_top_pt + s * 0.82,
+                cx + s * 0.10,
+                y_top_pt + s * 0.92,
+                accent.clone(),
+                page_height_pt,
+            );
+        }
+        "warning" => {
+            let p0 = (cx, y_top_pt + s * 0.10);
+            let p1 = (x_left_pt + s * 0.06, y_top_pt + s * 0.90);
+            let p2 = (x_left_pt + s * 0.94, y_top_pt + s * 0.90);
+            draw_stroked_path(
+                ops,
+                &[p0, p1, p2],
+                accent.clone(),
+                stroke,
+                true,
+                page_height_pt,
+            );
+            draw_stroked_path(
+                ops,
+                &[(cx, y_top_pt + s * 0.36), (cx, y_top_pt + s * 0.66)],
+                accent.clone(),
+                stroke,
+                false,
+                page_height_pt,
+            );
+            draw_filled_disc(
+                ops,
+                cx,
+                y_top_pt + s * 0.78,
+                stroke * 0.7,
+                accent.clone(),
+                page_height_pt,
+            );
+        }
+        "danger" => {
+            draw_filled_disc(ops, cx, cy, s * 0.46, accent.clone(), page_height_pt);
+            let inset = s * 0.24;
+            draw_stroked_path(
+                ops,
+                &[
+                    (x_left_pt + inset, y_top_pt + inset),
+                    (x_left_pt + s - inset, y_top_pt + s - inset),
+                ],
+                cutout.clone(),
+                stroke,
+                false,
+                page_height_pt,
+            );
+            draw_stroked_path(
+                ops,
+                &[
+                    (x_left_pt + inset, y_top_pt + s - inset),
+                    (x_left_pt + s - inset, y_top_pt + inset),
+                ],
+                cutout.clone(),
+                stroke,
+                false,
+                page_height_pt,
+            );
+        }
+        _ => {
+            let bar_stroke = (s * 0.12).max(0.8);
+            for frac in [0.28_f32, 0.50, 0.72] {
+                let y = y_top_pt + s * frac;
+                draw_stroked_path(
+                    ops,
+                    &[(x_left_pt + s * 0.18, y), (x_left_pt + s * 0.82, y)],
+                    accent.clone(),
+                    bar_stroke,
+                    false,
+                    page_height_pt,
+                );
+            }
+        }
+    }
 }
 
 /// Stroked polyline through top-down points (optionally closed) —

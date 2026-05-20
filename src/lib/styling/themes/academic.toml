@@ -35,3 +35,32 @@ indent_pt = 25.0
 [link]
 text_color = "#000000"
 underline = true
+
+# Conservative palette: low saturation, restrained tints.
+[admonition]
+text_color = "#000000"
+padding = { top = 6.0, right = 10.0, bottom = 6.0, left = 12.0 }
+
+[admonition.note]
+accent_color = "#455A64"
+background_color = "#ECEFF1"
+
+[admonition.info]
+accent_color = "#00695C"
+background_color = "#E0F2F1"
+
+[admonition.tip]
+accent_color = "#2E7D32"
+background_color = "#E8F5E9"
+
+[admonition.warning]
+accent_color = "#BF360C"
+background_color = "#FFEAE1"
+
+[admonition.danger]
+accent_color = "#B71C1C"
+background_color = "#FFEBEE"
+
+[admonition.generic]
+accent_color = "#424242"
+background_color = "#EEEEEE"

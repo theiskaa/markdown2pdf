@@ -21,6 +21,7 @@ pub struct ResolvedStyle {
     pub code_block: ResolvedBlock,
     pub code_inline: ResolvedInline,
     pub blockquote: ResolvedBlock,
+    pub admonition: ResolvedAdmonition,
     pub list_ordered: ResolvedList,
     pub list_unordered: ResolvedList,
     pub list_task: ResolvedList,
@@ -180,6 +181,47 @@ pub struct ResolvedToc {
     pub title: String,
     pub max_depth: u8,
     pub style: ResolvedBlock,
+}
+
+/// Resolved admonition styling. The renderer picks the matching
+/// per-kind block via [`for_kind`]; unknown canonical kinds fall back
+/// to `generic`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ResolvedAdmonition {
+    pub note: ResolvedAdmonitionKind,
+    pub info: ResolvedAdmonitionKind,
+    pub tip: ResolvedAdmonitionKind,
+    pub warning: ResolvedAdmonitionKind,
+    pub danger: ResolvedAdmonitionKind,
+    pub generic: ResolvedAdmonitionKind,
+}
+
+/// One callout kind's fully-resolved styling. `block` carries the
+/// shape (padding, margins, font, background); `accent_color` drives
+/// the icon and left-edge border; `label` is the header text the
+/// renderer shows when the author didn't write an explicit title.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ResolvedAdmonitionKind {
+    pub block: ResolvedBlock,
+    pub accent_color: Color,
+    pub label: String,
+}
+
+impl ResolvedAdmonition {
+    /// Look up the per-kind block by canonical kind name. Falls back
+    /// to `generic` for anything outside the first-class set.
+    pub fn for_kind(&self, kind: &str) -> &ResolvedAdmonitionKind {
+        match kind {
+            "note" => &self.note,
+            "info" => &self.info,
+            "tip" => &self.tip,
+            "warning" => &self.warning,
+            "danger" => &self.danger,
+            _ => &self.generic,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
