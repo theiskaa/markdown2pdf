@@ -100,6 +100,12 @@ pub struct BlockConfig {
     /// OpenType `smcp` substitution depends on the loaded font and is
     /// a follow-up.
     pub small_caps: Option<bool>,
+    /// Ordered list of fallback font names. Codepoints not covered by
+    /// the primary body / code font are looked up in each fallback in
+    /// turn; the first font that has a glyph wins. Only the value on
+    /// the document `[defaults]` block is read by the renderer — the
+    /// field is accepted syntactically on per-block tables but ignored.
+    pub fallback_fonts: Option<Vec<String>>,
 }
 
 /// Subset of `BlockConfig` for true inline runs (`code_inline`,

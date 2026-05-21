@@ -36,6 +36,11 @@ pub struct ResolvedStyle {
     pub footer: Option<ResolvedPageFurniture>,
     pub title_page: Option<ResolvedTitlePage>,
     pub toc: Option<ResolvedToc>,
+    /// Ordered list of fallback font names (resolved from
+    /// `[defaults].fallback_fonts`). The renderer consults these in
+    /// order when the primary body / code font lacks a glyph for a
+    /// codepoint.
+    pub fallback_fonts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
