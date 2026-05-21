@@ -46,3 +46,15 @@ mod highlight;
 
 #[path = "render/math.rs"]
 mod math;
+
+#[path = "render/html_blocks_and_links.rs"]
+mod html_blocks_and_links;
+
+#[path = "render/admonition.rs"]
+mod admonition;
+
+#[path = "render/_showcase_inspect.rs"]
+mod _showcase_inspect;
+
+#[path = "render/_admonition_showcase.rs"]
+mod _admonition_showcase;

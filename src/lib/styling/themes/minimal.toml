@@ -29,3 +29,35 @@ style = "solid"
 
 [link]
 underline = true
+
+# Monochrome: black accent borders + icons on white. Per-kind
+# backgrounds explicitly overridden to white so we don't inherit
+# the default theme's tinted palette.
+[admonition]
+text_color = "#000000"
+background_color = "#FFFFFF"
+padding = { top = 4.0, right = 8.0, bottom = 4.0, left = 10.0 }
+
+[admonition.note]
+accent_color = "#000000"
+background_color = "#FFFFFF"
+
+[admonition.info]
+accent_color = "#000000"
+background_color = "#FFFFFF"
+
+[admonition.tip]
+accent_color = "#000000"
+background_color = "#FFFFFF"
+
+[admonition.warning]
+accent_color = "#000000"
+background_color = "#FFFFFF"
+
+[admonition.danger]
+accent_color = "#000000"
+background_color = "#FFFFFF"
+
+[admonition.generic]
+accent_color = "#000000"
+background_color = "#FFFFFF"

@@ -14,9 +14,10 @@
 
 use super::error::ResolveError;
 use super::resolved::{
-    ResolvedBlock, ResolvedBorder, ResolvedBorderSide, ResolvedImage, ResolvedInline,
-    ResolvedList, ResolvedMath, ResolvedMetadata, ResolvedPage, ResolvedPageFurniture,
-    ResolvedRule, ResolvedStyle, ResolvedTable, ResolvedTitlePage, ResolvedToc,
+    ResolvedAdmonition, ResolvedAdmonitionKind, ResolvedBlock, ResolvedBorder, ResolvedBorderSide,
+    ResolvedImage, ResolvedInline, ResolvedList, ResolvedMath, ResolvedMetadata, ResolvedPage,
+    ResolvedPageFurniture, ResolvedRule, ResolvedStyle, ResolvedTable, ResolvedTitlePage,
+    ResolvedToc,
 };
 use super::schema::*;
 use super::themes::load_theme_preset;
@@ -67,6 +68,7 @@ pub fn merge_documents(base: DocumentConfig, overlay: DocumentConfig) -> Documen
         code_block: merge_optional(base.code_block, overlay.code_block, merge_block),
         code_inline: merge_optional(base.code_inline, overlay.code_inline, merge_inline),
         blockquote: merge_optional(base.blockquote, overlay.blockquote, merge_block),
+        admonition: merge_optional(base.admonition, overlay.admonition, merge_admonition),
         list: merge_optional(base.list, overlay.list, merge_lists),
         table: merge_optional(base.table, overlay.table, merge_table),
         image: merge_optional(base.image, overlay.image, merge_image),
@@ -96,6 +98,29 @@ fn merge_page(base: PageConfig, overlay: PageConfig) -> PageConfig {
         margins: overlay.margins.or(base.margins),
         columns: overlay.columns.or(base.columns),
         column_gap_mm: overlay.column_gap_mm.or(base.column_gap_mm),
+    }
+}
+
+fn merge_admonition(base: AdmonitionConfig, overlay: AdmonitionConfig) -> AdmonitionConfig {
+    AdmonitionConfig {
+        defaults: merge_block(base.defaults, overlay.defaults),
+        note: merge_optional(base.note, overlay.note, merge_admonition_kind),
+        info: merge_optional(base.info, overlay.info, merge_admonition_kind),
+        tip: merge_optional(base.tip, overlay.tip, merge_admonition_kind),
+        warning: merge_optional(base.warning, overlay.warning, merge_admonition_kind),
+        danger: merge_optional(base.danger, overlay.danger, merge_admonition_kind),
+        generic: merge_optional(base.generic, overlay.generic, merge_admonition_kind),
+    }
+}
+
+fn merge_admonition_kind(
+    base: AdmonitionKindConfig,
+    overlay: AdmonitionKindConfig,
+) -> AdmonitionKindConfig {
+    AdmonitionKindConfig {
+        block: merge_block(base.block, overlay.block),
+        accent_color: overlay.accent_color.or(base.accent_color),
+        label: overlay.label.or(base.label),
     }
 }
 
@@ -288,6 +313,8 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
     let code_block = lower_block(theme, "code_block", &defaults, cfg.code_block.unwrap_or_default())?;
     let code_inline = lower_inline(theme, "code_inline", &defaults, cfg.code_inline.unwrap_or_default())?;
     let blockquote = lower_block(theme, "blockquote", &defaults, cfg.blockquote.unwrap_or_default())?;
+    let admonition =
+        lower_admonition(theme, &defaults, cfg.admonition.unwrap_or_default())?;
     let link = lower_inline(theme, "link", &defaults, cfg.link.unwrap_or_default())?;
     let mark = lower_inline(theme, "mark", &defaults, cfg.mark.unwrap_or_default())?;
 
@@ -366,6 +393,7 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
         code_block,
         code_inline,
         blockquote,
+        admonition,
         list_ordered,
         list_unordered,
         list_task,
@@ -414,6 +442,70 @@ fn safe_line_height(lh: f32) -> f32 {
 /// would poison every layout comparison, is neutralised to zero.
 fn safe_letter_spacing(pt: f32) -> f32 {
     if pt.is_finite() { pt } else { 0.0 }
+}
+
+/// Built-in accent palette used when neither the theme nor the user
+/// has supplied a colour for a given kind. Keeps the renderer's
+/// output recognisable even on a sparse custom theme.
+fn builtin_accent(kind: &str) -> Color {
+    match kind {
+        "note" => Color::rgb(0x44, 0x8A, 0xFF),
+        "info" => Color::rgb(0x00, 0xB8, 0xD4),
+        "tip" => Color::rgb(0x00, 0xC8, 0x53),
+        "warning" => Color::rgb(0xFF, 0xAB, 0x00),
+        "danger" => Color::rgb(0xFF, 0x17, 0x44),
+        _ => Color::rgb(0x75, 0x75, 0x75),
+    }
+}
+
+fn builtin_label(kind: &str) -> String {
+    match kind {
+        "note" => "NOTE",
+        "info" => "INFO",
+        "tip" => "TIP",
+        "warning" => "WARNING",
+        "danger" => "DANGER",
+        _ => "NOTE",
+    }
+    .to_string()
+}
+
+fn lower_admonition(
+    theme: &str,
+    defaults: &BlockConfig,
+    raw: AdmonitionConfig,
+) -> Result<ResolvedAdmonition, ResolveError> {
+    // The [admonition] block carries the shared shape. Per-kind blocks
+    // inherit it before falling back to the document [defaults].
+    let shared_defaults = merge_block(defaults.clone(), raw.defaults);
+    let lower_kind = |kind: &str, raw_kind: Option<AdmonitionKindConfig>| {
+        lower_admonition_kind(theme, kind, &shared_defaults, raw_kind.unwrap_or_default())
+    };
+    Ok(ResolvedAdmonition {
+        note: lower_kind("note", raw.note)?,
+        info: lower_kind("info", raw.info)?,
+        tip: lower_kind("tip", raw.tip)?,
+        warning: lower_kind("warning", raw.warning)?,
+        danger: lower_kind("danger", raw.danger)?,
+        generic: lower_kind("generic", raw.generic)?,
+    })
+}
+
+fn lower_admonition_kind(
+    theme: &str,
+    kind: &str,
+    shared_defaults: &BlockConfig,
+    raw: AdmonitionKindConfig,
+) -> Result<ResolvedAdmonitionKind, ResolveError> {
+    let where_ = format!("admonition.{}", kind);
+    let block = lower_block(theme, &where_, shared_defaults, raw.block)?;
+    let accent_color = raw.accent_color.unwrap_or_else(|| builtin_accent(kind));
+    let label = raw.label.unwrap_or_else(|| builtin_label(kind));
+    Ok(ResolvedAdmonitionKind {
+        block,
+        accent_color,
+        label,
+    })
 }
 
 fn lower_block(

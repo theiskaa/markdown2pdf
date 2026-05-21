@@ -33,6 +33,15 @@ fn render_blocks(tokens: &[Token], out: &mut String, in_loose_list_item: bool) {
                 out.push_str("</blockquote>\n");
                 i += 1;
             }
+            Token::Admonition { kind, body, .. } => {
+                out.push_str(&format!(
+                    "<aside class=\"admonition admonition-{}\">\n",
+                    escape_attr(kind)
+                ));
+                render_blocks(body, out, false);
+                out.push_str("</aside>\n");
+                i += 1;
+            }
             Token::HorizontalRule => {
                 out.push_str("<hr />\n");
                 i += 1;
@@ -235,6 +244,15 @@ fn render_tight_blocks(tokens: &[Token], out: &mut String) {
                 out.push_str("<blockquote>\n");
                 render_blocks(body, out, false);
                 out.push_str("</blockquote>\n");
+                i += 1;
+            }
+            Token::Admonition { kind, body, .. } => {
+                out.push_str(&format!(
+                    "<aside class=\"admonition admonition-{}\">\n",
+                    escape_attr(kind)
+                ));
+                render_blocks(body, out, false);
+                out.push_str("</aside>\n");
                 i += 1;
             }
             Token::HorizontalRule => {
@@ -511,25 +529,36 @@ fn render_inline_token(t: &Token, out: &mut String) {
             out.push_str(&escape_text(content));
             out.push_str(close);
         }
+        // Block-level token; never reached from the inline renderer
+        // but the match needs to stay exhaustive.
+        Token::Admonition { .. } => {}
     }
 }
 
 fn render_table(
-    headers: &[Vec<Token>],
+    headers: &[markdown2pdf::markdown::TableCell<Token>],
     aligns: &[markdown2pdf::markdown::TableAlignment],
-    rows: &[Vec<Vec<Token>>],
+    rows: &[Vec<markdown2pdf::markdown::TableCell<Token>>],
     out: &mut String,
 ) {
     out.push_str("<table>\n<thead>\n<tr>\n");
     for (i, cell) in headers.iter().enumerate() {
+        if cell.covered {
+            continue;
+        }
         let align = aligns.get(i).copied().unwrap_or(markdown2pdf::markdown::TableAlignment::Left);
         let style = match align {
             markdown2pdf::markdown::TableAlignment::Left => "",
             markdown2pdf::markdown::TableAlignment::Center => " style=\"text-align: center\"",
             markdown2pdf::markdown::TableAlignment::Right => " style=\"text-align: right\"",
         };
-        out.push_str(&format!("<th{}>", style));
-        render_inlines(cell, out);
+        let span = if cell.colspan > 1 {
+            format!(" colspan=\"{}\"", cell.colspan)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!("<th{}{}>", style, span));
+        render_inlines(&cell.content, out);
         out.push_str("</th>\n");
     }
     out.push_str("</tr>\n</thead>\n");
@@ -538,14 +567,24 @@ fn render_table(
         for row in rows {
             out.push_str("<tr>\n");
             for (i, cell) in row.iter().enumerate() {
+                if cell.covered {
+                    continue;
+                }
                 let align = aligns.get(i).copied().unwrap_or(markdown2pdf::markdown::TableAlignment::Left);
                 let style = match align {
                     markdown2pdf::markdown::TableAlignment::Left => "",
                     markdown2pdf::markdown::TableAlignment::Center => " style=\"text-align: center\"",
                     markdown2pdf::markdown::TableAlignment::Right => " style=\"text-align: right\"",
                 };
-                out.push_str(&format!("<td{}>", style));
-                render_inlines(cell, out);
+                let mut span = String::new();
+                if cell.colspan > 1 {
+                    span.push_str(&format!(" colspan=\"{}\"", cell.colspan));
+                }
+                if cell.rowspan > 1 {
+                    span.push_str(&format!(" rowspan=\"{}\"", cell.rowspan));
+                }
+                out.push_str(&format!("<td{}{}>", style, span));
+                render_inlines(&cell.content, out);
                 out.push_str("</td>\n");
             }
             out.push_str("</tr>\n");

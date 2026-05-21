@@ -41,3 +41,34 @@ left = { width_pt = 4.0, color = "#0B66B5", style = "solid" }
 [link]
 text_color = "#0B66B5"
 underline = false
+
+# Vibrant flat palette mirroring the theme's link accent.
+[admonition]
+text_color = "#1B1F23"
+padding = { top = 8.0, right = 14.0, bottom = 8.0, left = 16.0 }
+margin_before_pt = 6.0
+margin_after_pt = 6.0
+
+[admonition.note]
+accent_color = "#0B66B5"
+background_color = "#EAF3FB"
+
+[admonition.info]
+accent_color = "#0288D1"
+background_color = "#E1F5FE"
+
+[admonition.tip]
+accent_color = "#1B873F"
+background_color = "#E6F4EA"
+
+[admonition.warning]
+accent_color = "#F2A100"
+background_color = "#FFF6DA"
+
+[admonition.danger]
+accent_color = "#E5333E"
+background_color = "#FCE6E8"
+
+[admonition.generic]
+accent_color = "#5B6166"
+background_color = "#F0F2F4"

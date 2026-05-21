@@ -1502,4 +1502,126 @@ mod inline_style_application {
             pages
         );
     }
+
+    // AC1: a header cell spanning two columns renders once, with the
+    // covered slot drawing no separate cell.
+    #[test]
+    fn table_colspan_header_renders_once_over_merged_region() {
+        let b = render(
+            "| Group | > | Tail |\n| :---: | :---: | :---: |\n| a | b | c |\n",
+            "",
+        );
+        assert!(pdf_well_formed(&b));
+        assert!(bytes_have_stroke_op(&b), "table borders must still draw");
+        assert_eq!(
+            count_substr(&b, b"(Group)"),
+            1,
+            "colspan origin rendered more than once"
+        );
+        assert!(
+            contains_text(&b, "Group") && contains_text(&b, "Tail"),
+            "the cell after a colspan must still render"
+        );
+        assert!(contains_text(&b, "a") && contains_text(&b, "b") && contains_text(&b, "c"));
+    }
+
+    // AC2: a cell spanning two rows renders once; the cells beside it
+    // lay out normally.
+    #[test]
+    fn table_rowspan_renders_once_with_neighbors_intact() {
+        let b = render(
+            "| Key | Value |\n| --- | --- |\n| A | one |\n| ^ | two |\n",
+            "",
+        );
+        assert!(pdf_well_formed(&b));
+        assert_eq!(
+            count_substr(&b, b"(A)"),
+            1,
+            "rowspan origin rendered more than once"
+        );
+        assert!(
+            contains_text(&b, "one") && contains_text(&b, "two"),
+            "neighbor cells beside a rowspan must render normally"
+        );
+    }
+
+    // AC3: alignment and per-cell styling still apply to non-spanned
+    // cells that sit next to spanned ones.
+    #[test]
+    fn table_alignment_and_styling_apply_alongside_spans() {
+        let b = render(
+            "| Group | > | Plain |\n| :--- | :---: | ---: |\n\
+             | **bold** | mid | `code` |\n| ^ | center | right |\n",
+            "",
+        );
+        assert!(pdf_well_formed(&b));
+        assert!(
+            bytes_have_stroke_op(&b),
+            "borders draw with mixed spans + styling"
+        );
+        assert!(contains_text(&b, "bold") && contains_text(&b, "code"));
+        assert!(contains_text(&b, "mid") && contains_text(&b, "center"));
+        assert_eq!(
+            count_substr(&b, b"(bold)"),
+            1,
+            "row-spanned styled origin rendered once"
+        );
+    }
+
+    // AC5 regression: a plain GFM table with a tall wrapped cell next
+    // to short cells still renders (the vertical-alignment branch keeps
+    // non-spanned cells top-aligned exactly as before spans existed).
+    #[test]
+    fn plain_gfm_table_with_mixed_height_rows_unaffected() {
+        let b = render(
+            "| Short | Long |\n| --- | --- |\n\
+             | x | this cell has enough words to wrap onto a second \
+             physical line inside the column box |\n| y | z |\n",
+            "",
+        );
+        assert!(pdf_well_formed(&b));
+        assert!(contains_text(&b, "Short") && contains_text(&b, "Long"));
+        assert!(contains_text(&b, "x") && contains_text(&b, "y") && contains_text(&b, "z"));
+    }
+
+    // AC4: a spanned region near / across a page boundary must not
+    // corrupt the table or panic.
+    #[test]
+    fn table_rowspan_near_page_break_does_not_panic() {
+        let mut md = String::from("| Key | Value |\n|---|---|\n");
+        for i in 0..120 {
+            md.push_str(&format!("| row{i} | value{i} |\n"));
+        }
+        md.push_str("| Span | before |\n| ^ | after |\n");
+        let b = render(&md, "");
+        assert!(pdf_well_formed(&b));
+        assert!(page_count(&b) >= 2);
+        assert!(contains_text(&b, "Span") && contains_text(&b, "after"));
+    }
+
+    // A rowspan group taller than a whole page must still not panic.
+    #[test]
+    fn table_huge_rowspan_group_does_not_panic() {
+        let mut md = String::from("| K | V |\n|---|---|\n| Top | start |\n");
+        for i in 0..200 {
+            md.push_str(&format!("| ^ | filler line number {i} |\n"));
+        }
+        let b = render(&md, "");
+        assert!(pdf_well_formed(&b));
+        assert!(contains_text(&b, "Top"));
+    }
+
+    // Escaped markers render as literal `>` / `^` text, never spans.
+    #[test]
+    fn escaped_span_markers_render_literally() {
+        let b = render(
+            "| op | meaning |\n| --- | --- |\n| \\> | greater than |\n| \\^ | caret |\n",
+            "",
+        );
+        assert!(pdf_well_formed(&b));
+        assert!(
+            contains_text(&b, "greater than") && contains_text(&b, "caret"),
+            "escaped-marker rows keep their real content"
+        );
+    }
 }

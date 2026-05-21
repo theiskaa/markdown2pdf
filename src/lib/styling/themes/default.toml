@@ -91,6 +91,39 @@ padding = { top = 2.0, right = 6.0, bottom = 2.0, left = 10.0 }
 [blockquote.border]
 left = { width_pt = 1.2, color = "#B4B4B4", style = "solid" }
 
+# Admonitions / callouts. The top-level [admonition] block sets shared
+# shape; the per-kind sub-blocks layer colours on top. accent_color
+# drives both the left border and the kind icon.
+[admonition]
+text_color = "#202124"
+margin_before_pt = 4.0
+margin_after_pt = 4.0
+padding = { top = 8.0, right = 12.0, bottom = 8.0, left = 14.0 }
+
+[admonition.note]
+accent_color = "#448AFF"
+background_color = "#E7F2FF"
+
+[admonition.info]
+accent_color = "#00B8D4"
+background_color = "#E0F7FA"
+
+[admonition.tip]
+accent_color = "#00C853"
+background_color = "#E8F5E9"
+
+[admonition.warning]
+accent_color = "#FFAB00"
+background_color = "#FFF8E1"
+
+[admonition.danger]
+accent_color = "#FF1744"
+background_color = "#FFEBEE"
+
+[admonition.generic]
+accent_color = "#757575"
+background_color = "#F5F5F5"
+
 [list]
 [list.common]
 margin_after_pt = 0.5

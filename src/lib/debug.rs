@@ -112,6 +112,43 @@ impl Token {
                 result
             }
 
+            Token::Admonition {
+                kind,
+                raw_label,
+                title,
+                body,
+            } => {
+                let mut result = format!("{}{{\n", indent);
+                result.push_str(&format!("{}\"type\": \"Admonition\",\n", inner_indent));
+                result.push_str(&format!("{}\"kind\": \"{}\",\n", inner_indent, kind));
+                result.push_str(&format!(
+                    "{}\"raw_label\": \"{}\",\n",
+                    inner_indent, raw_label
+                ));
+                if let Some(t) = title {
+                    result.push_str(&format!("{}\"title\": [\n", inner_indent));
+                    for (i, token) in t.iter().enumerate() {
+                        result.push_str(&token.to_readable_json(indent_level + 2));
+                        if i < t.len() - 1 {
+                            result.push(',');
+                        }
+                        result.push('\n');
+                    }
+                    result.push_str(&format!("{}],\n", inner_indent));
+                }
+                result.push_str(&format!("{}\"body\": [\n", inner_indent));
+                for (i, token) in body.iter().enumerate() {
+                    result.push_str(&token.to_readable_json(indent_level + 2));
+                    if i < body.len() - 1 {
+                        result.push(',');
+                    }
+                    result.push('\n');
+                }
+                result.push_str(&format!("{}]\n", inner_indent));
+                result.push_str(&format!("{}}}", indent));
+                result
+            }
+
             Token::ListItem {
                 content,
                 ordered,
@@ -246,9 +283,9 @@ impl Token {
                 result.push_str(&format!("{}\"headers\": [\n", inner_indent));
                 for (i, header_cell) in headers.iter().enumerate() {
                     result.push_str(&format!("{}[\n", "  ".repeat(indent_level + 2)));
-                    for (j, token) in header_cell.iter().enumerate() {
+                    for (j, token) in header_cell.content.iter().enumerate() {
                         result.push_str(&token.to_readable_json(indent_level + 3));
-                        if j < header_cell.len() - 1 {
+                        if j < header_cell.content.len() - 1 {
                             result.push(',');
                         }
                         result.push('\n');
@@ -287,9 +324,9 @@ impl Token {
                     result.push_str(&format!("{}[\n", "  ".repeat(indent_level + 2)));
                     for (j, cell) in row.iter().enumerate() {
                         result.push_str(&format!("{}[\n", "  ".repeat(indent_level + 3)));
-                        for (k, token) in cell.iter().enumerate() {
+                        for (k, token) in cell.content.iter().enumerate() {
                             result.push_str(&token.to_readable_json(indent_level + 4));
-                            if k < cell.len() - 1 {
+                            if k < cell.content.len() - 1 {
                                 result.push(',');
                             }
                             result.push('\n');
@@ -537,6 +574,24 @@ impl Token {
                 format!("{}({}, {})", kind, quote(language), quote(content))
             }
             Token::BlockQuote(body) => format!("BlockQuote({})", list(body)),
+            Token::Admonition {
+                kind,
+                raw_label,
+                title,
+                body,
+            } => {
+                let title_s = match title {
+                    Some(t) => list(t),
+                    None => "_".to_string(),
+                };
+                format!(
+                    "Admonition(kind={}, raw={}, title={}, body={})",
+                    quote(kind),
+                    quote(raw_label),
+                    title_s,
+                    list(body)
+                )
+            }
             Token::ListItem {
                 content,
                 ordered,
@@ -593,7 +648,7 @@ impl Token {
                 aligns,
                 rows,
             } => {
-                let hs: Vec<String> = headers.iter().map(|c| list(c)).collect();
+                let hs: Vec<String> = headers.iter().map(|c| list(&c.content)).collect();
                 let aligns_s: Vec<&str> = aligns
                     .iter()
                     .map(|a| match a {
@@ -605,7 +660,7 @@ impl Token {
                 let rs: Vec<String> = rows
                     .iter()
                     .map(|row| {
-                        let cells: Vec<String> = row.iter().map(|c| list(c)).collect();
+                        let cells: Vec<String> = row.iter().map(|c| list(&c.content)).collect();
                         format!("[{}]", cells.join(", "))
                     })
                     .collect();

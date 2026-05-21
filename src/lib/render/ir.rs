@@ -23,11 +23,27 @@ pub enum Block {
     List { entries: Vec<ListEntry> },
     /// A block quote whose body is itself a sequence of [`Block`]s.
     BlockQuote { body: Vec<Block> },
+    /// A semantic callout / admonition block. `kind` is the canonical
+    /// kind name (`note` / `info` / `tip` / `warning` / `danger` /
+    /// `generic`) the renderer keys per-kind styling off; `raw_label`
+    /// is the author's lowercased original kind word, surfaced as the
+    /// header for unknown kinds so `!!! bug "…"` reads as a `BUG` box.
+    /// `title` is the optional inline header override from the MkDocs
+    /// `"Optional title"` form; when `None` the renderer falls back to
+    /// the kind's default label. `body` is a nested block sequence so
+    /// admonitions can contain lists, code, tables, even nested
+    /// admonitions.
+    Admonition {
+        kind: String,
+        raw_label: String,
+        title: Option<Vec<InlineRun>>,
+        body: Vec<Block>,
+    },
     /// A GFM table.
     Table {
-        headers: Vec<Vec<InlineRun>>,
+        headers: Vec<crate::markdown::TableCell<InlineRun>>,
         aligns: Vec<crate::markdown::TableAlignment>,
-        rows: Vec<Vec<Vec<InlineRun>>>,
+        rows: Vec<Vec<crate::markdown::TableCell<InlineRun>>>,
     },
     /// A block-level image. The lowering pass promotes a paragraph
     /// containing only an image to this variant; inline images keep
@@ -195,6 +211,19 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
                 walk_block(child, u);
             }
         }
+        Block::Admonition { title, body, .. } => {
+            // The header label is rendered bold uppercase, so any
+            // admonition contributes a body-bold requirement.
+            u.body_bold = true;
+            if let Some(runs) = title {
+                for r in runs {
+                    walk_run(r, u);
+                }
+            }
+            for child in body {
+                walk_block(child, u);
+            }
+        }
         Block::Table { headers, rows, .. } => {
             // The renderer ships the header cells through with_bold(),
             // so any table contributes a body-bold requirement.
@@ -202,13 +231,13 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
                 u.body_bold = true;
             }
             for header in headers {
-                for r in header {
+                for r in &header.content {
                     walk_run(r, u);
                 }
             }
             for row in rows {
                 for cell in row {
-                    for r in cell {
+                    for r in &cell.content {
                         walk_run(r, u);
                     }
                 }

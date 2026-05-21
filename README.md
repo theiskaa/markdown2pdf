@@ -18,7 +18,7 @@ It ships as both a binary and a library. The binary converts from a file, URL, o
 
 The lexer targets CommonMark 0.31.2 plus GFM and note-tool extensions such as WikiLinks, `==highlight==`, and LaTeX math, and passes 649 of the 652 CommonMark spec examples. The exceptions are deliberate, where the WikiLink syntax reclaims `[[…]]` (which CommonMark treats as nested brackets). Conformance is held in place by the full CommonMark spec runner alongside the lexer-unit, stress, and adversarial renderer suites.
 
-The renderer covers headings with bookmarks and anchors, the full inline-emphasis set (bold, italic, monospace, strikethrough, underline, highlight, super/subscript, small-caps), nested ordered/unordered/task lists, GFM tables with per-column alignment and header repeat, blockquotes, fenced and indented code, images (local, URL, SVG), footnotes, definition lists, cross-references, and inline HTML. Mathematics is typeset by a built-in TeX engine — real fraction bars, radicals, script stacks, big operators with limits, growing delimiters, matrices, and accents — drawn as vector outlines and configurable through a `[math]` style block.
+The renderer covers headings with bookmarks and anchors, the full inline-emphasis set (bold, italic, monospace, strikethrough, underline, highlight, super/subscript, small-caps), nested ordered/unordered/task lists, GFM tables with per-column alignment, header repeat, and merged cells (a `>` cell extends the one before it across columns, a `^` cell continues the one above down a row; escape a literal marker with `\>` / `\^`), blockquotes, admonition / callout boxes in both MkDocs (`!!! note "Optional title"`) and GitHub (`> [!WARNING]`) styles with per-kind vector icons, fenced and indented code, images (local, URL, SVG), footnotes, definition lists, cross-references, and inline HTML (anchors become clickable links; `<div>` / `<section>` / `<figure>` wrappers drop through to their children). Mathematics is typeset by a built-in TeX engine — real fraction bars, radicals, script stacks, big operators with limits, growing delimiters, matrices, and accents — drawn as vector outlines and configurable through a `[math]` style block.
 
 Documents are styled per block with six bundled themes, configurable page setup, running headers and footers, an auto-generated table of contents, a title page, YAML/TOML frontmatter, and PDF metadata. Output is written to a file or returned as an in-memory byte buffer.
 
@@ -75,10 +75,10 @@ Or, in `Cargo.toml`:
 
 ```toml
 # Minimal — local files only, no network, no SVG
-markdown2pdf = "1.2.0"
+markdown2pdf = "1.3.0"
 
 # Or with URL fetching + SVG rasterization
-markdown2pdf = { version = "1.2.0", features = ["fetch", "svg"] }
+markdown2pdf = { version = "1.3.0", features = ["fetch", "svg"] }
 ```
 
 See [docs/library.md](docs/library.md) for the programmatic API.

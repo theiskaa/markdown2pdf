@@ -9,7 +9,7 @@
 //! a paragraph containing their collected text — the content still
 //! appears, just without distinctive layout.
 
-use crate::markdown::Token;
+use crate::markdown::{TableCell, Token};
 
 use super::ir::{Block, DefinitionEntry, FootnoteEntry, InlineRun, ListBullet, ListEntry, RunFlags};
 use std::collections::HashMap;
@@ -114,6 +114,25 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 out.push(Block::BlockQuote { body: nested });
                 i += 1;
             }
+            Token::Admonition {
+                kind,
+                raw_label,
+                title,
+                body,
+            } => {
+                flush_paragraph(&mut out, &mut buffered_inline);
+                let title_runs = title.as_ref().map(|t| {
+                    flatten_inline(t, RunFlags::default(), None, &footnote_numbers)
+                });
+                let nested = lower(body);
+                out.push(Block::Admonition {
+                    kind: kind.clone(),
+                    raw_label: raw_label.clone(),
+                    title: title_runs,
+                    body: nested,
+                });
+                i += 1;
+            }
             Token::DefinitionList { entries } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 let ir_entries: Vec<DefinitionEntry> = entries
@@ -198,17 +217,16 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 rows,
             } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
-                let head_runs: Vec<Vec<InlineRun>> = headers
-                    .iter()
-                    .map(|cell| flatten_inline(cell, RunFlags::default(), None, &footnote_numbers))
-                    .collect();
-                let row_runs: Vec<Vec<Vec<InlineRun>>> = rows
-                    .iter()
-                    .map(|row| {
-                        row.iter()
-                            .map(|cell| flatten_inline(cell, RunFlags::default(), None, &footnote_numbers))
-                            .collect()
+                let to_runs = |cell: &TableCell<Token>| {
+                    cell.map_content(|c| {
+                        flatten_inline(c, RunFlags::default(), None, &footnote_numbers)
                     })
+                };
+                let head_runs: Vec<TableCell<InlineRun>> =
+                    headers.iter().map(to_runs).collect();
+                let row_runs: Vec<Vec<TableCell<InlineRun>>> = rows
+                    .iter()
+                    .map(|row| row.iter().map(to_runs).collect())
                     .collect();
                 out.push(Block::Table {
                     headers: head_runs,
@@ -369,7 +387,7 @@ fn parse_html_img_block(s: &str) -> Option<HtmlImg> {
 /// tag name and the closing `>`). Returns `(name, value)` pairs.
 /// Tolerates double-quoted, single-quoted, and unquoted values, plus
 /// boolean attributes.
-fn parse_html_attrs(s: &str) -> Vec<(String, String)> {
+pub(super) fn parse_html_attrs(s: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -450,11 +468,12 @@ fn strip_html_comments(s: &str) -> String {
     out
 }
 
-/// True if the HTML block is just a framing tag with no real content
-/// — `<p>`, `</p>`, `<div>`, `</div>`, `<center>`, `</center>`,
-/// optionally with attributes. These wrap content in GitHub-flavored
-/// markdown to apply alignment; we'd rather drop them than render
-/// them as literal monospace.
+/// True if the HTML block is just a structural wrapper tag with no
+/// real content — `<p>`, `<div>`, `<section>`, `<figure>`,
+/// `<figcaption>`, `<center>` (plus their close tags), optionally
+/// with attributes. These wrap content in GitHub-flavored markdown
+/// for layout/grouping; we'd rather drop them than render them as
+/// literal monospace.
 fn is_framing_only_html(s: &str) -> bool {
     let trimmed = strip_html_comments(s);
     let trimmed = trimmed.trim();
@@ -467,7 +486,10 @@ fn is_framing_only_html(s: &str) -> bool {
         .find(|c: char| c.is_ascii_whitespace())
         .unwrap_or(inner.len());
     let tag = inner[..tag_end].to_ascii_lowercase();
-    matches!(tag.as_str(), "p" | "div" | "center")
+    matches!(
+        tag.as_str(),
+        "p" | "div" | "section" | "figure" | "figcaption" | "center"
+    )
 }
 
 /// True if `s` (trimmed) consists of zero or more `<!-- ... -->`
@@ -548,13 +570,13 @@ fn collect_footnote_numbering(tokens: &[Token]) -> HashMap<String, usize> {
             }
             Token::Table { headers, rows, .. } => {
                 for header in headers {
-                    for c in header {
+                    for c in &header.content {
                         walk(c, map);
                     }
                 }
                 for row in rows {
                     for cell in row {
-                        for c in cell {
+                        for c in &cell.content {
                             walk(c, map);
                         }
                     }
@@ -624,13 +646,13 @@ fn collect_inline_footnote_defs(
             }
             Token::Table { headers, rows, .. } => {
                 for header in headers {
-                    for c in header {
+                    for c in &header.content {
                         walk(c, footnotes, out);
                     }
                 }
                 for row in rows {
                     for cell in row {
-                        for c in cell {
+                        for c in &cell.content {
                             walk(c, footnotes, out);
                         }
                     }
@@ -685,6 +707,7 @@ fn make_list_entry(
                 | Token::Code { block: true, .. }
                 | Token::HorizontalRule
                 | Token::BlockQuote(_)
+                | Token::Admonition { .. }
                 | Token::Table { .. }
         ) {
             inline_end = i;
@@ -970,6 +993,22 @@ fn flatten_one(
         | Token::BlockQuote(content)
         | Token::ListItem { content, .. } => {
             for t in content {
+                flatten_one(t, flags, link, out, footnotes);
+            }
+        }
+        // If an admonition ever reaches the inline flattener (it
+        // shouldn't — the top-level lower arm promotes it to
+        // Block::Admonition) we degrade gracefully by spilling its
+        // header label and body text into the surrounding run.
+        Token::Admonition { raw_label, title, body, .. } => {
+            if let Some(t) = title {
+                for tok in t {
+                    flatten_one(tok, flags, link, out, footnotes);
+                }
+            } else {
+                push_text(out, raw_label, flags, link);
+            }
+            for t in body {
                 flatten_one(t, flags, link, out, footnotes);
             }
         }
