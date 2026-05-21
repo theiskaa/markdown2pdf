@@ -143,6 +143,7 @@ fn merge_block(base: BlockConfig, overlay: BlockConfig) -> BlockConfig {
         strikethrough: overlay.strikethrough.or(base.strikethrough),
         underline: overlay.underline.or(base.underline),
         small_caps: overlay.small_caps.or(base.small_caps),
+        fallback_fonts: overlay.fallback_fonts.or(base.fallback_fonts),
     }
 }
 
@@ -385,6 +386,7 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
     let footer = lower_furniture(theme, "footer", &defaults, cfg.footer)?;
     let title_page = lower_title_page(theme, &defaults, cfg.title_page)?;
     let toc = lower_toc(theme, &defaults, cfg.toc)?;
+    let fallback_fonts = defaults.fallback_fonts.clone().unwrap_or_default();
 
     Ok(ResolvedStyle {
         page,
@@ -408,6 +410,7 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
         footer,
         title_page,
         toc,
+        fallback_fonts,
     })
 }
 

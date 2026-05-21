@@ -87,10 +87,16 @@ impl std::fmt::Display for ValidationWarning {
     }
 }
 
-/// Validates markdown content and configuration, returning warnings
+/// Validates markdown content and configuration, returning warnings.
+///
+/// `style_fallback_fonts` is the resolved `[defaults].fallback_fonts`
+/// list from the styling config (empty when no TOML config or no
+/// fallbacks set). When non-empty, the Unicode-without-font warning is
+/// suppressed — fallbacks cover the codepoints the primary doesn't.
 pub fn validate_conversion(
     markdown: &str,
     font_config: Option<&FontConfig>,
+    style_fallback_fonts: &[String],
     output_path: Option<&str>,
 ) -> Vec<ValidationWarning> {
     let mut warnings = Vec::new();
@@ -102,7 +108,7 @@ pub fn validate_conversion(
 
     // Check for Unicode characters without appropriate font
     if let Some(unicode_chars) = detect_unicode_chars(markdown) {
-        if !has_unicode_font(font_config) {
+        if !has_unicode_font(font_config, style_fallback_fonts) {
             warnings.push(ValidationWarning::unicode_without_font(unicode_chars));
         }
     }
@@ -148,14 +154,21 @@ fn detect_unicode_chars(markdown: &str) -> Option<Vec<char>> {
 ///
 /// Any external `default_font` (specified by name OR by explicit file
 /// source) takes the renderer's Identity-H Unicode emit path regardless
-/// of the font's name, so we only flag the built-in-fonts case — when
-/// nothing at all is specified, the renderer falls back to printpdf's
-/// Helvetica/Courier (WinAnsi-encoded, no Unicode).
-fn has_unicode_font(font_config: Option<&FontConfig>) -> bool {
+/// of the font's name. Configured fallback fonts (either on
+/// `FontConfig` or via `[defaults].fallback_fonts` in TOML) also count:
+/// uncovered codepoints route to them via the renderer's split path,
+/// so the document is not stuck on the Win-Ansi-only built-in path.
+fn has_unicode_font(font_config: Option<&FontConfig>, style_fallback_fonts: &[String]) -> bool {
+    if !style_fallback_fonts.is_empty() {
+        return true;
+    }
     let Some(config) = font_config else {
         return false;
     };
-    config.default_font.is_some() || config.default_font_source.is_some()
+    config.default_font.is_some()
+        || config.default_font_source.is_some()
+        || !config.fallback_fonts.is_empty()
+        || !config.fallback_font_sources.is_empty()
 }
 
 /// Checks for common markdown syntax issues
@@ -375,7 +388,7 @@ mod tests {
     #[test]
     fn test_large_document_warning() {
         let large_text = "a".repeat(200_000);
-        let warnings = validate_conversion(&large_text, None, None);
+        let warnings = validate_conversion(&large_text, None, &[], None);
         assert!(warnings
             .iter()
             .any(|w| w.kind == WarningKind::LargeDocument));
@@ -390,9 +403,11 @@ mod tests {
             default_font_source: None,
             code_font: None,
             code_font_source: None,
+            fallback_fonts: Vec::new(),
+            fallback_font_sources: Vec::new(),
             enable_subsetting: true,
         };
-        let warnings = validate_conversion("Hello café", Some(&cfg), None);
+        let warnings = validate_conversion("Hello café", Some(&cfg), &[], None);
         assert!(
             warnings
                 .iter()
@@ -405,9 +420,38 @@ mod tests {
     fn missing_font_config_still_warns_about_unicode() {
         // No font specified → renderer falls back to built-in
         // WinAnsi-encoded Helvetica/Courier; warning still fires.
-        let warnings = validate_conversion("Hello café", None, None);
+        let warnings = validate_conversion("Hello café", None, &[], None);
         assert!(warnings
             .iter()
             .any(|w| w.kind == WarningKind::UnicodeWithoutFont));
+    }
+
+    #[test]
+    fn style_fallback_fonts_suppress_unicode_warning() {
+        // `[defaults].fallback_fonts = ["..."]` from the TOML config
+        // is a valid Unicode strategy: uncovered codepoints route to
+        // the configured fallbacks. No warning expected.
+        let style_fallbacks = vec!["Noto Sans CJK SC".to_string()];
+        let warnings = validate_conversion("Hello 日本語", None, &style_fallbacks, None);
+        assert!(
+            warnings
+                .iter()
+                .all(|w| w.kind != WarningKind::UnicodeWithoutFont),
+            "configured fallback_fonts should suppress the Unicode warning"
+        );
+    }
+
+    #[test]
+    fn font_config_fallback_fonts_suppress_unicode_warning() {
+        // Same property must hold when the fallback is set on the
+        // programmatic `FontConfig` rather than the TOML config.
+        let cfg = FontConfig::new().with_fallback_fonts(["Noto Sans CJK SC"]);
+        let warnings = validate_conversion("Hello 日本語", Some(&cfg), &[], None);
+        assert!(
+            warnings
+                .iter()
+                .all(|w| w.kind != WarningKind::UnicodeWithoutFont),
+            "FontConfig.fallback_fonts should suppress the Unicode warning"
+        );
     }
 }

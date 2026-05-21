@@ -128,7 +128,13 @@ pub fn render_to_bytes(
 
     let blocks = lower::lower(&tokens);
     let usage = ir::VariantUsage::analyze(&blocks);
-    let font_set = font::FontSet::load(font_config, &used_codepoints, usage, &mut doc);
+    let font_set = font::FontSet::load_with_style_fallbacks(
+        font_config,
+        &style.fallback_fonts,
+        &used_codepoints,
+        usage,
+        &mut doc,
+    );
     let pages = layout::lay_out_pages(&blocks, &style, &font_set, &mut doc);
 
     let (fallback_w, fallback_h) = layout::page_dimensions_mm(&style.page);

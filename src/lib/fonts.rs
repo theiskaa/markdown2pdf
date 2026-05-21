@@ -58,6 +58,16 @@ pub struct FontConfig {
     pub default_font_source: Option<FontSource>,
     /// Font source for code blocks. Takes priority over `code_font` if set.
     pub code_font_source: Option<FontSource>,
+    /// Ordered list of fallback font *names* (system / path / built-in
+    /// alias). Resolved the same way as `default_font` at render time.
+    /// Composed with `fallback_font_sources` (sources first, then names)
+    /// and with any `fallback_fonts` set on `[defaults]` in the TOML
+    /// config.
+    pub fallback_fonts: Vec<String>,
+    /// Ordered list of pre-resolved fallback font sources. Useful when
+    /// embedding fonts via `include_bytes!` or pointing at a known
+    /// path. Composed before `fallback_fonts`.
+    pub fallback_font_sources: Vec<FontSource>,
     /// Enable font subsetting for smaller PDFs.
     pub enable_subsetting: bool,
 }
@@ -70,6 +80,8 @@ impl FontConfig {
             code_font: None,
             default_font_source: None,
             code_font_source: None,
+            fallback_fonts: Vec::new(),
+            fallback_font_sources: Vec::new(),
             enable_subsetting: true,
         }
     }
@@ -101,6 +113,28 @@ impl FontConfig {
     /// Enable or disable font subsetting.
     pub fn with_subsetting(mut self, enabled: bool) -> Self {
         self.enable_subsetting = enabled;
+        self
+    }
+
+    /// Replace the fallback-font name list. See [`FontConfig::fallback_fonts`].
+    pub fn with_fallback_fonts<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.fallback_fonts = names.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Append one fallback name to the existing list.
+    pub fn add_fallback_font(mut self, name: impl Into<String>) -> Self {
+        self.fallback_fonts.push(name.into());
+        self
+    }
+
+    /// Append one pre-resolved fallback font source.
+    pub fn add_fallback_font_source(mut self, source: FontSource) -> Self {
+        self.fallback_font_sources.push(source);
         self
     }
 }

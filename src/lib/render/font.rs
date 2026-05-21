@@ -232,6 +232,15 @@ impl ExternalFont {
         }
         unscaled as f32 * font_size_pt / self.units_per_em as f32
     }
+
+    /// `true` if this font has a real glyph for `c` (i.e. the
+    /// codepoint was in the keep-set when the font was loaded *and*
+    /// the un-subsetted face exposed a non-`.notdef` glyph index for
+    /// it). Used to pick which font in a fallback chain emits a
+    /// given codepoint.
+    pub fn covers(&self, c: char) -> bool {
+        self.advance_by_codepoint.contains_key(&(c as u32))
+    }
 }
 
 /// The complete font set for one render call: built-ins always
@@ -247,6 +256,10 @@ pub struct FontSet {
     pub builtin: FontMetricsCache,
     pub external_body: ExternalFamily,
     pub external_code: ExternalFamily,
+    /// Ordered fallback fonts consulted when the primary body / code
+    /// font does not cover a codepoint. Regular weight only — fallbacks
+    /// are loaded once per family and reused for every flag combination.
+    pub fallbacks: Vec<ExternalFont>,
 }
 
 /// Up to four weight slots for an external font family.
@@ -303,6 +316,31 @@ pub enum FontResolution<'a> {
     },
 }
 
+/// One contiguous run of text destined for a single PDF font handle.
+/// Produced by [`FontSet::split_for_emit`]: the layout engine emits
+/// one `SetFont` + `ShowText` pair per chunk.
+#[derive(Debug, Clone)]
+pub struct EmitChunk {
+    pub handle: PdfFontHandle,
+    /// `true` iff `text` must pass through `to_win1252` before reaching
+    /// `Op::ShowText`. Only set for built-in chunks.
+    pub needs_transliteration: bool,
+    pub text: String,
+    /// Advance width of `text` at the size requested by the caller of
+    /// `split_for_emit`. Precomputed so the call site doesn't have to
+    /// re-walk the codepoints.
+    pub width_pt: f32,
+}
+
+/// Per-codepoint choice of which font slot emits it. Used internally
+/// by `split_for_emit` to group consecutive same-choice codepoints
+/// into chunks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FontPick {
+    Primary,
+    Fallback(usize),
+}
+
 impl FontSet {
     /// Build the font set for a render call.
     ///
@@ -312,6 +350,12 @@ impl FontSet {
     /// bold/italic/bold-italic faces that the document never asks
     /// for. Regular is always loaded; the optional weights are
     /// loaded only when `usage` flags them.
+    ///
+    /// `extra_fallbacks` is the list of fallback font sources
+    /// configured at the document level (`[defaults].fallback_fonts`
+    /// in TOML) combined with any sources/names on `FontConfig`. Each
+    /// is loaded in order, regular weight only; consumed by
+    /// [`FontSet::split_for_emit`] when the primary lacks a glyph.
     pub fn load(
         font_config: Option<&FontConfig>,
         used_codepoints: &[char],
@@ -347,14 +391,42 @@ impl FontSet {
         };
         let external_code = load_external_family(code_src, used_codepoints, code_variants, doc)
             .unwrap_or_default();
+        let fallbacks = load_fallbacks(font_config, used_codepoints, doc);
         Self {
             builtin,
             external_body,
             external_code,
+            fallbacks,
         }
     }
 
-    /// Resolve a [`RunFlags`] to a concrete font choice.
+    /// Build the font set with an additional list of fallback sources
+    /// (resolved from `[defaults].fallback_fonts` in the styling
+    /// config). Names are appended *after* anything declared on
+    /// `FontConfig` so programmatic config wins on order.
+    pub fn load_with_style_fallbacks(
+        font_config: Option<&FontConfig>,
+        style_fallback_names: &[String],
+        used_codepoints: &[char],
+        usage: VariantUsage,
+        doc: &mut PdfDocument,
+    ) -> Self {
+        let mut set = Self::load(font_config, used_codepoints, usage, doc);
+        for name in style_fallback_names {
+            let src = name_to_external_source(name);
+            let Some((_, bytes)) = resolve_regular(src) else {
+                continue;
+            };
+            if let Some(font) = parse_and_register(bytes, "fallback", used_codepoints, doc) {
+                set.fallbacks.push(font);
+            }
+        }
+        set
+    }
+
+    /// Resolve a [`RunFlags`] to a concrete font choice — the
+    /// *primary* font for that flag combination. Fallback selection
+    /// happens per-codepoint inside [`FontSet::split_for_emit`].
     pub fn resolve(&self, flags: RunFlags) -> FontResolution<'_> {
         if flags.monospace {
             if let Some(ext) = self.external_code.pick(flags) {
@@ -376,27 +448,184 @@ impl FontSet {
         }
     }
 
+    /// Total advance width of `text` at `size_pt`. Walks fallback
+    /// coverage so a mixed-script run measures correctly even when
+    /// different codepoints render in different fonts.
     pub fn measure(&self, flags: RunFlags, text: &str, size_pt: f32) -> f32 {
-        match self.resolve(flags) {
-            FontResolution::Builtin { metrics, .. } => metrics.measure(text, size_pt),
-            FontResolution::External { font, .. } => font.measure(text, size_pt),
+        if self.fallbacks.is_empty() {
+            return match self.resolve(flags) {
+                FontResolution::Builtin { metrics, .. } => metrics.measure(text, size_pt),
+                FontResolution::External { font, .. } => font.measure(text, size_pt),
+            };
         }
+        self.split_for_emit(flags, text, size_pt)
+            .iter()
+            .map(|c| c.width_pt)
+            .sum()
     }
 
-    pub fn handle(&self, flags: RunFlags) -> PdfFontHandle {
-        match self.resolve(flags) {
-            FontResolution::Builtin { handle, .. } | FontResolution::External { handle, .. } => {
-                handle
-            }
-        }
-    }
-
-    /// `true` if text emitted via this variant has to pass through
-    /// the `to_win1252` ASCII transliterator (because the built-in
-    /// font path can't survive non-ASCII bytes).
+    /// `true` if the *primary* font for `flags` is a built-in and
+    /// emitted text has to pass through `to_win1252`. Note: even when
+    /// this returns `true`, individual codepoints may still emit via
+    /// an external fallback — only the primary's policy is reported.
     pub fn needs_transliteration(&self, flags: RunFlags) -> bool {
         matches!(self.resolve(flags), FontResolution::Builtin { .. })
     }
+
+    /// Split `text` into the smallest sequence of single-font chunks
+    /// that the layout engine can emit one-after-another. Each chunk's
+    /// codepoints are all covered by the same font slot: the primary
+    /// for the run's flags, or one of the loaded fallbacks (the first
+    /// one whose face has a glyph for the codepoint).
+    ///
+    /// When the primary is a built-in (ASCII-only via WinAnsi
+    /// transliteration), every non-ASCII codepoint tries the fallback
+    /// chain. When the primary is an external Unicode font,
+    /// codepoints absent from its subset try the fallback chain.
+    /// Codepoints covered nowhere are emitted on the primary (where
+    /// the renderer will show `.notdef` boxes or transliterate to
+    /// `?`).
+    ///
+    /// Width is precomputed against `size_pt` so callers that need
+    /// both a width sum (for wrapping) and a per-chunk emission don't
+    /// pay the per-glyph scan twice.
+    pub fn split_for_emit(
+        &self,
+        flags: RunFlags,
+        text: &str,
+        size_pt: f32,
+    ) -> Vec<EmitChunk> {
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let primary = self.resolve(flags);
+        // Fast path: no fallbacks configured. Everything emits via the
+        // primary as a single chunk. Identical behavior to the
+        // pre-fallback code path.
+        if self.fallbacks.is_empty() {
+            return vec![chunk_from_resolution(&primary, text.to_string(), size_pt)];
+        }
+        let mut chunks: Vec<EmitChunk> = Vec::new();
+        let mut buf = String::new();
+        let mut current: Option<FontPick> = None;
+        for c in text.chars() {
+            let pick = if primary_covers(&primary, c) {
+                FontPick::Primary
+            } else if let Some(idx) = self.fallbacks.iter().position(|f| f.covers(c)) {
+                FontPick::Fallback(idx)
+            } else {
+                // No font in the chain covers `c`. Emit via the primary
+                // — that path will either render `.notdef` (external) or
+                // transliterate to `?` (built-in). Either degradation is
+                // visible and non-panicking.
+                FontPick::Primary
+            };
+            match current {
+                Some(cur) if cur == pick => buf.push(c),
+                Some(cur) => {
+                    chunks.push(self.build_chunk(cur, std::mem::take(&mut buf), &primary, size_pt));
+                    buf.push(c);
+                    current = Some(pick);
+                }
+                None => {
+                    buf.push(c);
+                    current = Some(pick);
+                }
+            }
+        }
+        if let Some(cur) = current {
+            chunks.push(self.build_chunk(cur, buf, &primary, size_pt));
+        }
+        chunks
+    }
+
+    fn build_chunk(
+        &self,
+        pick: FontPick,
+        text: String,
+        primary: &FontResolution<'_>,
+        size_pt: f32,
+    ) -> EmitChunk {
+        match pick {
+            FontPick::Primary => chunk_from_resolution(primary, text, size_pt),
+            FontPick::Fallback(idx) => {
+                let font = &self.fallbacks[idx];
+                let width_pt = font.measure(&text, size_pt);
+                EmitChunk {
+                    handle: PdfFontHandle::External(font.font_id.clone()),
+                    needs_transliteration: false,
+                    text,
+                    width_pt,
+                }
+            }
+        }
+    }
+}
+
+/// `true` iff the *primary* font (already resolved for the run flags)
+/// has a glyph for `c`. For built-ins this is "ASCII or directly
+/// representable in WinAnsi"; for external faces it's a subset
+/// membership check.
+fn primary_covers(primary: &FontResolution<'_>, c: char) -> bool {
+    match primary {
+        FontResolution::External { font, .. } => font.covers(c),
+        FontResolution::Builtin { .. } => (c as u32) < 0x80,
+    }
+}
+
+fn chunk_from_resolution(
+    primary: &FontResolution<'_>,
+    text: String,
+    size_pt: f32,
+) -> EmitChunk {
+    match primary {
+        FontResolution::Builtin { handle, metrics } => {
+            let width_pt = metrics.measure(&text, size_pt);
+            EmitChunk {
+                handle: handle.clone(),
+                needs_transliteration: true,
+                text,
+                width_pt,
+            }
+        }
+        FontResolution::External { handle, font } => {
+            let width_pt = font.measure(&text, size_pt);
+            EmitChunk {
+                handle: handle.clone(),
+                needs_transliteration: false,
+                text,
+                width_pt,
+            }
+        }
+    }
+}
+
+/// Load every fallback font declared on `FontConfig`, in order. Each
+/// is parsed as a regular-weight family (no bold / italic discovery —
+/// fallbacks reuse the regular glyphs for every flag combination).
+/// Failures are logged and skipped, never propagated; a missing
+/// fallback simply means uncovered codepoints stay uncovered.
+fn load_fallbacks(
+    font_config: Option<&FontConfig>,
+    used_codepoints: &[char],
+    doc: &mut PdfDocument,
+) -> Vec<ExternalFont> {
+    let mut out = Vec::new();
+    let Some(cfg) = font_config else {
+        return out;
+    };
+    let mut sources: Vec<FontSource> = Vec::new();
+    sources.extend(cfg.fallback_font_sources.iter().cloned());
+    sources.extend(cfg.fallback_fonts.iter().map(|n| name_to_external_source(n)));
+    for src in sources {
+        let Some((_, bytes)) = resolve_regular(src) else {
+            continue;
+        };
+        if let Some(font) = parse_and_register(bytes, "fallback", used_codepoints, doc) {
+            out.push(font);
+        }
+    }
+    out
 }
 
 fn default_source(c: &FontConfig) -> Option<FontSource> {
@@ -806,6 +1035,83 @@ mod tests {
         // On Linux containers without any monospace font installed,
         // None is the correct answer (graceful degradation to the
         // built-in Courier path).
+    }
+
+    #[test]
+    fn split_with_no_fallbacks_returns_single_chunk() {
+        // No font_config + no fallbacks = built-in Helvetica path. The
+        // whole input becomes a single chunk with the transliteration
+        // policy of the built-in path — matching the pre-fallback
+        // behavior.
+        let mut doc = PdfDocument::new("test");
+        let set = FontSet::load(None, &[], VariantUsage::default(), &mut doc);
+        let chunks = set.split_for_emit(RunFlags::default(), "Hello", 12.0);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "Hello");
+        assert!(chunks[0].needs_transliteration);
+        assert!(chunks[0].width_pt > 0.0);
+    }
+
+    #[test]
+    fn split_empty_text_returns_empty() {
+        let mut doc = PdfDocument::new("test");
+        let set = FontSet::load(None, &[], VariantUsage::default(), &mut doc);
+        let chunks = set.split_for_emit(RunFlags::default(), "", 12.0);
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn measure_equals_sum_of_per_chunk_widths() {
+        // The wrapping path calls `measure(flags, text, size)` and the
+        // emit path iterates `split_for_emit(flags, text, size)`. The
+        // sum of per-chunk widths must equal `measure` exactly, or
+        // wrap will under-/over-estimate where the glyphs actually
+        // land. This test pins the invariant for the no-fallback fast
+        // path (the only one we can construct without an external
+        // font file in unit tests).
+        let mut doc = PdfDocument::new("test");
+        let set = FontSet::load(None, &[], VariantUsage::default(), &mut doc);
+        let cases = ["", "Hello", "Hello world", "ABCDE 12345 !?.,"];
+        for text in cases {
+            let direct = set.measure(RunFlags::default(), text, 10.0);
+            let summed: f32 = set
+                .split_for_emit(RunFlags::default(), text, 10.0)
+                .iter()
+                .map(|c| c.width_pt)
+                .sum();
+            assert!(
+                (direct - summed).abs() < 1e-3,
+                "measure({:?}) {} != sum-of-chunks {}",
+                text,
+                direct,
+                summed
+            );
+        }
+    }
+
+    #[test]
+    fn missing_fallback_source_does_not_panic() {
+        // A configured fallback that can't be located on disk should
+        // simply not load — the renderer must still emit text through
+        // the primary font (degraded for uncovered codepoints, never
+        // a panic). Verifies graceful no-op on bad config.
+        let cfg = FontConfig {
+            default_font: None,
+            code_font: None,
+            default_font_source: None,
+            code_font_source: None,
+            fallback_fonts: vec!["This_Font_Definitely_Does_Not_Exist_12345".to_string()],
+            fallback_font_sources: Vec::new(),
+            enable_subsetting: true,
+        };
+        let mut doc = PdfDocument::new("test");
+        let set = FontSet::load(Some(&cfg), &['日' as char], VariantUsage::default(), &mut doc);
+        assert!(set.fallbacks.is_empty());
+        // Uncovered codepoint must not panic; it routes through the
+        // primary's degraded path (`?` for built-in).
+        let chunks = set.split_for_emit(RunFlags::default(), "日", 12.0);
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].needs_transliteration);
     }
 
     #[test]
