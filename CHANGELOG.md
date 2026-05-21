@@ -6,6 +6,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Each release section below is what ships as the GitHub Release notes.
 
+## [1.4.0] - 2026-05-21
+
+One addition: a font fallback chain so codepoints the primary font
+can't cover are routed to the first configured font that *can*. CJK,
+Arabic, Hebrew, math symbols, and emoji in an otherwise Latin
+document now render as real glyphs instead of `?` boxes. Purely
+additive — documents that don't configure fallbacks render byte-for-
+byte the same as on 1.3.0.
+
+**Fallback font chain.** A new `fallback_fonts` list on `[defaults]`
+in the TOML config (and `FontConfig::with_fallback_fonts(...)` for
+programmatic callers) takes an ordered list of font names. At render
+time each codepoint is matched against the primary first, then each
+fallback in declaration order; the first font that has a real glyph
+emits it. A codepoint covered by nothing in the chain degrades
+visibly (a `?` with the built-in primary, a missing-glyph box with an
+external Unicode primary) rather than failing the render. Names
+resolve the same way as `font_family`: built-in aliases, system font
+names, or paths to `.ttf` / `.otf` files; a font that can't be
+located logs a warning and is skipped. Wrapping and emission stay
+consistent across font boundaries, so mixed-script paragraphs don't
+overlap or break early.
+
+Resolves [#81](https://github.com/theiskaa/markdown2pdf/issues/81).
+
 ## [1.3.0] - 2026-05-20
 
 Three additions: merged GFM table cells, inline HTML anchors and
@@ -418,6 +443,7 @@ Initial release: a Markdown lexer and a `genpdfi`-backed PDF
 converter with basic styling, configuration via `mdprc`, code blocks,
 emphasis, links, and nested tokens.
 
+[1.4.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.4.0
 [1.3.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.3.0
 [1.2.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.2.0
 [1.1.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.1.0
