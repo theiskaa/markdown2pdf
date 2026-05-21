@@ -255,15 +255,37 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             enable_subsetting: true,
             default_font_source: None,
             code_font_source: None,
+            fallback_fonts: Vec::new(),
+            fallback_font_sources: Vec::new(),
         })
     } else {
         None
     };
 
+    // Load the resolved style up front so validation can see any
+    // `[defaults].fallback_fonts` configured — without that, the
+    // Unicode-without-font warning fires even when fallbacks fully
+    // cover the document.
+    let config_source = match matches.get_one::<String>("config-path") {
+        Some(p) => markdown2pdf::config::ConfigSource::File(p.as_str()),
+        None => markdown2pdf::config::ConfigSource::Default,
+    };
+    let theme_override = matches.get_one::<String>("theme").map(|s| s.as_str());
+    let resolved_style = markdown2pdf::config::load_config_strict_with_overrides(
+        config_source,
+        theme_override,
+        overrides.as_deref(),
+    )
+    .map_err(|e| AppError::ConversionError(e.to_string()))?;
+
     // Run validation checks
     if verbosity != Verbosity::Quiet {
-        let warnings =
-            validation::validate_conversion(&markdown, font_config.as_ref(), Some(output_path_str));
+        let warnings = validation::validate_conversion(
+            &markdown,
+            font_config.as_ref(),
+            &resolved_style.fallback_fonts,
+            Some(output_path_str),
+        );
 
         if !warnings.is_empty() {
             if verbosity == Verbosity::Verbose {
@@ -288,8 +310,12 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             return Ok(());
         }
     } else if dry_run {
-        let warnings =
-            validation::validate_conversion(&markdown, font_config.as_ref(), Some(output_path_str));
+        let warnings = validation::validate_conversion(
+            &markdown,
+            font_config.as_ref(),
+            &resolved_style.fallback_fonts,
+            Some(output_path_str),
+        );
         if warnings.is_empty() {
             return Ok(());
         } else {
@@ -309,18 +335,6 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             }
         }
     }
-
-    let config_source = match matches.get_one::<String>("config-path") {
-        Some(p) => markdown2pdf::config::ConfigSource::File(p.as_str()),
-        None => markdown2pdf::config::ConfigSource::Default,
-    };
-    let theme_override = matches.get_one::<String>("theme").map(|s| s.as_str());
-    let resolved_style = markdown2pdf::config::load_config_strict_with_overrides(
-        config_source,
-        theme_override,
-        overrides.as_deref(),
-    )
-    .map_err(|e| AppError::ConversionError(e.to_string()))?;
 
     markdown2pdf::parse_into_file_with_style(
         markdown,
