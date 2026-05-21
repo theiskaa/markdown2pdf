@@ -105,6 +105,27 @@ padding = 0.0
 margin_before_pt = 0.0
 margin_after_pt = 0.0
 indent_pt = 0.0
+fallback_fonts = ["Noto Sans CJK SC", "Noto Sans Arabic", "Symbola"]
+```
+
+### Fallback fonts
+
+`fallback_fonts` is an ordered list of font names consulted when the
+primary body / code font lacks a glyph for a codepoint. Mixed-script
+documents (Latin + CJK, Arabic, Hebrew, math symbols, emoji) render
+each codepoint in the first configured font that covers it; characters
+unmatched by every font degrade to `?` rather than panicking.
+
+Names resolve the same way as `font_family` — built-in aliases, system
+font names, or paths to `.ttf` / `.otf` files. The field is only read
+from `[defaults]`; per-block tables ignore it.
+
+Programmatic callers can set the same list on `FontConfig`:
+
+```rust
+let cfg = FontConfig::new()
+    .with_default_font("Helvetica")
+    .with_fallback_fonts(["Noto Sans CJK SC", "Symbola"]);
 ```
 
 Colors accept hex strings (`"#RRGGBB"`, `"#RGB"`), structs

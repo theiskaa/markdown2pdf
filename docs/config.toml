@@ -38,6 +38,13 @@ padding = 0.0              # scalar (all sides), [v, h], [t, r, b, l], or { top,
 margin_before_pt = 0.0
 margin_after_pt = 0.0
 indent_pt = 0.0
+# Ordered list of fallback fonts. Codepoints the primary body / code
+# font does not cover (CJK, Arabic, Hebrew, math symbols, emoji) are
+# looked up in each entry in turn; the first font with a glyph wins.
+# Names are resolved like `font_family`: built-ins, system font names,
+# or paths to a `.ttf` / `.otf` on disk. Leave empty (or omit) to keep
+# the previous behavior of rendering uncovered codepoints as `?`.
+# fallback_fonts = ["Noto Sans CJK SC", "Noto Sans Arabic", "Symbola"]
 
 
 [paragraph]
