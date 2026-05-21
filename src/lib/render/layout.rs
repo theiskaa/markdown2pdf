@@ -491,21 +491,10 @@ impl<'a> Engine<'a> {
         self.close_text_section();
         self.ensure_text_section();
         self.move_cursor_to(center_x, baseline_y);
-        self.page_ops.push(Op::SetFont {
-            font: self.font_set.handle(flags),
-            size: Pt(size_pt),
-        });
         self.page_ops.push(Op::SetFillColor {
             col: rgb_color(style.text_color_rgb()),
         });
-        let emit = if self.font_set.needs_transliteration(flags) {
-            to_win1252(text)
-        } else {
-            text.to_string()
-        };
-        self.page_ops.push(Op::ShowText {
-            items: vec![TextItem::Text(emit)],
-        });
+        emit_text_chunks(&mut self.page_ops, self.font_set, flags, text, size_pt);
         self.close_text_section();
 
         self.advance_y(size_pt);
@@ -620,21 +609,16 @@ impl<'a> Engine<'a> {
         self.close_text_section();
         self.ensure_text_section();
         self.move_cursor_to(row_left, baseline_y);
-        self.page_ops.push(Op::SetFont {
-            font: self.font_set.handle(flags),
-            size: Pt(size_pt),
-        });
         self.page_ops.push(Op::SetFillColor {
             col: rgb_color(style.text_color_rgb()),
         });
-        let text_to_emit = if self.font_set.needs_transliteration(flags) {
-            to_win1252(&anchor.text)
-        } else {
-            anchor.text.clone()
-        };
-        self.page_ops.push(Op::ShowText {
-            items: vec![TextItem::Text(text_to_emit)],
-        });
+        emit_text_chunks(
+            &mut self.page_ops,
+            self.font_set,
+            flags,
+            &anchor.text,
+            size_pt,
+        );
 
         // Page-number portion (right-aligned at row_right).
         let page_str = page_num.to_string();
@@ -643,18 +627,13 @@ impl<'a> Engine<'a> {
         self.close_text_section();
         self.ensure_text_section();
         self.move_cursor_to(num_x, baseline_y);
-        self.page_ops.push(Op::SetFont {
-            font: self.font_set.handle(flags),
-            size: Pt(size_pt),
-        });
-        let num_emit = if self.font_set.needs_transliteration(flags) {
-            to_win1252(&page_str)
-        } else {
-            page_str
-        };
-        self.page_ops.push(Op::ShowText {
-            items: vec![TextItem::Text(num_emit)],
-        });
+        emit_text_chunks(
+            &mut self.page_ops,
+            self.font_set,
+            flags,
+            &page_str,
+            size_pt,
+        );
         self.close_text_section();
 
         // Clickable rect spans the whole row.
@@ -1155,27 +1134,16 @@ impl<'a> Engine<'a> {
 
         let x_mm = pt_to_mm(x_pt);
         let y_mm = pt_to_mm(self.page_height_pt() - y_pt);
-        let emit = if self.font_set.needs_transliteration(flags) {
-            to_win1252(text)
-        } else {
-            text.to_string()
-        };
 
         ops.push(Op::SaveGraphicsState);
         ops.push(Op::StartTextSection);
         ops.push(Op::SetTextCursor {
             pos: Point::new(Mm(x_mm), Mm(y_mm)),
         });
-        ops.push(Op::SetFont {
-            font: self.font_set.handle(flags),
-            size: Pt(size_pt),
-        });
         ops.push(Op::SetFillColor {
             col: rgb_color(style.text_color_rgb()),
         });
-        ops.push(Op::ShowText {
-            items: vec![TextItem::Text(emit)],
-        });
+        emit_text_chunks(ops, self.font_set, flags, text, size_pt);
         ops.push(Op::EndTextSection);
         ops.push(Op::RestoreGraphicsState);
     }
@@ -2248,22 +2216,17 @@ impl<'a> Engine<'a> {
                     self.close_text_section();
                     self.ensure_text_section();
                     self.move_cursor_to(bullet_x, bullet_y);
-                    self.page_ops.push(Op::SetFont {
-                        font: self.font_set.handle(bullet_flags),
-                        size: Pt(size_pt),
-                    });
                     self.page_ops.push(Op::SetLineHeight {
                         lh: Pt(size_pt * line_height.max(0.5)),
                     });
                     self.page_ops.push(Op::SetFillColor { col: bullet_col });
-                    let bullet_emit = if needs_xlit {
-                        to_win1252(&bullet_text)
-                    } else {
-                        bullet_text.clone()
-                    };
-                    self.page_ops.push(Op::ShowText {
-                        items: vec![TextItem::Text(bullet_emit)],
-                    });
+                    emit_text_chunks(
+                        &mut self.page_ops,
+                        self.font_set,
+                        bullet_flags,
+                        &bullet_text,
+                        size_pt,
+                    );
                 }
             }
 
@@ -2777,13 +2740,6 @@ impl<'a> Engine<'a> {
                     (size_pt, baseline_y_pt)
                 };
                 let seg_width = self.font_set.measure(seg.flags, &seg.text, seg_size);
-                let font_handle = self.font_set.handle(seg.flags);
-                let needs_trans = self.font_set.needs_transliteration(seg.flags);
-                let emit_text = if needs_trans {
-                    to_win1252(&seg.text)
-                } else {
-                    seg.text.clone()
-                };
 
                 if seg.flags.superscript || seg.flags.subscript {
                     // Close the line's main section, emit the small
@@ -2798,16 +2754,16 @@ impl<'a> Engine<'a> {
                     self.page_ops.push(Op::SetTextCursor {
                         pos: Point::new(Mm(x_mm), Mm(y_mm)),
                     });
-                    self.page_ops.push(Op::SetFont {
-                        font: font_handle,
-                        size: Pt(seg_size),
-                    });
                     if let Some(c) = color.clone() {
                         self.page_ops.push(Op::SetFillColor { col: c });
                     }
-                    self.page_ops.push(Op::ShowText {
-                        items: vec![TextItem::Text(emit_text)],
-                    });
+                    emit_text_chunks(
+                        &mut self.page_ops,
+                        self.font_set,
+                        seg.flags,
+                        &seg.text,
+                        seg_size,
+                    );
                     self.page_ops.push(Op::EndTextSection);
                     self.page_ops.push(Op::RestoreGraphicsState);
                     cursor_needs_reset = true;
@@ -2843,13 +2799,13 @@ impl<'a> Engine<'a> {
                     } else if let Some(c) = color.clone() {
                         self.page_ops.push(Op::SetFillColor { col: c });
                     }
-                    self.page_ops.push(Op::SetFont {
-                        font: font_handle,
-                        size: Pt(seg_size),
-                    });
-                    self.page_ops.push(Op::ShowText {
-                        items: vec![TextItem::Text(emit_text)],
-                    });
+                    emit_text_chunks(
+                        &mut self.page_ops,
+                        self.font_set,
+                        seg.flags,
+                        &seg.text,
+                        seg_size,
+                    );
                 }
 
                 // Buffer decorations and link rects until the line is
@@ -3047,6 +3003,36 @@ struct HighlightBox {
     x1_pt: f32,
     baseline_y_pt: f32,
     size_pt: f32,
+}
+
+/// Emit `text` at `size_pt` using the run flags' resolved font chain.
+/// When the FontSet has no fallbacks, this produces exactly one
+/// `SetFont` + `ShowText` pair — identical to the pre-fallback emit
+/// path. When fallbacks are loaded, the text is split into per-font
+/// chunks ([`FontSet::split_for_emit`]) and one `SetFont` + `ShowText`
+/// pair is emitted per chunk, so codepoints uncovered by the primary
+/// render in their first covering fallback.
+fn emit_text_chunks(
+    ops: &mut Vec<Op>,
+    font_set: &FontSet,
+    flags: RunFlags,
+    text: &str,
+    size_pt: f32,
+) {
+    for chunk in font_set.split_for_emit(flags, text, size_pt) {
+        ops.push(Op::SetFont {
+            font: chunk.handle,
+            size: Pt(size_pt),
+        });
+        let emit = if chunk.needs_transliteration {
+            to_win1252(&chunk.text)
+        } else {
+            chunk.text
+        };
+        ops.push(Op::ShowText {
+            items: vec![TextItem::Text(emit)],
+        });
+    }
 }
 
 /// Convert a UTF-8 string to ASCII for safe rendering with
