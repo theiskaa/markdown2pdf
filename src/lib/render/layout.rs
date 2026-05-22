@@ -3056,24 +3056,7 @@ fn emit_text_chunks(
 fn to_win1252(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        match c as u32 {
-            // ASCII passes through untouched.
-            0x00..=0x7F => out.push(c),
-            // Common Win-1252 punctuation -> ASCII equivalents.
-            0x2014 => out.push_str("--"),  // — em-dash
-            0x2013 => out.push('-'),       // – en-dash
-            0x2022 => out.push('*'),       // • bullet
-            0x2018 | 0x2019 => out.push('\''), // ' '
-            0x201C | 0x201D => out.push('"'),  // " "
-            0x2026 => out.push_str("..."), // …
-            0x00A0 => out.push(' '),       // non-breaking space
-            0x00A9 => out.push_str("(c)"),
-            0x00AE => out.push_str("(R)"),
-            0x2122 => out.push_str("(TM)"),
-            // Everything else is mapped to '?' so the loss is visible
-            // and not silently scrambled.
-            _ => out.push('?'),
-        }
+        super::font::for_each_builtin_emit_char(c, |emitted| out.push(emitted));
     }
     out
 }
