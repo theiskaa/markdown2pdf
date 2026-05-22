@@ -130,6 +130,7 @@ margin_after_pt = 0.5
 indent_per_level_pt = 17.0  # ~6 mm
 item_spacing_tight_pt = 0.5
 item_spacing_loose_pt = 6.0
+bullet_gap_pt = 5.67  # ~2 mm gap between bullet and item text
 
 [list.unordered]
 bullet = "•"
