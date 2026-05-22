@@ -1810,7 +1810,6 @@ impl<'a> Engine<'a> {
         let before_pt = self.style.table.margin_before_pt;
         let after_pt = self.style.table.margin_after_pt;
         let row_gap_pt = self.style.table.row_gap_pt;
-        const CELL_PAD_PT: f32 = 4.0;
 
         self.advance_y(before_pt);
 
@@ -1908,7 +1907,6 @@ impl<'a> Engine<'a> {
             row_idx = group_end;
         }
 
-        let _ = CELL_PAD_PT;
         self.advance_y(after_pt);
     }
 
@@ -1921,6 +1919,7 @@ impl<'a> Engine<'a> {
         bold: bool,
     ) -> f32 {
         let line_h = font_size * line_height_mult.max(0.5);
+        let pad = self.style.table.cell_padding;
         let mut max_lines = 1usize;
         for cell in cells {
             if cell.covered {
@@ -1930,13 +1929,13 @@ impl<'a> Engine<'a> {
                 &cell.content,
                 font_size,
                 line_height_mult,
-                col_width * cell.colspan.max(1) as f32 - 8.0,
+                col_width * cell.colspan.max(1) as f32 - (pad.left + pad.right),
                 self.font_set,
                 bold,
             );
             max_lines = max_lines.max(n_lines);
         }
-        max_lines as f32 * line_h + 6.0
+        max_lines as f32 * line_h + pad.top + pad.bottom
     }
 
     fn measure_table_row_heights(
@@ -2002,7 +2001,7 @@ impl<'a> Engine<'a> {
         bold: bool,
         color: (u8, u8, u8),
     ) {
-        const CELL_PAD: f32 = 4.0;
+        let pad = self.style.table.cell_padding;
         let saved_left = self.indent_left_pt;
         let saved_right = self.indent_right_pt;
         let row_top = self.y_from_top_pt;
@@ -2014,8 +2013,8 @@ impl<'a> Engine<'a> {
             let colspan = cell.colspan.max(1).min(col_count - i);
             let rowspan = cell.rowspan.max(1).min(row_heights.len() - row_offset);
             let region_height: f32 = row_heights[row_offset..row_offset + rowspan].iter().sum();
-            let cell_left = saved_left + col_width * i as f32 + CELL_PAD;
-            let cell_right = saved_left + col_width * (i + colspan) as f32 - CELL_PAD;
+            let cell_left = saved_left + col_width * i as f32 + pad.left;
+            let cell_right = saved_left + col_width * (i + colspan) as f32 - pad.right;
             let inner_width = cell_right - cell_left;
             let mut runs = cell.content.clone();
             if bold {
@@ -2056,9 +2055,9 @@ impl<'a> Engine<'a> {
                 );
                 let content_height =
                     content_lines as f32 * font_size * line_height_mult.max(0.5);
-                row_top + ((region_height - content_height) / 2.0).max(3.0)
+                row_top + ((region_height - content_height) / 2.0).max(pad.top)
             } else {
-                row_top + 3.0
+                row_top + pad.top
             };
             self.write_wrapped_runs(
                 &runs,
