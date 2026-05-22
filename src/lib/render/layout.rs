@@ -2383,18 +2383,7 @@ impl<'a> Engine<'a> {
         let idx = level.clamp(1, 6) as usize - 1;
         let s = self.style.headings[idx].clone();
         let color = Some(rgb_color(s.text_color_rgb()));
-        let base_flags = RunFlags {
-            bold: s.is_bold(),
-            italic: s.is_italic(),
-            monospace: false,
-            strikethrough: false,
-            highlight: false,
-            superscript: false,
-            subscript: false,
-            small_caps: false,
-            small: false,
-            underline: false,
-        };
+        let base_flags = base_flags_from_block(&s);
 
         let text = collect_heading_text(runs);
         let base_slug = {
@@ -2435,7 +2424,7 @@ impl<'a> Engine<'a> {
     fn render_paragraph(&mut self, runs: &[InlineRun]) {
         let s = self.style.paragraph.clone();
         let color = Some(rgb_color(s.text_color_rgb()));
-        let base = RunFlags::default();
+        let base = base_flags_from_block(&s);
         let ctx = self.begin_block(&s);
         let owned_runs;
         let runs_ref: &[InlineRun] = if s.small_caps {
@@ -2453,7 +2442,7 @@ impl<'a> Engine<'a> {
     fn render_code_block(&mut self, lines: &[String]) {
         let s = self.style.code_block.clone();
         let color = Some(rgb_color(s.text_color_rgb()));
-        let base = RunFlags::default().with_monospace();
+        let base = base_flags_from_block(&s).with_monospace();
         let ctx = self.begin_block(&s);
         for line in lines {
             let run = InlineRun { math: None,
@@ -3735,6 +3724,20 @@ fn pt_to_mm(pt: f32) -> f32 {
     pt / MM_TO_PT
 }
 
+
+/// Block-level style → base run flags. Weight, slant, and the
+/// underline / strikethrough decorations are set on the style block
+/// rather than by inline markup, so they have to be folded into the
+/// base flags that `write_wrapped_runs` applies to every run.
+fn base_flags_from_block(s: &ResolvedBlock) -> RunFlags {
+    RunFlags {
+        bold: s.is_bold(),
+        italic: s.is_italic(),
+        underline: s.underline,
+        strikethrough: s.strikethrough,
+        ..RunFlags::default()
+    }
+}
 
 /// Concatenate the plain text of a heading's inline runs. The PDF
 /// outline + slug source. Markdown emphasis / inline code inside a
