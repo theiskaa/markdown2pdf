@@ -151,6 +151,10 @@ struct Engine<'a> {
     /// fields (margins, padding, border, background) stay paragraph's,
     /// since the container already draws its own box.
     text_style_override: Option<ResolvedBlock>,
+    /// First-line indent (points) for the next `write_wrapped_runs`
+    /// call. Set by `render_paragraph` from `[paragraph].indent_pt`;
+    /// the call consumes it (resets to 0) so it applies once.
+    first_line_indent_pt: f32,
     /// Stack of block backgrounds currently open (LIFO — matches the
     /// nesting of `begin_block` / `end_block`). When a page break
     /// happens mid-block, [`start_new_page`] paints the fragment that
@@ -218,6 +222,7 @@ impl<'a> Engine<'a> {
             pending_highlights: Vec::new(),
             in_code_block: false,
             text_style_override: None,
+            first_line_indent_pt: 0.0,
             open_bg: Vec::new(),
             math: None,
             math_inline_cache: HashMap::new(),
@@ -940,9 +945,6 @@ impl<'a> Engine<'a> {
             return;
         }
         let boxes = std::mem::take(&mut self.pending_highlights);
-        let Some(fill_rgb) = self.style.mark.background_color_rgb() else {
-            return;
-        };
         let page_h_pt = self.page_height_pt();
         let mut bg_ops: Vec<Op> = Vec::new();
         for b in &boxes {
@@ -952,7 +954,7 @@ impl<'a> Engine<'a> {
                 b.baseline_y_pt - b.size_pt * 0.80,
                 b.x1_pt,
                 b.baseline_y_pt + b.size_pt * 0.20,
-                rgb_color(fill_rgb),
+                b.fill.clone(),
                 page_h_pt,
             );
         }
@@ -2488,6 +2490,7 @@ impl<'a> Engine<'a> {
             runs
         };
         self.current_text_align = s.text_align;
+        self.first_line_indent_pt = s.indent_pt;
         self.write_wrapped_runs(runs_ref, s.font_size_pt, s.line_height, base, color);
         self.current_text_align = TextAlignment::Left;
         self.end_block(ctx);
@@ -2574,6 +2577,9 @@ impl<'a> Engine<'a> {
         }
         let size_pt = font_size;
         let line_height_pt = size_pt * line_height_mult.max(0.5);
+        // First-line indent applies once; consume it so nested calls
+        // (e.g. list children) don't inherit it.
+        let first_line_indent_pt = std::mem::take(&mut self.first_line_indent_pt);
 
         // Fold the block-level base style (e.g. a heading's bold
         // weight) into every run so it isn't lost when a run carries
@@ -2617,9 +2623,15 @@ impl<'a> Engine<'a> {
                 None => self.font_set.measure(word.flags, &word.text, size_pt),
             };
 
+            // The first line is narrowed by the first-line indent.
+            let line_limit = if lines.is_empty() {
+                max_width - first_line_indent_pt
+            } else {
+                max_width
+            };
             // If the very first piece of a line is wider than the
             // page, push it anyway — we don't break inside a word.
-            if !current.is_empty() && current_width + word_width > max_width {
+            if !current.is_empty() && current_width + word_width > line_limit {
                 lines.push(std::mem::take(&mut current));
                 current_width = 0.0;
                 // Drop any leading whitespace on the new line.
@@ -2713,15 +2725,18 @@ impl<'a> Engine<'a> {
                     space_count += 1;
                 }
             }
-            let slack_pt = (max_width - natural_w_pt).max(0.0);
+            // The first line is shifted right and narrowed by the
+            // first-line indent; later lines use the full column.
+            let line_indent = if line_idx == 0 { first_line_indent_pt } else { 0.0 };
+            let eff_left = self.indent_left_pt + line_indent;
+            let eff_max_width = (max_width - line_indent).max(0.0);
+            let slack_pt = (eff_max_width - natural_w_pt).max(0.0);
             let is_last_line = line_idx == last_line_idx;
 
             let (line_x_start, word_spacing_pt) = match align {
-                TextAlignment::Left => (self.indent_left_pt, 0.0),
-                TextAlignment::Center => {
-                    (self.indent_left_pt + slack_pt * 0.5, 0.0)
-                }
-                TextAlignment::Right => (self.indent_left_pt + slack_pt, 0.0),
+                TextAlignment::Left => (eff_left, 0.0),
+                TextAlignment::Center => (eff_left + slack_pt * 0.5, 0.0),
+                TextAlignment::Right => (eff_left + slack_pt, 0.0),
                 TextAlignment::Justify => {
                     // Don't justify the last line of a paragraph, lines
                     // with no break opportunities, or lines whose slack
@@ -2730,13 +2745,13 @@ impl<'a> Engine<'a> {
                     // short word).
                     let stretch_ok = space_count > 0
                         && slack_pt > 0.0
-                        && slack_pt < max_width * 0.30;
+                        && slack_pt < eff_max_width * 0.30;
                     let tw = if !is_last_line && stretch_ok {
                         (slack_pt / space_count as f32).min(size_pt * 0.5)
                     } else {
                         0.0
                     };
-                    (self.indent_left_pt, tw)
+                    (eff_left, tw)
                 }
             };
             let needs_absolute_td = !matches!(
@@ -2909,12 +2924,22 @@ impl<'a> Engine<'a> {
                         baseline_y_pt,
                     });
                 }
-                if seg.flags.highlight {
+                // Inline background box: `[mark]` fill for a highlight,
+                // `[code_inline]` fill for inline code (not code blocks).
+                let inline_bg = if seg.flags.highlight {
+                    self.style.mark.background_color_rgb()
+                } else if seg.flags.monospace && !self.in_code_block {
+                    self.style.code_inline.background_color_rgb()
+                } else {
+                    None
+                };
+                if let Some(rgb) = inline_bg {
                     self.pending_highlights.push(HighlightBox {
                         x0_pt: x_cursor_pt,
                         x1_pt: x_cursor_pt + seg_width,
                         baseline_y_pt,
                         size_pt,
+                        fill: rgb_color(rgb),
                     });
                 }
                 x_cursor_pt += seg_width;
@@ -3070,15 +3095,17 @@ struct PendingDecoration {
     baseline_y_pt: f32,
 }
 
-/// One `==highlight==` segment's box, in top-down points. Collected
-/// while a text section is open and painted (under the glyphs) when
-/// the section closes.
+/// One inline background box (a `==highlight==` span or inline-code
+/// span), in top-down points. Collected while a text section is open
+/// and painted — with its own `fill` — under the glyphs when the
+/// section closes.
 #[derive(Debug)]
 struct HighlightBox {
     x0_pt: f32,
     x1_pt: f32,
     baseline_y_pt: f32,
     size_pt: f32,
+    fill: Color,
 }
 
 /// Emit `text` at `size_pt` using the run flags' resolved font chain.
