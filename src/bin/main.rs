@@ -278,6 +278,27 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
     )
     .map_err(|e| AppError::ConversionError(e.to_string()))?;
 
+    // With no font on the CLI, fall back to the fonts named in the
+    // resolved style ([defaults].font_family / [code_block]). This
+    // lets a config file select an embeddable system font without
+    // the caller also passing --default-font.
+    let font_config = font_config.or_else(|| {
+        let default_font = resolved_style.paragraph.font_family.clone();
+        let code_font = resolved_style.code_block.font_family.clone();
+        if default_font.is_none() && code_font.is_none() {
+            return None;
+        }
+        Some(markdown2pdf::fonts::FontConfig {
+            default_font,
+            code_font,
+            enable_subsetting: true,
+            default_font_source: None,
+            code_font_source: None,
+            fallback_fonts: Vec::new(),
+            fallback_font_sources: Vec::new(),
+        })
+    });
+
     // Run validation checks
     if verbosity != Verbosity::Quiet {
         let warnings = validation::validate_conversion(
