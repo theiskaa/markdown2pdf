@@ -196,6 +196,35 @@ fn get_output_path(matches: &clap::ArgMatches) -> Result<PathBuf, AppError> {
         .unwrap_or_else(|| current_dir.join("output.pdf")))
 }
 
+/// Locate a config file when `-c` was not given, in precedence order:
+/// the `MARKDOWN2PDF_CONFIG` env var, `./markdown2pdf.toml` in the
+/// working directory, then the per-user config. Returns the first
+/// that exists; `None` falls back to the built-in default theme.
+fn discover_config_file() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("MARKDOWN2PDF_CONFIG") {
+        let path = PathBuf::from(p);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let project = PathBuf::from("markdown2pdf.toml");
+    if project.is_file() {
+        return Some(project);
+    }
+    user_config_file().filter(|p| p.is_file())
+}
+
+/// `<config-dir>/markdown2pdf/config.toml`, where the config dir is
+/// `XDG_CONFIG_HOME`, else `~/.config`, else `%APPDATA%`.
+fn user_config_file() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))?;
+    Some(base.join("markdown2pdf").join("config.toml"))
+}
+
 fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
     // Determine verbosity level
     let verbosity = if matches.get_flag("quiet") {
@@ -212,14 +241,25 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
     // Per-parameter CLI overrides (highest priority in the cascade).
     let overrides = build_overrides(&matches)?;
 
+    // Pick the config file once, so `--print-effective-config` and a
+    // real render agree. An explicit -c wins; otherwise discover one
+    // (env var, project, then per-user) before falling back to the
+    // built-in default theme.
+    let config_path: Option<PathBuf> = matches
+        .get_one::<String>("config-path")
+        .map(PathBuf::from)
+        .or_else(discover_config_file);
+    let config_source = match &config_path {
+        Some(p) => markdown2pdf::config::ConfigSource::File(p.to_str().ok_or_else(|| {
+            AppError::PathError("config path is not valid UTF-8".to_string())
+        })?),
+        None => markdown2pdf::config::ConfigSource::Default,
+    };
+
     // `--print-effective-config` resolves the style and dumps it as
     // TOML; no markdown input required. Handled before any markdown
     // I/O so users can inspect the effective config in isolation.
     if matches.get_flag("print-effective-config") {
-        let config_source = match matches.get_one::<String>("config-path") {
-            Some(p) => markdown2pdf::config::ConfigSource::File(p.as_str()),
-            None => markdown2pdf::config::ConfigSource::Default,
-        };
         let theme_override = matches.get_one::<String>("theme").map(|s| s.as_str());
         let style = markdown2pdf::config::load_config_strict_with_overrides(
             config_source,
@@ -266,10 +306,6 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
     // `[defaults].fallback_fonts` configured — without that, the
     // Unicode-without-font warning fires even when fallbacks fully
     // cover the document.
-    let config_source = match matches.get_one::<String>("config-path") {
-        Some(p) => markdown2pdf::config::ConfigSource::File(p.as_str()),
-        None => markdown2pdf::config::ConfigSource::Default,
-    };
     let theme_override = matches.get_one::<String>("theme").map(|s| s.as_str());
     let resolved_style = markdown2pdf::config::load_config_strict_with_overrides(
         config_source,
@@ -350,6 +386,9 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
     // Generate PDF
     if verbosity == Verbosity::Verbose {
         eprintln!("📄 Generating PDF...");
+        if let Some(path) = &config_path {
+            eprintln!("   Config: {}", path.display());
+        }
         if let Some(cfg) = &font_config {
             if let Some(font) = &cfg.default_font {
                 eprintln!("   Font: {}", font);
