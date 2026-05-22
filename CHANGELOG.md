@@ -8,13 +8,6 @@ Each release section below is what ships as the GitHub Release notes.
 
 ## [1.4.0] - 2026-05-21
 
-One addition: a font fallback chain so codepoints the primary font
-can't cover are routed to the first configured font that *can*. CJK,
-Arabic, Hebrew, math symbols, and emoji in an otherwise Latin
-document now render as real glyphs instead of `?` boxes. Purely
-additive — documents that don't configure fallbacks render byte-for-
-byte the same as on 1.3.0.
-
 **Fallback font chain.** A new `fallback_fonts` list on `[defaults]`
 in the TOML config (and `FontConfig::with_fallback_fonts(...)` for
 programmatic callers) takes an ordered list of font names. At render
@@ -29,7 +22,23 @@ located logs a warning and is skipped. Wrapping and emission stay
 consistent across font boundaries, so mixed-script paragraphs don't
 overlap or break early.
 
-Resolves [#81](https://github.com/theiskaa/markdown2pdf/issues/81).
+**Built-in measurement matches emission.** When no Unicode font is
+configured, the renderer transliterates non-ASCII punctuation to
+ASCII before emission (`•` → `*`, `—` → `--`, `…` → `...`, `(c)`,
+`(R)`, `(TM)`, smart quotes, NBSP). Line measurement, however, priced
+those source codepoints at the font's average glyph width, so the
+measured advance disagreed with what was actually drawn. The layout
+cursor drifted ahead of the PDF text matrix by the difference on
+every transliterated character, and the error compounded along the
+line — decorations and link hit-rectangles ended up beside their
+text rather than under it, most visibly on a line of several links
+separated by `•` or `—`. Measurement now routes every codepoint
+through the same transliteration the emit path uses, so the two
+agree exactly. Documents with no transliterated characters, and any
+document rendered with a Unicode font, are unaffected.
+
+Resolves [#81](https://github.com/theiskaa/markdown2pdf/issues/81)
+and [#97](https://github.com/theiskaa/markdown2pdf/issues/97).
 
 ## [1.3.0] - 2026-05-20
 
