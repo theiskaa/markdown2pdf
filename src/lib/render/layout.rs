@@ -2570,6 +2570,7 @@ impl<'a> Engine<'a> {
             runs
         };
         self.current_text_align = s.text_align;
+        self.first_line_indent_pt = s.indent_pt;
         self.write_wrapped_runs(runs_ref, s.font_size_pt, s.line_height, base_flags, color);
         self.current_text_align = TextAlignment::Left;
         self.end_block(ctx);
@@ -2592,6 +2593,7 @@ impl<'a> Engine<'a> {
             s.strikethrough = ov.strikethrough;
             s.small_caps = ov.small_caps;
             s.letter_spacing_pt = ov.letter_spacing_pt;
+            s.indent_pt = ov.indent_pt;
         }
         let color = Some(rgb_color(s.text_color_rgb()));
         let base = base_flags_from_block(&s);
@@ -2617,6 +2619,7 @@ impl<'a> Engine<'a> {
         let ctx = self.begin_block(&s);
         self.in_code_block = true;
         self.current_text_align = s.text_align;
+        self.first_line_indent_pt = s.indent_pt;
         for line in lines {
             let run = InlineRun { math: None,
                 text: line.clone(),
@@ -2798,6 +2801,8 @@ impl<'a> Engine<'a> {
         self.close_text_section();
         let align = self.current_text_align;
         let last_line_idx = lines.len().saturating_sub(1);
+        let mut prev_line_x_start = 0.0f32;
+        let mut prev_baseline_y_pt = 0.0f32;
         for (line_idx, line) in lines.iter().enumerate() {
             // One BT...ET block per paragraph, not per line — PDF
             // viewers use text-block boundaries to determine
@@ -2882,10 +2887,20 @@ impl<'a> Engine<'a> {
                     self.page_ops.push(Op::SetFillColor { col: c });
                 }
             } else if needs_absolute_td {
-                self.move_cursor_to(line_x_start, baseline_y_pt);
+                // `Td` moves relative to the previous line's origin,
+                // not absolutely — center/right lines each have a
+                // different left edge, so emit the delta from the
+                // previous line (x shift, one line down).
+                let dx = line_x_start - prev_line_x_start;
+                let dy = -(baseline_y_pt - prev_baseline_y_pt);
+                self.page_ops.push(Op::SetTextCursor {
+                    pos: Point::new(Mm(pt_to_mm(dx)), Mm(pt_to_mm(dy))),
+                });
             } else {
                 self.page_ops.push(Op::AddLineBreak);
             }
+            prev_line_x_start = line_x_start;
+            prev_baseline_y_pt = baseline_y_pt;
 
             // Justify uses the PDF Tw operator (set word spacing) so
             // every space char picks up the extra slack. Set it before
@@ -3027,20 +3042,29 @@ impl<'a> Engine<'a> {
 
                 // Buffer decorations and link rects until the line is
                 // finished — they need a closed text section to draw
-                // paths on top.
-                // A link is underlined only when `[link].underline`
-                // is set; `<u>` text always is.
+                // paths on top. Underline / strikethrough come from the
+                // run flags (`<u>`, `~~`), from `[link]` for links, and
+                // from `[code_inline]` / `[mark]` for inline code and
+                // highlighted spans.
                 let link_underline = seg.link.is_some() && self.style.link.underline;
-                if seg.flags.underline || seg.flags.strikethrough || seg.link.is_some() {
-                    let decoration_y_pt = if seg.flags.strikethrough {
+                let is_inline_code = seg.flags.monospace && !self.in_code_block;
+                let dec_underline = seg.flags.underline
+                    || link_underline
+                    || (is_inline_code && self.style.code_inline.underline)
+                    || (seg.flags.highlight && self.style.mark.underline);
+                let dec_strike = seg.flags.strikethrough
+                    || (is_inline_code && self.style.code_inline.strikethrough)
+                    || (seg.flags.highlight && self.style.mark.strikethrough);
+                if dec_underline || dec_strike || seg.link.is_some() {
+                    let decoration_y_pt = if dec_strike {
                         baseline_y_pt - size_pt * 0.30
                     } else {
                         baseline_y_pt + size_pt * 0.12
                     };
                     self.pending_decorations.push(PendingDecoration {
-                        kind: if seg.flags.strikethrough {
+                        kind: if dec_strike {
                             DecorationKind::Strike
-                        } else if seg.flags.underline || link_underline {
+                        } else if dec_underline {
                             DecorationKind::Underline
                         } else {
                             DecorationKind::None
