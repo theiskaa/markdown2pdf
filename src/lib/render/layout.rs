@@ -2113,8 +2113,6 @@ impl<'a> Engine<'a> {
     }
 
     fn render_list(&mut self, entries: &[ListEntry]) {
-        const BULLET_GAP_MM: f32 = 2.0;
-        let bullet_gap_pt = mm_to_pt(BULLET_GAP_MM);
         let saved_left = self.indent_left_pt;
 
         // CommonMark §5.3: the whole list is loose if any item is loose.
@@ -2230,7 +2228,7 @@ impl<'a> Engine<'a> {
                 }
             }
 
-            self.indent_left_pt = (saved_left + bullet_width + bullet_gap_pt)
+            self.indent_left_pt = (saved_left + bullet_width + list_style.bullet_gap_pt)
                 .min(self.indent_right_pt - 10.0);
 
             self.write_wrapped_runs(
@@ -2521,7 +2519,7 @@ impl<'a> Engine<'a> {
         runs: &[InlineRun],
         font_size: f32,
         line_height_mult: f32,
-        _base_flags: RunFlags,
+        base_flags: RunFlags,
         color: Option<Color>,
     ) {
         if runs.is_empty() {
@@ -2529,6 +2527,23 @@ impl<'a> Engine<'a> {
         }
         let size_pt = font_size;
         let line_height_pt = size_pt * line_height_mult.max(0.5);
+
+        // Fold the block-level base style (e.g. a heading's bold
+        // weight) into every run so it isn't lost when a run carries
+        // its own inline flags. A default `base_flags` is a no-op.
+        let merged_runs;
+        let runs: &[InlineRun] = if base_flags == RunFlags::default() {
+            runs
+        } else {
+            merged_runs = runs
+                .iter()
+                .map(|r| InlineRun {
+                    flags: r.flags.or(base_flags),
+                    ..r.clone()
+                })
+                .collect::<Vec<_>>();
+            &merged_runs
+        };
 
         // Split runs into a flat sequence of (word, flags) pairs.
         // Whitespace is the only break opportunity in this phase.
@@ -2792,7 +2807,7 @@ impl<'a> Engine<'a> {
                     }
                     // Restore the text fill colour if this is a link
                     // (link colour) vs body (block colour).
-                    if seg.flags.underline {
+                    if seg.link.is_some() {
                         if let Some(lc) = link_color.clone() {
                             self.page_ops.push(Op::SetFillColor { col: lc });
                         }
@@ -2811,6 +2826,9 @@ impl<'a> Engine<'a> {
                 // Buffer decorations and link rects until the line is
                 // finished — they need a closed text section to draw
                 // paths on top.
+                // A link is underlined only when `[link].underline`
+                // is set; `<u>` text always is.
+                let link_underline = seg.link.is_some() && self.style.link.underline;
                 if seg.flags.underline || seg.flags.strikethrough || seg.link.is_some() {
                     let decoration_y_pt = if seg.flags.strikethrough {
                         baseline_y_pt - size_pt * 0.30
@@ -2820,7 +2838,7 @@ impl<'a> Engine<'a> {
                     self.pending_decorations.push(PendingDecoration {
                         kind: if seg.flags.strikethrough {
                             DecorationKind::Strike
-                        } else if seg.flags.underline {
+                        } else if seg.flags.underline || link_underline {
                             DecorationKind::Underline
                         } else {
                             DecorationKind::None

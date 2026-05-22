@@ -37,8 +37,28 @@ through the same transliteration the emit path uses, so the two
 agree exactly. Documents with no transliterated characters, and any
 document rendered with a Unicode font, are unaffected.
 
-Resolves [#81](https://github.com/theiskaa/markdown2pdf/issues/81)
-and [#97](https://github.com/theiskaa/markdown2pdf/issues/97).
+**Font weight fixes.** System-font lookup could return a bold face
+(e.g. `Tahoma Bold.ttf`) as the regular weight, rendering the whole
+document heavy; an exact filename match now wins. Heading bold, which
+comes from the style block rather than run flags, is now applied, and
+the bold/italic faces it needs are embedded for external fonts.
+
+**Config-driven body font.** `[defaults].font_family` now selects the
+font that is loaded and embedded, not just `--default-font`.
+
+**Configurable list bullet gap.** New `bullet_gap_pt` on
+`[list.common]` sets the gap between a bullet and its text; defaults
+to the previous `5.67` pt.
+
+**Config file discovery.** With no `-c` flag, the CLI now finds a
+config automatically — `MARKDOWN2PDF_CONFIG`, then `./markdown2pdf.toml`,
+then `~/.config/markdown2pdf/config.toml` — before the default theme.
+
+**Link underline honours config.** `[link].underline = false` now
+suppresses the link underline; it was previously forced on regardless
+of the configured style.
+
+Resolves [#81](https://github.com/theiskaa/markdown2pdf/issues/81) and [#97](https://github.com/theiskaa/markdown2pdf/issues/97).
 
 ## [1.3.0] - 2026-05-20
 

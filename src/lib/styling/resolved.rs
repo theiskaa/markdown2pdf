@@ -97,6 +97,7 @@ pub struct ResolvedList {
     pub indent_per_level_pt: f32,
     pub item_spacing_tight_pt: f32,
     pub item_spacing_loose_pt: f32,
+    pub bullet_gap_pt: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -188,6 +188,7 @@ fn merge_list_style(base: ListStyleConfig, overlay: ListStyleConfig) -> ListStyl
         indent_per_level_pt: overlay.indent_per_level_pt.or(base.indent_per_level_pt),
         item_spacing_tight_pt: overlay.item_spacing_tight_pt.or(base.item_spacing_tight_pt),
         item_spacing_loose_pt: overlay.item_spacing_loose_pt.or(base.item_spacing_loose_pt),
+        bullet_gap_pt: overlay.bullet_gap_pt.or(base.bullet_gap_pt),
     }
 }
 
@@ -624,6 +625,10 @@ fn lower_list(
             .item_spacing_loose_pt
             .or(common.item_spacing_loose_pt)
             .unwrap_or(2.0),
+        bullet_gap_pt: raw
+            .bullet_gap_pt
+            .or(common.bullet_gap_pt)
+            .unwrap_or(5.67),
     })
 }
 

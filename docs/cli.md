@@ -57,6 +57,8 @@ A configuration file is supplied with `-c`/`--config-path` and is parsed against
 markdown2pdf -p input.md -c brand.toml -o out.pdf
 ```
 
+When `-c` is omitted the binary looks for a configuration file automatically, in this order: the path in the `MARKDOWN2PDF_CONFIG` environment variable, then `markdown2pdf.toml` in the current directory (per-project), then `markdown2pdf/config.toml` under the user config directory (`$XDG_CONFIG_HOME`, else `~/.config`, else `%APPDATA%`). The first file that exists is used; if none is found the bundled `default` theme applies. An explicit `-c` always wins over discovery. A discovered path is reported under `--verbose`.
+
 Because the layering can be hard to reason about by inspection, `--print-effective-config` resolves the theme, the configuration file, and every override into the final style and prints it as TOML, then exits. It requires no input document and is the authoritative way to answer "what styling will actually be applied":
 
 ```sh

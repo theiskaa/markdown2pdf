@@ -182,6 +182,8 @@ pub struct ListStyleConfig {
     pub item_spacing_tight_pt: Option<f32>,
     /// Spacing between items in a loose list (blank line between items).
     pub item_spacing_loose_pt: Option<f32>,
+    /// Horizontal gap between the bullet/number and the item text.
+    pub bullet_gap_pt: Option<f32>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]

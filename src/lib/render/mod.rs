@@ -127,7 +127,20 @@ pub fn render_to_bytes(
     };
 
     let blocks = lower::lower(&tokens);
-    let usage = ir::VariantUsage::analyze(&blocks);
+    let mut usage = ir::VariantUsage::analyze(&blocks);
+    // Headings and blockquotes get their weight / slant from the
+    // theme, not from per-run flags, so the IR walk above can't see
+    // them. Without this, an external font would skip loading the
+    // bold (or italic) face and these blocks would render regular.
+    for block_style in style.headings.iter().chain([&style.blockquote]) {
+        if block_style.is_bold() && block_style.is_italic() {
+            usage.body_bold_italic = true;
+        } else if block_style.is_bold() {
+            usage.body_bold = true;
+        } else if block_style.is_italic() {
+            usage.body_italic = true;
+        }
+    }
     let font_set = font::FontSet::load_with_style_fallbacks(
         font_config,
         &style.fallback_fonts,
