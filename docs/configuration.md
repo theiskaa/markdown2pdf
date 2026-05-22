@@ -108,6 +108,18 @@ indent_pt = 0.0
 fallback_fonts = ["Noto Sans CJK SC", "Noto Sans Arabic", "Symbola"]
 ```
 
+### Body font
+
+`font_family` in `[defaults]` selects the font that is loaded and
+embedded — a built-in alias (`Helvetica`, `Times`, `Courier`), a system
+font name, or a path to a `.ttf` / `.otf` file. A built-in alias uses a
+PDF base-14 font (no embedding; non-ASCII glyphs transliterate to
+ASCII). Any other name is resolved against the system font directories
+and embedded, which is required for Unicode glyphs such as `•`.
+
+The `--default-font` CLI flag overrides this; when it is omitted the
+config's `font_family` is used.
+
 ### Fallback fonts
 
 `fallback_fonts` is an ordered list of font names consulted when the
@@ -235,6 +247,7 @@ margin_after_pt = 0.5
 indent_per_level_pt = 17.0
 item_spacing_tight_pt = 0.5  # CommonMark "tight" list (no blank lines)
 item_spacing_loose_pt = 2.0  # CommonMark "loose" list (any blank line)
+bullet_gap_pt = 5.67         # horizontal gap between the bullet/number and the item text
 
 [list.unordered]
 bullet = "•"   # any glyph
