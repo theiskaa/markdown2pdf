@@ -906,14 +906,13 @@ fn flatten_one(
             ));
         }
         Token::Link { content, url, .. } => {
-            // The link styling (underline + color) is applied at the
-            // layout pass — here we just propagate the URL and mark
-            // the run with underline so the visual decoration is
-            // ready before the annotation is drawn.
+            // Link styling (underline + colour) is applied at the
+            // layout pass from the `[link]` config — the run only
+            // carries the URL. The underline flag is *not* forced
+            // here, so `[link].underline = false` is honoured.
             let url_str = url.as_str();
-            let nested = flags.with_underline();
             for t in content {
-                flatten_one(t, nested, Some(url_str), out, footnotes);
+                flatten_one(t, flags, Some(url_str), out, footnotes);
             }
         }
         Token::FootnoteReference(label) => {

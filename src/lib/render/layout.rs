@@ -2807,7 +2807,7 @@ impl<'a> Engine<'a> {
                     }
                     // Restore the text fill colour if this is a link
                     // (link colour) vs body (block colour).
-                    if seg.flags.underline {
+                    if seg.link.is_some() {
                         if let Some(lc) = link_color.clone() {
                             self.page_ops.push(Op::SetFillColor { col: lc });
                         }
@@ -2826,6 +2826,9 @@ impl<'a> Engine<'a> {
                 // Buffer decorations and link rects until the line is
                 // finished — they need a closed text section to draw
                 // paths on top.
+                // A link is underlined only when `[link].underline`
+                // is set; `<u>` text always is.
+                let link_underline = seg.link.is_some() && self.style.link.underline;
                 if seg.flags.underline || seg.flags.strikethrough || seg.link.is_some() {
                     let decoration_y_pt = if seg.flags.strikethrough {
                         baseline_y_pt - size_pt * 0.30
@@ -2835,7 +2838,7 @@ impl<'a> Engine<'a> {
                     self.pending_decorations.push(PendingDecoration {
                         kind: if seg.flags.strikethrough {
                             DecorationKind::Strike
-                        } else if seg.flags.underline {
+                        } else if seg.flags.underline || link_underline {
                             DecorationKind::Underline
                         } else {
                             DecorationKind::None

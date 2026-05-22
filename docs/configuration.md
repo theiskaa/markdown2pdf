@@ -50,6 +50,13 @@ markdown2pdf -p input.md -c my-config.toml -o out.pdf
 Every field is optional. `theme = "github"` (or any other preset)
 inherits a known-good baseline; you override only what you care about.
 
+To make a config the default without passing `-c` every time, place
+it where the binary discovers it automatically: `markdown2pdf.toml`
+in the project directory, or `markdown2pdf/config.toml` under your
+user config directory (`~/.config/markdown2pdf/config.toml` on
+macOS/Linux). The `MARKDOWN2PDF_CONFIG` environment variable also
+points at one. See [cli.md](cli.md) for the full lookup order.
+
 Any field below can also be overridden per-run from the command
 line (winning over the config file and `--theme`) — see
 [cli.md](cli.md#config-overrides) for `--title` / `--font-size` /

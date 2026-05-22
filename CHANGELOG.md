@@ -50,6 +50,14 @@ font that is loaded and embedded, not just `--default-font`.
 `[list.common]` sets the gap between a bullet and its text; defaults
 to the previous `5.67` pt.
 
+**Config file discovery.** With no `-c` flag, the CLI now finds a
+config automatically — `MARKDOWN2PDF_CONFIG`, then `./markdown2pdf.toml`,
+then `~/.config/markdown2pdf/config.toml` — before the default theme.
+
+**Link underline honours config.** `[link].underline = false` now
+suppresses the link underline; it was previously forced on regardless
+of the configured style.
+
 Resolves [#81](https://github.com/theiskaa/markdown2pdf/issues/81) and [#97](https://github.com/theiskaa/markdown2pdf/issues/97).
 
 ## [1.3.0] - 2026-05-20
