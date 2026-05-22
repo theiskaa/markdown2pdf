@@ -199,18 +199,34 @@ pub fn system_font_dirs() -> Vec<&'static str> {
     }
 }
 
-/// Search system font directories for a TTF/OTF file matching `name`.
-/// Skips `.ttc` (TrueType Collection) files — most font parsers don't
-/// handle them.
+/// Search the platform's system font directories for a TTF/OTF file
+/// matching `name`. Skips `.ttc` (TrueType Collection) files — most
+/// font parsers don't handle them.
 pub fn find_system_font(name: &str) -> Option<PathBuf> {
+    find_system_font_in(name, &system_font_dirs())
+}
+
+/// `find_system_font` with the search directories injected, so the
+/// matching logic can be exercised against a controlled directory.
+fn find_system_font_in(name: &str, dirs: &[&str]) -> Option<PathBuf> {
     let name_lower = name.to_lowercase();
-    let patterns = [
+    let patterns: Vec<String> = [
         format!("{}.ttf", name),
         format!("{}.otf", name),
         format!("{}.ttf", name.replace(" MS", "")),
-    ];
+    ]
+    .iter()
+    .map(|p| p.to_lowercase())
+    .collect();
 
-    for dir in system_font_dirs() {
+    // An exact filename match always wins, but directory enumeration
+    // order is unspecified — a prefix like `Tahoma Bold.ttf` can be
+    // visited before the exact `Tahoma.ttf`. So scan every entry for
+    // an exact match first; only if none exists fall back to the
+    // shortest-named prefix match (regular faces have shorter names
+    // than their `X Bold` / `X Italic` siblings).
+    let mut prefix_match: Option<PathBuf> = None;
+    for dir in dirs {
         let dir_path = Path::new(dir);
         if !dir_path.exists() {
             continue;
@@ -226,19 +242,26 @@ pub fn find_system_font(name: &str) -> Option<PathBuf> {
                 continue;
             }
 
-            if patterns.iter().any(|p| file_lower == p.to_lowercase()) {
+            if patterns.iter().any(|p| file_lower == *p) {
                 return Some(entry.path());
             }
 
             if file_lower.starts_with(&name_lower)
                 && (file_lower.ends_with(".ttf") || file_lower.ends_with(".otf"))
             {
-                return Some(entry.path());
+                let shorter = prefix_match
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .map(|n| file_lower.len() < n.to_string_lossy().len())
+                    .unwrap_or(true);
+                if shorter {
+                    prefix_match = Some(entry.path());
+                }
             }
         }
     }
 
-    None
+    prefix_match
 }
 
 #[cfg(test)]
@@ -291,5 +314,52 @@ mod tests {
         // Don't assert anything platform-specific — just verify the
         // function returns successfully.
         let _ = system_font_dirs();
+    }
+
+    /// Builds a throwaway directory containing the named empty files
+    /// and runs `f` with its path. Cleans up afterwards.
+    fn with_font_dir(files: &[&str], f: impl FnOnce(&str)) {
+        let dir = std::env::temp_dir().join(format!(
+            "m2pdf_fonttest_{}_{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in files {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        f(dir.to_str().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_system_font_prefers_exact_over_prefix() {
+        // `Tahoma Bold.ttf` sorts before `Tahoma.ttf` and may be
+        // enumerated first — the exact match must still win, else the
+        // bold face gets used as the regular weight.
+        with_font_dir(&["Tahoma Bold.ttf", "Tahoma.ttf"], |dir| {
+            let found = find_system_font_in("Tahoma", &[dir]).unwrap();
+            assert_eq!(found.file_name().unwrap(), "Tahoma.ttf");
+        });
+    }
+
+    #[test]
+    fn find_system_font_prefix_fallback_picks_shortest() {
+        // No exact `Tahoma.ttf` — fall back to the shortest-named
+        // prefix match rather than whatever the OS lists first.
+        with_font_dir(&["Tahoma Italic.ttf", "Tahoma Bold.ttf"], |dir| {
+            let found = find_system_font_in("Tahoma", &[dir]).unwrap();
+            assert_eq!(found.file_name().unwrap(), "Tahoma Bold.ttf");
+        });
+    }
+
+    #[test]
+    fn find_system_font_skips_ttc() {
+        with_font_dir(&["Helvetica Neue.ttc"], |dir| {
+            assert!(find_system_font_in("Helvetica Neue", &[dir]).is_none());
+        });
     }
 }
