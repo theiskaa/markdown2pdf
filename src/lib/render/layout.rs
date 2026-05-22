@@ -140,6 +140,10 @@ struct Engine<'a> {
     /// Highlight rects collected while the current text section is
     /// open; drained into `page_ops` when it closes.
     pending_highlights: Vec<HighlightBox>,
+    /// True while rendering a fenced code block, so monospace runs
+    /// keep the `[code_block]` colour instead of being repainted with
+    /// the `[code_inline]` colour (both carry the `monospace` flag).
+    in_code_block: bool,
     /// Stack of block backgrounds currently open (LIFO — matches the
     /// nesting of `begin_block` / `end_block`). When a page break
     /// happens mid-block, [`start_new_page`] paints the fragment that
@@ -205,6 +209,7 @@ impl<'a> Engine<'a> {
             in_text_section: false,
             text_section_marker: 0,
             pending_highlights: Vec::new(),
+            in_code_block: false,
             open_bg: Vec::new(),
             math: None,
             math_inline_cache: HashMap::new(),
@@ -2463,6 +2468,7 @@ impl<'a> Engine<'a> {
         let color = Some(rgb_color(s.text_color_rgb()));
         let base = base_flags_from_block(&s).with_monospace();
         let ctx = self.begin_block(&s);
+        self.in_code_block = true;
         for line in lines {
             let run = InlineRun { math: None,
                 text: line.clone(),
@@ -2477,6 +2483,7 @@ impl<'a> Engine<'a> {
                 color.clone(),
             );
         }
+        self.in_code_block = false;
         self.end_block(ctx);
     }
 
@@ -2625,6 +2632,7 @@ impl<'a> Engine<'a> {
 
         let link_color = Some(rgb_color(self.style.link.text_color_rgb()));
         let mark_color = rgb_color(self.style.mark.text_color_rgb());
+        let code_inline_color = rgb_color(self.style.code_inline.text_color_rgb());
 
         // Close any open section so the first line of this block
         // starts with a fresh BT (and absolute Td). Subsequent lines
@@ -2815,8 +2823,8 @@ impl<'a> Engine<'a> {
                         cursor_needs_reset = false;
                     }
                     // Restore the text fill colour: link colour for a
-                    // link, `[mark]` colour for a highlight, otherwise
-                    // the block colour.
+                    // link, `[mark]` colour for a highlight, `[code_inline]`
+                    // colour for inline code, otherwise the block colour.
                     if seg.link.is_some() {
                         if let Some(lc) = link_color.clone() {
                             self.page_ops.push(Op::SetFillColor { col: lc });
@@ -2824,6 +2832,10 @@ impl<'a> Engine<'a> {
                     } else if seg.flags.highlight {
                         self.page_ops.push(Op::SetFillColor {
                             col: mark_color.clone(),
+                        });
+                    } else if seg.flags.monospace && !self.in_code_block {
+                        self.page_ops.push(Op::SetFillColor {
+                            col: code_inline_color.clone(),
                         });
                     } else if let Some(c) = color.clone() {
                         self.page_ops.push(Op::SetFillColor { col: c });
