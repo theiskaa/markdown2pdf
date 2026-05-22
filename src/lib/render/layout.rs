@@ -144,6 +144,13 @@ struct Engine<'a> {
     /// keep the `[code_block]` colour instead of being repainted with
     /// the `[code_inline]` colour (both carry the `monospace` flag).
     in_code_block: bool,
+    /// When set, paragraphs take their *text* style (font, colour,
+    /// weight, slant, size, alignment, decorations) from this block
+    /// instead of `[paragraph]` — so a blockquote's or admonition's
+    /// body text inherits the container's typography. Structural
+    /// fields (margins, padding, border, background) stay paragraph's,
+    /// since the container already draws its own box.
+    text_style_override: Option<ResolvedBlock>,
     /// Stack of block backgrounds currently open (LIFO — matches the
     /// nesting of `begin_block` / `end_block`). When a page break
     /// happens mid-block, [`start_new_page`] paints the fragment that
@@ -210,6 +217,7 @@ impl<'a> Engine<'a> {
             text_section_marker: 0,
             pending_highlights: Vec::new(),
             in_code_block: false,
+            text_style_override: None,
             open_bg: Vec::new(),
             math: None,
             math_inline_cache: HashMap::new(),
@@ -2286,9 +2294,12 @@ impl<'a> Engine<'a> {
         // it implicitly anymore.
         let s = self.style.blockquote.clone();
         let ctx = self.begin_block(&s);
+        let saved_override = self.text_style_override.take();
+        self.text_style_override = Some(s.clone());
         for child in body {
             self.render_block(child);
         }
+        self.text_style_override = saved_override;
         self.end_block(ctx);
     }
 
@@ -2397,9 +2408,12 @@ impl<'a> Engine<'a> {
         // Small gap between header and body.
         self.advance_y(block_style.font_size_pt * 0.35);
 
+        let saved_override = self.text_style_override.take();
+        self.text_style_override = Some(block_style.clone());
         for child in body {
             self.render_block(child);
         }
+        self.text_style_override = saved_override;
         self.end_block(ctx);
     }
 
@@ -2446,7 +2460,23 @@ impl<'a> Engine<'a> {
     }
 
     fn render_paragraph(&mut self, runs: &[InlineRun]) {
-        let s = self.style.paragraph.clone();
+        let mut s = self.style.paragraph.clone();
+        // Inside a blockquote / admonition, body paragraphs inherit
+        // the container's text typography; structural fields (margins,
+        // padding, border, background) stay paragraph's.
+        if let Some(ov) = &self.text_style_override {
+            s.font_family = ov.font_family.clone();
+            s.font_size_pt = ov.font_size_pt;
+            s.font_weight = ov.font_weight;
+            s.font_style = ov.font_style;
+            s.text_color = ov.text_color;
+            s.line_height = ov.line_height;
+            s.text_align = ov.text_align;
+            s.underline = ov.underline;
+            s.strikethrough = ov.strikethrough;
+            s.small_caps = ov.small_caps;
+            s.letter_spacing_pt = ov.letter_spacing_pt;
+        }
         let color = Some(rgb_color(s.text_color_rgb()));
         let base = base_flags_from_block(&s);
         let ctx = self.begin_block(&s);
