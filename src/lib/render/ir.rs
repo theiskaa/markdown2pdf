@@ -359,4 +359,22 @@ impl RunFlags {
         self.small = true;
         self
     }
+
+    /// OR every flag with `other`. Folds a block-level base style
+    /// (e.g. a heading's bold weight) into per-run inline flags so
+    /// the block style isn't lost when a run carries its own flags.
+    pub fn or(self, other: Self) -> Self {
+        Self {
+            bold: self.bold || other.bold,
+            italic: self.italic || other.italic,
+            monospace: self.monospace || other.monospace,
+            strikethrough: self.strikethrough || other.strikethrough,
+            underline: self.underline || other.underline,
+            highlight: self.highlight || other.highlight,
+            superscript: self.superscript || other.superscript,
+            subscript: self.subscript || other.subscript,
+            small_caps: self.small_caps || other.small_caps,
+            small: self.small || other.small,
+        }
+    }
 }
