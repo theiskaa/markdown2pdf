@@ -1887,6 +1887,26 @@ impl<'a> Engine<'a> {
                 self.advance_y(row_gap_pt);
             }
             let group_top = self.y_from_top_pt;
+            // Zebra striping: tint alternate data rows (every other
+            // row, first data row left untinted) when configured.
+            if let Some(bg) = self.style.table.alternating_row_background {
+                if row_idx % 2 == 1 {
+                    let table_left = self.indent_left_pt;
+                    let table_right = table_left + col_width * col_count as f32;
+                    let page_h = self.page_height_pt();
+                    let fill = rgb_color((bg.r, bg.g, bg.b));
+                    self.close_text_section();
+                    draw_filled_rect(
+                        &mut self.page_ops,
+                        table_left,
+                        group_top,
+                        table_right,
+                        group_top + group_height,
+                        fill,
+                        page_h,
+                    );
+                }
+            }
             let group_heights = &row_heights[row_idx..group_end];
             for local_idx in 0..(group_end - row_idx) {
                 self.y_from_top_pt = group_top + group_heights[..local_idx].iter().sum::<f32>();
@@ -2604,6 +2624,7 @@ impl<'a> Engine<'a> {
         }
 
         let link_color = Some(rgb_color(self.style.link.text_color_rgb()));
+        let mark_color = rgb_color(self.style.mark.text_color_rgb());
 
         // Close any open section so the first line of this block
         // starts with a fresh BT (and absolute Td). Subsequent lines
@@ -2793,12 +2814,17 @@ impl<'a> Engine<'a> {
                         }
                         cursor_needs_reset = false;
                     }
-                    // Restore the text fill colour if this is a link
-                    // (link colour) vs body (block colour).
+                    // Restore the text fill colour: link colour for a
+                    // link, `[mark]` colour for a highlight, otherwise
+                    // the block colour.
                     if seg.link.is_some() {
                         if let Some(lc) = link_color.clone() {
                             self.page_ops.push(Op::SetFillColor { col: lc });
                         }
+                    } else if seg.flags.highlight {
+                        self.page_ops.push(Op::SetFillColor {
+                            col: mark_color.clone(),
+                        });
                     } else if let Some(c) = color.clone() {
                         self.page_ops.push(Op::SetFillColor { col: c });
                     }
