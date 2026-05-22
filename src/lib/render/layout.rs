@@ -2469,6 +2469,7 @@ impl<'a> Engine<'a> {
         let base = base_flags_from_block(&s).with_monospace();
         let ctx = self.begin_block(&s);
         self.in_code_block = true;
+        self.current_text_align = s.text_align;
         for line in lines {
             let run = InlineRun { math: None,
                 text: line.clone(),
@@ -2483,6 +2484,7 @@ impl<'a> Engine<'a> {
                 color.clone(),
             );
         }
+        self.current_text_align = TextAlignment::Left;
         self.in_code_block = false;
         self.end_block(ctx);
     }
