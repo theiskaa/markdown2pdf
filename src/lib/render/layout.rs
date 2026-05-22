@@ -2262,8 +2262,9 @@ impl<'a> Engine<'a> {
                 }
             }
 
-            self.indent_left_pt = (saved_left + bullet_width + list_style.bullet_gap_pt)
+            let text_indent = (saved_left + bullet_width + list_style.bullet_gap_pt)
                 .min(self.indent_right_pt - 10.0);
+            self.indent_left_pt = text_indent;
 
             self.write_wrapped_runs(
                 &entry.runs,
@@ -2273,7 +2274,17 @@ impl<'a> Engine<'a> {
                 Some(rgb_color(s.text_color_rgb())),
             );
 
+            // A nested list steps in by `indent_per_level_pt` from this
+            // list's bullet column; an item's other children (e.g.
+            // continuation paragraphs) stay aligned with the item text.
+            let nested_indent = (saved_left + list_style.indent_per_level_pt)
+                .min(self.indent_right_pt - 10.0);
             for child in &entry.children {
+                self.indent_left_pt = if matches!(child, Block::List { .. }) {
+                    nested_indent
+                } else {
+                    text_indent
+                };
                 self.render_block(child);
             }
 
