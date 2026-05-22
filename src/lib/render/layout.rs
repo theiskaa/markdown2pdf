@@ -155,6 +155,11 @@ struct Engine<'a> {
     /// call. Set by `render_paragraph` from `[paragraph].indent_pt`;
     /// the call consumes it (resets to 0) so it applies once.
     first_line_indent_pt: f32,
+    /// Extra spacing (points) added after every glyph of the block
+    /// currently being rendered. Set by `begin_block` from the block's
+    /// `letter_spacing_pt` and restored by `end_block`; read by both
+    /// `measure_text` and `emit_text_chunks` so the two never drift.
+    letter_spacing_pt: f32,
     /// Stack of block backgrounds currently open (LIFO — matches the
     /// nesting of `begin_block` / `end_block`). When a page break
     /// happens mid-block, [`start_new_page`] paints the fragment that
@@ -223,6 +228,7 @@ impl<'a> Engine<'a> {
             in_code_block: false,
             text_style_override: None,
             first_line_indent_pt: 0.0,
+            letter_spacing_pt: 0.0,
             open_bg: Vec::new(),
             math: None,
             math_inline_cache: HashMap::new(),
@@ -442,8 +448,50 @@ impl<'a> Engine<'a> {
         let top = mm_to_pt(self.style.page.margins_mm.top.max(1.0));
         let bottom = self.page_height_pt() - mm_to_pt(self.style.page.margins_mm.bottom.max(1.0));
         let usable_h = bottom - top;
+
+        // Optional cover image, centered above the title block. Scaled
+        // to fit the content width with height capped at ~45% of the
+        // usable page height so the title stack still fits.
+        let content_w = self.indent_right_pt - self.indent_left_pt;
+        let cover = tp
+            .cover_image_path
+            .as_deref()
+            .and_then(|p| self.decode_image_file(std::path::Path::new(p)))
+            .map(|raw| {
+                let nat_w = raw.width as f32 / 300.0 * 72.0;
+                let nat_h = raw.height as f32 / 300.0 * 72.0;
+                let scale = (content_w / nat_w)
+                    .min((usable_h * 0.45) / nat_h)
+                    .min(1.0);
+                (raw, nat_w * scale, nat_h * scale, scale)
+            });
+        if let Some((_, _, cover_h, _)) = &cover {
+            stack_h += cover_h + line_gap;
+        }
+
         let start_y = top + ((usable_h - stack_h) * 0.5).max(0.0);
         self.y_from_top_pt = start_y;
+
+        // Draw the cover image, then drop the cursor below it so the
+        // title stack renders underneath.
+        if let Some((raw, cover_w, cover_h, scale)) = cover {
+            let xobject_id: XObjectId = self.doc.add_image(&raw);
+            let x_pt = self.indent_left_pt + ((content_w - cover_w) * 0.5).max(0.0);
+            let y_bot_pt = self.page_height_pt() - self.y_from_top_pt - cover_h;
+            self.close_text_section();
+            self.page_ops.push(Op::UseXobject {
+                id: xobject_id,
+                transform: XObjectTransform {
+                    translate_x: Some(Pt(x_pt)),
+                    translate_y: Some(Pt(y_bot_pt)),
+                    rotate: None,
+                    scale_x: Some(scale),
+                    scale_y: Some(scale),
+                    dpi: Some(300.0),
+                },
+            });
+            self.y_from_top_pt += cover_h + line_gap;
+        }
 
         // Title (bold)
         self.render_title_page_text(
@@ -502,7 +550,7 @@ impl<'a> Engine<'a> {
             small: false,
             underline: false,
         };
-        let measured = self.font_set.measure(flags, text, size_pt);
+        let measured = self.measure_text(flags, text, size_pt);
         let center_x = (self.page_width_pt() - measured) / 2.0;
         let baseline_y = self.y_from_top_pt + size_pt;
 
@@ -512,7 +560,14 @@ impl<'a> Engine<'a> {
         self.page_ops.push(Op::SetFillColor {
             col: rgb_color(style.text_color_rgb()),
         });
-        emit_text_chunks(&mut self.page_ops, self.font_set, flags, text, size_pt);
+        emit_text_chunks(
+            &mut self.page_ops,
+            self.font_set,
+            flags,
+            text,
+            size_pt,
+            self.letter_spacing_pt,
+        );
         self.close_text_section();
 
         self.advance_y(size_pt);
@@ -636,11 +691,12 @@ impl<'a> Engine<'a> {
             flags,
             &anchor.text,
             size_pt,
+            self.letter_spacing_pt,
         );
 
         // Page-number portion (right-aligned at row_right).
         let page_str = page_num.to_string();
-        let num_w = self.font_set.measure(flags, &page_str, size_pt);
+        let num_w = self.measure_text(flags, &page_str, size_pt);
         let num_x = row_right - num_w;
         self.close_text_section();
         self.ensure_text_section();
@@ -651,6 +707,7 @@ impl<'a> Engine<'a> {
             flags,
             &page_str,
             size_pt,
+            self.letter_spacing_pt,
         );
         self.close_text_section();
 
@@ -776,13 +833,13 @@ impl<'a> Engine<'a> {
                 out.push(word);
                 continue;
             }
-            let total = self.font_set.measure(word.flags, &word.text, size_pt);
+            let total = self.measure_text(word.flags, &word.text, size_pt);
             if total <= max_width {
                 out.push(word);
                 continue;
             }
             let breaks = super::hyphenate::break_points(&word.text);
-            let hyphen_width = self.font_set.measure(word.flags, "-", size_pt);
+            let hyphen_width = self.measure_text(word.flags, "-", size_pt);
             let chars: Vec<(usize, char)> = word.text.char_indices().collect();
             let mut chunk_start_byte = 0usize;
             let mut chunk_start_char = 0usize;
@@ -796,7 +853,7 @@ impl<'a> Engine<'a> {
                         continue;
                     }
                     let prefix = &word.text[chunk_start_byte..b];
-                    let w = self.font_set.measure(word.flags, prefix, size_pt) + hyphen_width;
+                    let w = self.measure_text(word.flags, prefix, size_pt) + hyphen_width;
                     if w <= max_width {
                         hyphen_break = Some(b);
                     } else {
@@ -828,7 +885,7 @@ impl<'a> Engine<'a> {
                         .map(|c| c.0)
                         .unwrap_or(word.text.len());
                     let prefix = &word.text[chunk_start_byte..end_byte];
-                    let w = self.font_set.measure(word.flags, prefix, size_pt);
+                    let w = self.measure_text(word.flags, prefix, size_pt);
                     if w > max_width {
                         if last_fit == chunk_start_char {
                             last_fit = j;
@@ -1004,6 +1061,9 @@ impl<'a> Engine<'a> {
             });
         }
 
+        let saved_letter_spacing = self.letter_spacing_pt;
+        self.letter_spacing_pt = style.letter_spacing_pt;
+
         BlockPaintCtx {
             saved_left: outer_x_left,
             saved_right: outer_x_right,
@@ -1014,6 +1074,7 @@ impl<'a> Engine<'a> {
             border: style.border.clone(),
             padding_bottom: style.padding.bottom,
             margin_after_pt: style.margin_after_pt,
+            saved_letter_spacing,
         }
     }
 
@@ -1067,6 +1128,7 @@ impl<'a> Engine<'a> {
 
         self.indent_left_pt = ctx.saved_left;
         self.indent_right_pt = ctx.saved_right;
+        self.letter_spacing_pt = ctx.saved_letter_spacing;
         self.advance_y(ctx.margin_after_pt);
     }
 
@@ -1136,7 +1198,7 @@ impl<'a> Engine<'a> {
             underline: false,
         };
         let size_pt = style.font_size_pt;
-        let measured = self.font_set.measure(flags, text, size_pt);
+        let measured = self.measure_text(flags, text, size_pt);
         let x_pt = match anchor {
             FurnitureAnchor::Left => mm_to_pt(self.style.page.margins_mm.left.max(1.0)),
             FurnitureAnchor::Center => (self.page_width_pt() - measured) / 2.0,
@@ -1158,7 +1220,14 @@ impl<'a> Engine<'a> {
         ops.push(Op::SetFillColor {
             col: rgb_color(style.text_color_rgb()),
         });
-        emit_text_chunks(ops, self.font_set, flags, text, size_pt);
+        emit_text_chunks(
+            ops,
+            self.font_set,
+            flags,
+            text,
+            size_pt,
+            self.letter_spacing_pt,
+        );
         ops.push(Op::EndTextSection);
         ops.push(Op::RestoreGraphicsState);
     }
@@ -1646,14 +1715,11 @@ impl<'a> Engine<'a> {
         }]);
     }
 
-    fn render_image(&mut self, path: &std::path::Path, alt: &str, caption: Option<&str>) {
-        // Decode via the `image` crate. If anything fails, gracefully
-        // degrade to an italic alt-text paragraph so the document
-        // doesn't lose content. URL paths take a separate fetch
-        // pre-pass that downloads the bytes (gated under the `fetch`
-        // feature); without the feature, URL images fall back to alt
-        // text. SVG content is rasterized via resvg (gated under
-        // `svg`).
+    /// Decode an image from a local path or URL into a `RawImage`,
+    /// applying the 4000px dimension cap. Returns `None` on any
+    /// fetch / decode / conversion failure (logged). URL fetch is
+    /// gated under the `fetch` feature; SVG rasterization under `svg`.
+    fn decode_image_file(&mut self, path: &std::path::Path) -> Option<RawImage> {
         let path_str = path.to_string_lossy();
         let is_url = path_str.starts_with("http://") || path_str.starts_with("https://");
         let bytes_result: Result<Vec<u8>, String> = if is_url {
@@ -1676,8 +1742,7 @@ impl<'a> Engine<'a> {
             Ok(d) => d,
             Err(e) => {
                 log::warn!("could not decode image {:?}: {}", path, e);
-                self.render_image_fallback(alt);
-                return;
+                return None;
             }
         };
 
@@ -1685,8 +1750,7 @@ impl<'a> Engine<'a> {
         // XObject. Treat it like a decode failure.
         if img.width() == 0 || img.height() == 0 {
             log::warn!("image {:?} has zero dimension; skipping", path);
-            self.render_image_fallback(alt);
-            return;
+            return None;
         }
 
         // Bound decoded pixel dimensions. The URL fetch cap limits the
@@ -1712,10 +1776,21 @@ impl<'a> Engine<'a> {
             img
         };
 
-        let raw = match RawImage::from_dynamic_image(img) {
-            Ok(r) => r,
+        match RawImage::from_dynamic_image(img) {
+            Ok(r) => Some(r),
             Err(e) => {
                 log::warn!("could not convert image {:?}: {}", path, e);
+                None
+            }
+        }
+    }
+
+    fn render_image(&mut self, path: &std::path::Path, alt: &str, caption: Option<&str>) {
+        // Decode the image; on any failure degrade to an italic
+        // alt-text paragraph so the document doesn't lose content.
+        let raw = match self.decode_image_file(path) {
+            Some(r) => r,
+            None => {
                 self.render_image_fallback(alt);
                 return;
             }
@@ -1775,32 +1850,35 @@ impl<'a> Engine<'a> {
         self.y_from_top_pt += rendered_h_pt;
 
         if let Some(text) = caption.filter(|s| !s.trim().is_empty()) {
-            // Small gap, then a caption line styled as italic body text
-            // centered horizontally inside the image's content column.
-            self.advance_y(4.0);
-            let base = self.style.paragraph.clone();
-            let caption_size = base.font_size_pt * 0.88;
+            // Caption line styled by `[image.caption]`, wrapped within
+            // the image's width when the image is narrower than the
+            // column.
+            let cap = self.style.image.caption.clone();
+            self.advance_y(cap.margin_before_pt);
+            let base_flags = base_flags_from_block(&cap);
             let saved_left = self.indent_left_pt;
             let saved_right = self.indent_right_pt;
-            // Constrain the caption's wrap width to the image width
-            // when the image is narrower than the column.
             if rendered_w_pt < self.content_width_pt() {
                 self.indent_left_pt = x_pt;
                 self.indent_right_pt = x_pt + rendered_w_pt;
             }
-            let runs = vec![InlineRun { math: None,
+            let runs = vec![InlineRun {
+                math: None,
                 text: text.to_string(),
-                flags: RunFlags::default().with_italic(),
+                flags: RunFlags::default(),
                 link: None,
             }];
-            let color = Some(rgb_color(base.text_color_rgb()));
+            let color = Some(rgb_color(cap.text_color_rgb()));
+            let saved_align = self.current_text_align;
+            self.current_text_align = cap.text_align;
             self.write_wrapped_runs(
                 &runs,
-                caption_size,
-                base.line_height,
-                RunFlags::default().with_italic(),
+                cap.font_size_pt,
+                cap.line_height,
+                base_flags,
                 color,
             );
+            self.current_text_align = saved_align;
             self.indent_left_pt = saved_left;
             self.indent_right_pt = saved_right;
         }
@@ -1825,6 +1903,11 @@ impl<'a> Engine<'a> {
         let before_pt = self.style.table.margin_before_pt;
         let after_pt = self.style.table.margin_after_pt;
         let row_gap_pt = self.style.table.row_gap_pt;
+        // Tables don't go through begin_block; scope letter spacing
+        // here — header cells use `[table.header]`, data cells
+        // `[table.cell]`.
+        let saved_letter_spacing = self.letter_spacing_pt;
+        self.letter_spacing_pt = s_header.letter_spacing_pt;
 
         self.advance_y(before_pt);
 
@@ -1867,6 +1950,7 @@ impl<'a> Engine<'a> {
         self.advance_y(row_gap_pt);
 
         // Data rows.
+        self.letter_spacing_pt = s_cell.letter_spacing_pt;
         let mut table_rows: Vec<Vec<TableCell<InlineRun>>> = rows.to_vec();
         for row in &mut table_rows {
             row.resize_with(col_count, || TableCell::new(Vec::new()));
@@ -1942,6 +2026,7 @@ impl<'a> Engine<'a> {
             row_idx = group_end;
         }
 
+        self.letter_spacing_pt = saved_letter_spacing;
         self.advance_y(after_pt);
     }
 
@@ -1967,6 +2052,7 @@ impl<'a> Engine<'a> {
                 col_width * cell.colspan.max(1) as f32 - (pad.left + pad.right),
                 self.font_set,
                 bold,
+                self.letter_spacing_pt,
             );
             max_lines = max_lines.max(n_lines);
         }
@@ -2012,6 +2098,16 @@ impl<'a> Engine<'a> {
     /// Sum the rendered widths of a cell's inline runs (no wrapping).
     /// Used for table column alignment — we shift the per-cell text
     /// cursor by `(col_width - measured) / 2` for center, etc.
+    /// Rendered width of `text`, including the active block's letter
+    /// spacing. `letter_spacing_pt` is added after every glyph, so an
+    /// N-char run measures `font_set.measure() + N * letter_spacing_pt`
+    /// — exactly matching the PDF text-cursor advance, so measurement
+    /// and emission never drift.
+    fn measure_text(&self, flags: RunFlags, text: &str, size_pt: f32) -> f32 {
+        self.font_set.measure(flags, text, size_pt)
+            + self.letter_spacing_pt * text.chars().count() as f32
+    }
+
     fn measure_runs_width(&self, runs: &[InlineRun], font_size: f32, bold: bool) -> f32 {
         let mut total = 0.0f32;
         for run in runs {
@@ -2019,7 +2115,7 @@ impl<'a> Engine<'a> {
             if bold {
                 flags = flags.with_bold();
             }
-            total += self.font_set.measure(flags, &run.text, font_size);
+            total += self.measure_text(flags, &run.text, font_size);
         }
         total
     }
@@ -2087,6 +2183,7 @@ impl<'a> Engine<'a> {
                     inner_width,
                     self.font_set,
                     false,
+                    self.letter_spacing_pt,
                 );
                 let content_height =
                     content_lines as f32 * font_size * line_height_mult.max(0.5);
@@ -2148,6 +2245,9 @@ impl<'a> Engine<'a> {
 
     fn render_list(&mut self, entries: &[ListEntry]) {
         let saved_left = self.indent_left_pt;
+        // Lists don't go through begin_block; scope letter spacing here
+        // so list text honors `[list.*].letter_spacing_pt`.
+        let saved_letter_spacing = self.letter_spacing_pt;
 
         // CommonMark §5.3: the whole list is loose if any item is loose.
         // Pre-compute once so every iteration uses the same gap.
@@ -2162,6 +2262,7 @@ impl<'a> Engine<'a> {
                 }
             };
             let s = &list_style.block;
+            self.letter_spacing_pt = s.letter_spacing_pt;
             let size_pt = s.font_size_pt;
             let line_height = s.line_height;
             let inter_item_gap = if any_loose {
@@ -2172,7 +2273,7 @@ impl<'a> Engine<'a> {
 
             let bullet_text = format_bullet(&entry.bullet, &list_style);
             let bullet_flags = RunFlags::default();
-            let bullet_width = self.font_set.measure(bullet_flags, &bullet_text, size_pt);
+            let bullet_width = self.measure_text(bullet_flags, &bullet_text, size_pt);
 
             // First item: honor `block.margin_before_pt` (list-level
             // "space before the whole list"). Subsequent items use the
@@ -2258,6 +2359,7 @@ impl<'a> Engine<'a> {
                         bullet_flags,
                         &bullet_text,
                         size_pt,
+                        self.letter_spacing_pt,
                     );
                 }
             }
@@ -2297,6 +2399,7 @@ impl<'a> Engine<'a> {
                 self.advance_y(s.margin_after_pt.max(0.0));
             }
         }
+        self.letter_spacing_pt = saved_letter_spacing;
     }
 
     fn render_blockquote(&mut self, body: &[Block]) {
@@ -2631,7 +2734,7 @@ impl<'a> Engine<'a> {
                     .inline_math_frag(tex, size_pt)
                     .map(|f| f.w)
                     .unwrap_or(0.0),
-                None => self.font_set.measure(word.flags, &word.text, size_pt),
+                None => self.measure_text(word.flags, &word.text, size_pt),
             };
 
             // The first line is narrowed by the first-line indent.
@@ -2731,7 +2834,7 @@ impl<'a> Engine<'a> {
                 } else {
                     size_pt
                 };
-                natural_w_pt += self.font_set.measure(seg.flags, &seg.text, s_size);
+                natural_w_pt += self.measure_text(seg.flags, &seg.text, s_size);
                 if seg.text.chars().all(char::is_whitespace) && !seg.text.is_empty() {
                     space_count += 1;
                 }
@@ -2829,7 +2932,7 @@ impl<'a> Engine<'a> {
                 } else {
                     (size_pt, baseline_y_pt)
                 };
-                let seg_width = self.font_set.measure(seg.flags, &seg.text, seg_size);
+                let seg_width = self.measure_text(seg.flags, &seg.text, seg_size);
 
                 if seg.flags.superscript || seg.flags.subscript {
                     // Close the line's main section, emit the small
@@ -2853,6 +2956,7 @@ impl<'a> Engine<'a> {
                         seg.flags,
                         &seg.text,
                         seg_size,
+                        self.letter_spacing_pt,
                     );
                     self.page_ops.push(Op::EndTextSection);
                     self.page_ops.push(Op::RestoreGraphicsState);
@@ -2904,6 +3008,7 @@ impl<'a> Engine<'a> {
                         seg.flags,
                         &seg.text,
                         seg_size,
+                        self.letter_spacing_pt,
                     );
                 }
 
@@ -3086,6 +3191,7 @@ struct BlockPaintCtx {
     border: ResolvedBorder,
     padding_bottom: f32,
     margin_after_pt: f32,
+    saved_letter_spacing: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3132,7 +3238,17 @@ fn emit_text_chunks(
     flags: RunFlags,
     text: &str,
     size_pt: f32,
+    letter_spacing_pt: f32,
 ) {
+    // `Tc` adds spacing after every glyph. Emit it only when set —
+    // a zero value leaves the op out so non-letter-spaced documents
+    // render byte-identically. `Tc` is reset by the next `BT`, so a
+    // block keeps its own spacing without leaking to the next.
+    if letter_spacing_pt != 0.0 {
+        ops.push(Op::SetCharacterSpacing {
+            multiplier: letter_spacing_pt,
+        });
+    }
     for chunk in font_set.split_for_emit(flags, text, size_pt) {
         ops.push(Op::SetFont {
             font: chunk.handle,
@@ -3184,11 +3300,16 @@ fn count_wrapped_lines(
     max_width: f32,
     font_set: &FontSet,
     bold: bool,
+    letter_spacing_pt: f32,
 ) -> usize {
     if runs.is_empty() {
         return 1;
     }
     let size_pt = font_size;
+    let measure = |flags: RunFlags, text: &str| {
+        font_set.measure(flags, text, size_pt)
+            + letter_spacing_pt * text.chars().count() as f32
+    };
     let mut current = 0.0f32;
     let mut lines = 1usize;
     for run in runs {
@@ -3197,8 +3318,8 @@ fn count_wrapped_lines(
             flags = flags.with_bold();
         }
         for word in run.text.split_whitespace() {
-            let w = font_set.measure(flags, word, size_pt);
-            let space = font_set.measure(flags, " ", size_pt);
+            let w = measure(flags, word);
+            let space = measure(flags, " ");
             if current + w > max_width {
                 lines += 1;
                 current = w + space;
