@@ -144,16 +144,28 @@ impl VariantMetrics {
     }
 
     /// Advance width of `text` at `font_size_pt`, in points.
+    ///
+    /// For each input char, sums the advances of the chars that the
+    /// built-in emit path will actually write (see
+    /// [`for_each_builtin_emit_char`]). Measuring the source codepoints
+    /// directly would charge a `fallback_width` for things like `•`
+    /// while the emit path writes `*` — the resulting drift between
+    /// measured and rendered x positions misplaces underlines, link
+    /// rects, and wrap break points on lines containing transliterated
+    /// characters.
     pub fn measure(&self, text: &str, font_size_pt: f32) -> f32 {
         let mut unscaled: u64 = 0;
         for c in text.chars() {
-            let w = if (c as u32) < 256 {
-                self.unscaled_widths[c as usize]
-            } else {
-                0
-            };
-            let w = if w == 0 { self.fallback_width } else { w };
-            unscaled += w as u64;
+            for_each_builtin_emit_char(c, |emitted| {
+                let idx = emitted as u32 as usize;
+                let w = if idx < 256 {
+                    self.unscaled_widths[idx]
+                } else {
+                    0
+                };
+                let w = if w == 0 { self.fallback_width } else { w };
+                unscaled += w as u64;
+            });
         }
         unscaled as f32 * font_size_pt / self.units_per_em as f32
     }
@@ -808,6 +820,51 @@ fn find_variant_path(anchor: &std::path::Path, variant_names: &[&str]) -> Option
     None
 }
 
+/// Invoke `f` once per char that the built-in (Helvetica/Courier)
+/// emit path will actually write for `c`. ASCII passes through; a
+/// curated set of Win-1252 punctuation transliterates to ASCII (often
+/// expanding one source char into several, e.g. `—` → `--`); anything
+/// else becomes `?`. The shared source of truth for both measurement
+/// (`VariantMetrics::measure`) and emission (`to_win1252` in layout) —
+/// drift between the two misplaces underlines, link rects, and line
+/// breaks on lines containing transliterated characters.
+pub fn for_each_builtin_emit_char(c: char, mut f: impl FnMut(char)) {
+    match c as u32 {
+        0x00..=0x7F => f(c),
+        0x2014 => {
+            f('-');
+            f('-');
+        }
+        0x2013 => f('-'),
+        0x2022 => f('*'),
+        0x2018 | 0x2019 => f('\''),
+        0x201C | 0x201D => f('"'),
+        0x2026 => {
+            f('.');
+            f('.');
+            f('.');
+        }
+        0x00A0 => f(' '),
+        0x00A9 => {
+            f('(');
+            f('c');
+            f(')');
+        }
+        0x00AE => {
+            f('(');
+            f('R');
+            f(')');
+        }
+        0x2122 => {
+            f('(');
+            f('T');
+            f('M');
+            f(')');
+        }
+        _ => f('?'),
+    }
+}
+
 /// Code points the renderer might synthesize at layout time even if
 /// they never appear in the source document — bullet glyphs,
 /// task-list brackets, ordered-list digits, etc. Including them in
@@ -1087,6 +1144,55 @@ mod tests {
                 summed
             );
         }
+    }
+
+    #[test]
+    fn builtin_measure_matches_transliterated_emit() {
+        // `to_win1252` rewrites a curated set of Win-1252 punctuation
+        // to ASCII before emission (`•` → `*`, `—` → `--`, `…` → `...`,
+        // `(c)`, `(R)`, `(TM)`, etc.). `measure` must price each source
+        // char at the advance the emit path will actually write, or the
+        // layout cursor drifts away from the PDF text matrix and
+        // misplaces underlines / link rects.
+        let cache = FontMetricsCache::new();
+        let m = cache.for_variant(FontVariant::HelveticaRegular);
+        let pairs = [
+            ("\u{2022}", "*"),
+            ("\u{2014}", "--"),
+            ("\u{2013}", "-"),
+            ("\u{2026}", "..."),
+            ("\u{2018}", "'"),
+            ("\u{2019}", "'"),
+            ("\u{201C}", "\""),
+            ("\u{201D}", "\""),
+            ("\u{00A0}", " "),
+            ("\u{00A9}", "(c)"),
+            ("\u{00AE}", "(R)"),
+            ("\u{2122}", "(TM)"),
+            ("a \u{2022} b \u{2014} c \u{2026}", "a * b -- c ..."),
+        ];
+        for (src, emitted) in pairs {
+            let measured = m.measure(src, 12.0);
+            let actual = m.measure(emitted, 12.0);
+            assert!(
+                (measured - actual).abs() < 1e-3,
+                "measure({:?}) = {} but emit writes {:?} with width {}",
+                src,
+                measured,
+                emitted,
+                actual,
+            );
+        }
+        // Codepoints that aren't in the curated map should price as
+        // `?`, which is what `to_win1252` will actually emit for them.
+        let unknown = m.measure("\u{4E2D}", 12.0);
+        let q = m.measure("?", 12.0);
+        assert!(
+            (unknown - q).abs() < 1e-3,
+            "uncurated codepoint should price as '?': {} vs {}",
+            unknown,
+            q,
+        );
     }
 
     #[test]
