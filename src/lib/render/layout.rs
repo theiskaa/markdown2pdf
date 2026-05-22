@@ -2933,6 +2933,19 @@ impl<'a> Engine<'a> {
                     (size_pt, baseline_y_pt)
                 };
                 let seg_width = self.measure_text(seg.flags, &seg.text, seg_size);
+                // Justified lines widen every space via the PDF `Tw`
+                // operator. `seg_width` (glyphs + letter spacing) does
+                // not include that, so the cursor and decoration rects
+                // must add `word_spacing_pt` per space or underlines /
+                // link boxes drift left of the text. Super/subscript
+                // segments break into their own `Tw`-free section.
+                let seg_advance = seg_width
+                    + if seg.flags.superscript || seg.flags.subscript {
+                        0.0
+                    } else {
+                        word_spacing_pt
+                            * seg.text.chars().filter(|&c| c == ' ').count() as f32
+                    };
 
                 if seg.flags.superscript || seg.flags.subscript {
                     // Close the line's main section, emit the small
@@ -3033,7 +3046,7 @@ impl<'a> Engine<'a> {
                             DecorationKind::None
                         },
                         x0_pt: x_cursor_pt,
-                        x1_pt: x_cursor_pt + seg_width,
+                        x1_pt: x_cursor_pt + seg_advance,
                         y_pt: decoration_y_pt,
                         link: seg.link.clone(),
                         size_pt,
@@ -3052,13 +3065,13 @@ impl<'a> Engine<'a> {
                 if let Some(rgb) = inline_bg {
                     self.pending_highlights.push(HighlightBox {
                         x0_pt: x_cursor_pt,
-                        x1_pt: x_cursor_pt + seg_width,
+                        x1_pt: x_cursor_pt + seg_advance,
                         baseline_y_pt,
                         size_pt,
                         fill: rgb_color(rgb),
                     });
                 }
-                x_cursor_pt += seg_width;
+                x_cursor_pt += seg_advance;
             }
 
             // A line that had any superscript break also has its
