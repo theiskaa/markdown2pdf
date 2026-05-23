@@ -1008,6 +1008,24 @@ impl<'a> Engine<'a> {
         self.column_body_left_pt(col) + self.column_width_pt
     }
 
+    /// Translate a `(left, right)` indent pair captured in `saved_column`
+    /// to the equivalent pair in `self.current_column`, preserving the
+    /// relative offset from each column-body edge. Used by callers that
+    /// snapshot indents around content that might trigger
+    /// `advance_column` mid-call.
+    fn rebase_indents(&self, saved_left: f32, saved_right: f32, saved_column: u8) -> (f32, f32) {
+        if saved_column == self.current_column {
+            return (saved_left, saved_right);
+        }
+        let prev_l = self.column_body_left_pt(saved_column);
+        let prev_r = self.column_body_right_pt(saved_column);
+        let dl = saved_left - prev_l;
+        let dr = prev_r - saved_right;
+        let cur_l = self.column_body_left_pt(self.current_column);
+        let cur_r = self.column_body_right_pt(self.current_column);
+        (cur_l + dl, cur_r - dr)
+    }
+
     /// Page-break: finalize the current page, reset to column 0 on a
     /// fresh page. Used by `Block::PageBreak` and by `advance_column`
     /// once the last column has filled. Preserves the *relative*
@@ -1742,6 +1760,8 @@ impl<'a> Engine<'a> {
         let body_style = self.style.paragraph.clone();
         let color = Some(rgb_color(body_style.text_color_rgb()));
         let saved_left = self.indent_left_pt;
+        let saved_right = self.indent_right_pt;
+        let saved_column = self.current_column;
         let def_indent_pt = mm_to_pt(6.0);
 
         for (idx, entry) in entries.iter().enumerate() {
@@ -1756,6 +1776,10 @@ impl<'a> Engine<'a> {
             } else {
                 self.advance_y(body_style.margin_before_pt * 0.5);
             }
+            let (outer_left, outer_right) =
+                self.rebase_indents(saved_left, saved_right, saved_column);
+            self.indent_left_pt = outer_left;
+            self.indent_right_pt = outer_right;
             self.write_wrapped_runs(
                 &term_runs,
                 body_style.font_size_pt,
@@ -1763,7 +1787,10 @@ impl<'a> Engine<'a> {
                 RunFlags::default().with_bold(),
                 color.clone(),
             );
-            self.indent_left_pt = (saved_left + def_indent_pt).min(self.indent_right_pt - 10.0);
+            let (outer_left, outer_right) =
+                self.rebase_indents(saved_left, saved_right, saved_column);
+            self.indent_left_pt = (outer_left + def_indent_pt).min(outer_right - 10.0);
+            self.indent_right_pt = outer_right;
             for def in &entry.definitions {
                 self.write_wrapped_runs(
                     def,
@@ -1773,7 +1800,10 @@ impl<'a> Engine<'a> {
                     color.clone(),
                 );
             }
-            self.indent_left_pt = saved_left;
+            let (outer_left, outer_right) =
+                self.rebase_indents(saved_left, saved_right, saved_column);
+            self.indent_left_pt = outer_left;
+            self.indent_right_pt = outer_right;
         }
         self.advance_y(body_style.margin_after_pt);
     }
@@ -2059,6 +2089,7 @@ impl<'a> Engine<'a> {
             let base_flags = base_flags_from_block(&cap);
             let saved_left = self.indent_left_pt;
             let saved_right = self.indent_right_pt;
+            let saved_column = self.current_column;
             if rendered_w_pt < self.content_width_pt() {
                 self.indent_left_pt = x_pt;
                 self.indent_right_pt = x_pt + rendered_w_pt;
@@ -2080,8 +2111,9 @@ impl<'a> Engine<'a> {
                 color,
             );
             self.current_text_align = saved_align;
-            self.indent_left_pt = saved_left;
-            self.indent_right_pt = saved_right;
+            let (l, r) = self.rebase_indents(saved_left, saved_right, saved_column);
+            self.indent_left_pt = l;
+            self.indent_right_pt = r;
         }
 
         self.advance_y(self.style.image.margin_after_pt);
@@ -2333,6 +2365,7 @@ impl<'a> Engine<'a> {
         let pad = self.style.table.cell_padding;
         let saved_left = self.indent_left_pt;
         let saved_right = self.indent_right_pt;
+        let saved_column = self.current_column;
         let row_top = self.y_from_top_pt;
         let col_count = cells.len();
         for (i, cell) in cells.iter().enumerate() {
@@ -2399,8 +2432,9 @@ impl<'a> Engine<'a> {
             self.indent_left_pt = saved_left;
             self.draw_cell_border(row_top, row_top + region_height, i, i + colspan, col_width);
         }
-        self.indent_left_pt = saved_left;
-        self.indent_right_pt = saved_right;
+        let (l, r) = self.rebase_indents(saved_left, saved_right, saved_column);
+        self.indent_left_pt = l;
+        self.indent_right_pt = r;
         self.y_from_top_pt = row_top;
     }
 
