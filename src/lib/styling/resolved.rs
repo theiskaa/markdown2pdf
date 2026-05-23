@@ -113,13 +113,15 @@ pub struct ResolvedTable {
     pub margin_after_pt: f32,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ResolvedImage {
     pub max_width_pct: f32,
     pub align: ImageAlign,
     pub margin_before_pt: f32,
     pub margin_after_pt: f32,
+    /// Styling for the caption line drawn under an image.
+    pub caption: ResolvedBlock,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

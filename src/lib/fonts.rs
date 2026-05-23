@@ -317,16 +317,18 @@ mod tests {
     }
 
     /// Builds a throwaway directory containing the named empty files
-    /// and runs `f` with its path. Cleans up afterwards.
+    /// and runs `f` with its path. Cleans up afterwards. The directory
+    /// name is made unique with a process-wide atomic counter so the
+    /// parallel font tests can't collide on each other's files.
     fn with_font_dir(files: &[&str], f: impl FnOnce(&str)) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "m2pdf_fonttest_{}_{:?}",
+            "m2pdf_fonttest_{}_{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            SEQ.fetch_add(1, Ordering::Relaxed)
         ));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for name in files {
             std::fs::write(dir.join(name), b"x").unwrap();

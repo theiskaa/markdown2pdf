@@ -268,6 +268,11 @@ pub struct FontSet {
     pub builtin: FontMetricsCache,
     pub external_body: ExternalFamily,
     pub external_code: ExternalFamily,
+    /// Inline-code / `<kbd>` family, separate from `external_code`
+    /// (which serves fenced code blocks). Loaded only when
+    /// `[code_inline].font_family` is configured; otherwise inline-code
+    /// runs fall through to `external_code`, then to builtin Courier.
+    pub external_code_inline: ExternalFamily,
     /// Ordered fallback fonts consulted when the primary body / code
     /// font does not cover a codepoint. Regular weight only — fallbacks
     /// are loaded once per family and reused for every flag combination.
@@ -380,10 +385,20 @@ impl FontSet {
             italic: usage.body_italic || usage.body_bold_italic,
             bold_italic: usage.body_bold_italic,
         };
+        // Inline-code variants count toward the regular code family
+        // too: when `[code_inline].font_family` isn't configured,
+        // inline-code runs fall back to `external_code` and still need
+        // its bold / italic faces.
         let code_variants = BodyVariantNeed {
-            bold: usage.mono_bold || usage.mono_bold_italic,
-            italic: usage.mono_italic || usage.mono_bold_italic,
-            bold_italic: usage.mono_bold_italic,
+            bold: usage.mono_bold
+                || usage.mono_bold_italic
+                || usage.inline_code_bold
+                || usage.inline_code_bold_italic,
+            italic: usage.mono_italic
+                || usage.mono_bold_italic
+                || usage.inline_code_italic
+                || usage.inline_code_bold_italic,
+            bold_italic: usage.mono_bold_italic || usage.inline_code_bold_italic,
         };
         let external_body = font_config
             .and_then(|c| load_external_family(default_source(c), used_codepoints, body_variants, doc))
@@ -408,22 +423,42 @@ impl FontSet {
             builtin,
             external_body,
             external_code,
+            external_code_inline: ExternalFamily::default(),
             fallbacks,
         }
     }
 
     /// Build the font set with an additional list of fallback sources
     /// (resolved from `[defaults].fallback_fonts` in the styling
-    /// config). Names are appended *after* anything declared on
-    /// `FontConfig` so programmatic config wins on order.
+    /// config) and an optional dedicated inline-code font family
+    /// (`[code_inline].font_family`). Fallback names are appended
+    /// *after* anything declared on `FontConfig` so programmatic
+    /// config wins on order. When `code_inline_name` is `None` the
+    /// inline-code family stays empty and inline-code runs fall
+    /// through to the regular code family.
     pub fn load_with_style_fallbacks(
         font_config: Option<&FontConfig>,
         style_fallback_names: &[String],
+        code_inline_name: Option<&str>,
         used_codepoints: &[char],
         usage: VariantUsage,
         doc: &mut PdfDocument,
     ) -> Self {
         let mut set = Self::load(font_config, used_codepoints, usage, doc);
+        if let Some(name) = code_inline_name {
+            let inline_variants = BodyVariantNeed {
+                bold: usage.inline_code_bold || usage.inline_code_bold_italic,
+                italic: usage.inline_code_italic || usage.inline_code_bold_italic,
+                bold_italic: usage.inline_code_bold_italic,
+            };
+            set.external_code_inline = load_external_family(
+                Some(name_to_external_source(name)),
+                used_codepoints,
+                inline_variants,
+                doc,
+            )
+            .unwrap_or_default();
+        }
         for name in style_fallback_names {
             let src = name_to_external_source(name);
             let Some((_, bytes)) = resolve_regular(src) else {
@@ -440,6 +475,14 @@ impl FontSet {
     /// *primary* font for that flag combination. Fallback selection
     /// happens per-codepoint inside [`FontSet::split_for_emit`].
     pub fn resolve(&self, flags: RunFlags) -> FontResolution<'_> {
+        if flags.inline_code {
+            if let Some(ext) = self.external_code_inline.pick(flags) {
+                return FontResolution::External {
+                    handle: PdfFontHandle::External(ext.font_id.clone()),
+                    font: ext,
+                };
+            }
+        }
         if flags.monospace {
             if let Some(ext) = self.external_code.pick(flags) {
                 return FontResolution::External {

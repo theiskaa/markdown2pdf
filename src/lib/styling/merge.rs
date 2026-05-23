@@ -346,6 +346,12 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
         align: image_cfg.align.unwrap_or(ImageAlign::Center),
         margin_before_pt: image_cfg.margin_before_pt.unwrap_or(0.0),
         margin_after_pt: image_cfg.margin_after_pt.unwrap_or(0.0),
+        caption: lower_block(
+            theme,
+            "image.caption",
+            &defaults,
+            image_cfg.caption.unwrap_or_default(),
+        )?,
     };
 
     let rule_cfg = cfg.horizontal_rule.unwrap_or_default();

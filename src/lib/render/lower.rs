@@ -842,7 +842,7 @@ impl InlineHtmlDepth {
             flags = flags.with_small();
         }
         if self.kbd > 0 {
-            flags = flags.with_monospace();
+            flags = flags.with_inline_code();
         }
         flags
     }
@@ -890,7 +890,7 @@ fn flatten_one(
             block: false,
             ..
         } => {
-            let mono = flags.with_monospace();
+            let mono = flags.with_inline_code();
             push_text(out, content, mono, link);
         }
         Token::Math { content, .. } => {

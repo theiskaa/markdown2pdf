@@ -37,28 +37,30 @@ through the same transliteration the emit path uses, so the two
 agree exactly. Documents with no transliterated characters, and any
 document rendered with a Unicode font, are unaffected.
 
-**Font weight fixes.** System-font lookup could return a bold face
-(e.g. `Tahoma Bold.ttf`) as the regular weight, rendering the whole
-document heavy; an exact filename match now wins. Heading bold, which
-comes from the style block rather than run flags, is now applied, and
-the bold/italic faces it needs are embedded for external fonts.
-
-**Config-driven body font.** `[defaults].font_family` now selects the
-font that is loaded and embedded, not just `--default-font`.
-
-**Configurable list bullet gap.** New `bullet_gap_pt` on
-`[list.common]` sets the gap between a bullet and its text; defaults
-to the previous `5.67` pt.
-
 **Config file discovery.** With no `-c` flag, the CLI now finds a
 config automatically — `MARKDOWN2PDF_CONFIG`, then `./markdown2pdf.toml`,
 then `~/.config/markdown2pdf/config.toml` — before the default theme.
 
-**Link underline honours config.** `[link].underline = false` now
-suppresses the link underline; it was previously forced on regardless
-of the configured style.
+**Style-config fidelity.** A class of style fields the renderer was
+silently dropping is now honoured end-to-end. Body font: system-font
+lookup returning a bold face (e.g. `Tahoma Bold.ttf`) as the regular
+weight is fixed (exact filename wins), `[defaults].font_family`
+actually loads and embeds, heading bold from the style block is
+applied with its bold/italic faces embedded, and `[link].underline =
+false` suppresses the link underline. Per-block: `letter_spacing_pt`,
+`indent_pt`, `underline` / `strikethrough` / `text_align`, table
+`cell_padding` and `alternating_row_background`. Inline: every
+`code_inline` and `[mark]` field including `font_family` and
+`padding`. Layout: list `indent_per_level_pt` (plus a new
+`bullet_gap_pt` knob on `[list.common]`, defaulting to the previous
+`5.67` pt), image caption styling, title-page cover image, admonition
+body inheritance — nested lists inside a blockquote / admonition now
+adopt the container's typography. Center- and right-aligned
+paragraphs no longer collapse their wrapped lines onto line one.
+Multi-column page layout (`page.columns`) is the only audited field
+still deferred — [#102](https://github.com/theiskaa/markdown2pdf/issues/102).
 
-Resolves [#81](https://github.com/theiskaa/markdown2pdf/issues/81) and [#97](https://github.com/theiskaa/markdown2pdf/issues/97).
+Resolves [#81](https://github.com/theiskaa/markdown2pdf/issues/81), [#97](https://github.com/theiskaa/markdown2pdf/issues/97), and [#100](https://github.com/theiskaa/markdown2pdf/issues/100).
 
 ## [1.3.0] - 2026-05-20
 
