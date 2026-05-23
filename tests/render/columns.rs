@@ -503,3 +503,42 @@ fn singlecolumn_preserves_first_block_top_margin() {
          (topmost_no={topmost_no:.1}, topmost_big={topmost_big:.1})"
     );
 }
+
+#[test]
+fn definition_list_spanning_columns_rebases_indents() {
+    // Regression for the saved_left/saved_right bug in
+    // render_definition_list: a long deflist that overflows col 0
+    // used to render col 1's terms at col 0's x (saved_left was
+    // captured before the loop and pointed at col 0's body edge).
+    // The visible failure was every term in col 1 overlapping
+    // col 0's earlier terms at the page top.
+    let mut md = String::from("# DefList\n\nLead.\n\n");
+    for i in 1..=40 {
+        md.push_str(&format!(
+            "Term {i}\n:   Body number {i}. Lorem ipsum dolor sit amet, \
+consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore \
+et dolore magna aliqua. Ut enim ad minim veniam.\n\n"
+        ));
+    }
+    let bytes = render(
+        &md,
+        r##"
+        [page]
+        columns = 2
+        column_gap_mm = 8
+        "##,
+    );
+    // Letter @ 16mm margins, 8mm gap: col 1 left edge ≈ 309pt.
+    // Pre-fix, the deflist's saved_left pinned every post-break term
+    // and body to col 0 — almost no Td origins appeared past 300pt.
+    // Post-fix, col 1 fills normally with both term-x (≈309) and
+    // body-indent-x (≈326) clusters.
+    let xs = td_xs(&bytes);
+    let in_col1 = xs.iter().filter(|&&x| x > 300.0).count();
+    assert!(
+        in_col1 >= 20,
+        "expected the deflist to fill col 1 after the column break \
+         (got only {in_col1} Td origins past 300pt — saved indents \
+         were not rebased to the current column)"
+    );
+}
