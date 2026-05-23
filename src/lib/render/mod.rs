@@ -127,8 +127,48 @@ pub fn render_to_bytes(
     };
 
     let blocks = lower::lower(&tokens);
-    let usage = ir::VariantUsage::analyze(&blocks);
-    let font_set = font::FontSet::load(font_config, &used_codepoints, usage, &mut doc);
+    let mut usage = ir::VariantUsage::analyze(&blocks);
+    // Headings and blockquotes get their weight / slant from the
+    // theme, not from per-run flags, so the IR walk above can't see
+    // them. Without this, an external font would skip loading the
+    // bold (or italic) face and these blocks would render regular.
+    for block_style in style.headings.iter().chain([&style.blockquote]) {
+        if block_style.is_bold() && block_style.is_italic() {
+            usage.body_bold_italic = true;
+        } else if block_style.is_bold() {
+            usage.body_bold = true;
+        } else if block_style.is_italic() {
+            usage.body_italic = true;
+        }
+    }
+    let cb = &style.code_block;
+    if cb.is_bold() && cb.is_italic() {
+        usage.mono_bold_italic = true;
+    } else if cb.is_bold() {
+        usage.mono_bold = true;
+    } else if cb.is_italic() {
+        usage.mono_italic = true;
+    }
+    // Load a distinct inline-code family only when `[code_inline]
+    // font_family` is set AND differs from `[code_block] font_family`.
+    // Otherwise inline and block code share the same path (so the
+    // default theme, which spells both `"Courier"`, stays byte-
+    // identical to the pre-feature output).
+    let code_inline_font = match (
+        style.code_inline.font_family.as_deref(),
+        style.code_block.font_family.as_deref(),
+    ) {
+        (Some(ci), Some(cb)) if ci.eq_ignore_ascii_case(cb) => None,
+        (ci, _) => ci,
+    };
+    let font_set = font::FontSet::load_with_style_fallbacks(
+        font_config,
+        &style.fallback_fonts,
+        code_inline_font,
+        &used_codepoints,
+        usage,
+        &mut doc,
+    );
     let pages = layout::lay_out_pages(&blocks, &style, &font_set, &mut doc);
 
     let (fallback_w, fallback_h) = layout::page_dimensions_mm(&style.page);

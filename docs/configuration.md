@@ -50,6 +50,13 @@ markdown2pdf -p input.md -c my-config.toml -o out.pdf
 Every field is optional. `theme = "github"` (or any other preset)
 inherits a known-good baseline; you override only what you care about.
 
+To make a config the default without passing `-c` every time, place
+it where the binary discovers it automatically: `markdown2pdf.toml`
+in the project directory, or `markdown2pdf/config.toml` under your
+user config directory (`~/.config/markdown2pdf/config.toml` on
+macOS/Linux). The `MARKDOWN2PDF_CONFIG` environment variable also
+points at one. See [cli.md](cli.md) for the full lookup order.
+
 Any field below can also be overridden per-run from the command
 line (winning over the config file and `--theme`) — see
 [cli.md](cli.md#config-overrides) for `--title` / `--font-size` /
@@ -105,6 +112,39 @@ padding = 0.0
 margin_before_pt = 0.0
 margin_after_pt = 0.0
 indent_pt = 0.0
+fallback_fonts = ["Noto Sans CJK SC", "Noto Sans Arabic", "Symbola"]
+```
+
+### Body font
+
+`font_family` in `[defaults]` selects the font that is loaded and
+embedded — a built-in alias (`Helvetica`, `Times`, `Courier`), a system
+font name, or a path to a `.ttf` / `.otf` file. A built-in alias uses a
+PDF base-14 font (no embedding; non-ASCII glyphs transliterate to
+ASCII). Any other name is resolved against the system font directories
+and embedded, which is required for Unicode glyphs such as `•`.
+
+The `--default-font` CLI flag overrides this; when it is omitted the
+config's `font_family` is used.
+
+### Fallback fonts
+
+`fallback_fonts` is an ordered list of font names consulted when the
+primary body / code font lacks a glyph for a codepoint. Mixed-script
+documents (Latin + CJK, Arabic, Hebrew, math symbols, emoji) render
+each codepoint in the first configured font that covers it; characters
+unmatched by every font degrade to `?` rather than panicking.
+
+Names resolve the same way as `font_family` — built-in aliases, system
+font names, or paths to `.ttf` / `.otf` files. The field is only read
+from `[defaults]`; per-block tables ignore it.
+
+Programmatic callers can set the same list on `FontConfig`:
+
+```rust
+let cfg = FontConfig::new()
+    .with_default_font("Helvetica")
+    .with_fallback_fonts(["Noto Sans CJK SC", "Symbola"]);
 ```
 
 Colors accept hex strings (`"#RRGGBB"`, `"#RGB"`), structs
@@ -214,6 +254,7 @@ margin_after_pt = 0.5
 indent_per_level_pt = 17.0
 item_spacing_tight_pt = 0.5  # CommonMark "tight" list (no blank lines)
 item_spacing_loose_pt = 2.0  # CommonMark "loose" list (any blank line)
+bullet_gap_pt = 5.67         # horizontal gap between the bullet/number and the item text
 
 [list.unordered]
 bullet = "•"   # any glyph

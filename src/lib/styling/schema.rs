@@ -100,6 +100,12 @@ pub struct BlockConfig {
     /// OpenType `smcp` substitution depends on the loaded font and is
     /// a follow-up.
     pub small_caps: Option<bool>,
+    /// Ordered list of fallback font names. Codepoints not covered by
+    /// the primary body / code font are looked up in each fallback in
+    /// turn; the first font that has a glyph wins. Only the value on
+    /// the document `[defaults]` block is read by the renderer — the
+    /// field is accepted syntactically on per-block tables but ignored.
+    pub fallback_fonts: Option<Vec<String>>,
 }
 
 /// Subset of `BlockConfig` for true inline runs (`code_inline`,
@@ -176,6 +182,8 @@ pub struct ListStyleConfig {
     pub item_spacing_tight_pt: Option<f32>,
     /// Spacing between items in a loose list (blank line between items).
     pub item_spacing_loose_pt: Option<f32>,
+    /// Horizontal gap between the bullet/number and the item text.
+    pub bullet_gap_pt: Option<f32>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]

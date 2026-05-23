@@ -219,3 +219,44 @@ fn non_ascii_with_builtin_font_does_not_panic() {
         parse_into_bytes(md, ConfigSource::Default, None).expect("render must not error");
     assert!(bytes.starts_with(b"%PDF-"));
 }
+
+#[test]
+fn unknown_fallback_font_renders_and_degrades_gracefully() {
+    // A configured fallback that can't be located must not error or
+    // panic — it simply doesn't load, and uncovered codepoints stay
+    // uncovered (the pre-fallback behavior).
+    let md = "# Hello 日本語\n\nMixed text.".to_string();
+    let cfg_toml = r#"
+        [defaults]
+        fallback_fonts = ["This_Font_Definitely_Does_Not_Exist_12345"]
+    "#;
+    let bytes = parse_into_bytes(md, ConfigSource::Embedded(cfg_toml), None)
+        .expect("missing fallback must not error");
+    assert!(bytes.starts_with(b"%PDF-"));
+}
+
+#[test]
+fn fallback_font_loads_when_system_font_available() {
+    // When a *real* system font is configured as the fallback, the
+    // renderer must load it and embed it alongside the primary. With
+    // no FontConfig the primary is the built-in Helvetica path, which
+    // emits no `/Ascent` entry — any `/Ascent` value in the PDF must
+    // come from an embedded external font (the fallback).
+    let Some(name) = any_system_font() else {
+        eprintln!("skipping: no system font available");
+        return;
+    };
+    let md = "Body text with Greek Ω and Latin Aé.".to_string();
+    let cfg_toml = format!(
+        "[defaults]\nfallback_fonts = [\"{}\"]\n",
+        name
+    );
+    let bytes = parse_into_bytes(md, ConfigSource::Embedded(&cfg_toml), None)
+        .expect("render must succeed");
+    assert!(bytes.starts_with(b"%PDF-"));
+    let asc = ascents(&bytes);
+    assert!(
+        !asc.is_empty(),
+        "expected at least one embedded font (the fallback) with an `/Ascent` entry, got none"
+    );
+}

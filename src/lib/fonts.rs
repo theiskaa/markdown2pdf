@@ -58,6 +58,16 @@ pub struct FontConfig {
     pub default_font_source: Option<FontSource>,
     /// Font source for code blocks. Takes priority over `code_font` if set.
     pub code_font_source: Option<FontSource>,
+    /// Ordered list of fallback font *names* (system / path / built-in
+    /// alias). Resolved the same way as `default_font` at render time.
+    /// Composed with `fallback_font_sources` (sources first, then names)
+    /// and with any `fallback_fonts` set on `[defaults]` in the TOML
+    /// config.
+    pub fallback_fonts: Vec<String>,
+    /// Ordered list of pre-resolved fallback font sources. Useful when
+    /// embedding fonts via `include_bytes!` or pointing at a known
+    /// path. Composed before `fallback_fonts`.
+    pub fallback_font_sources: Vec<FontSource>,
     /// Enable font subsetting for smaller PDFs.
     pub enable_subsetting: bool,
 }
@@ -70,6 +80,8 @@ impl FontConfig {
             code_font: None,
             default_font_source: None,
             code_font_source: None,
+            fallback_fonts: Vec::new(),
+            fallback_font_sources: Vec::new(),
             enable_subsetting: true,
         }
     }
@@ -101,6 +113,28 @@ impl FontConfig {
     /// Enable or disable font subsetting.
     pub fn with_subsetting(mut self, enabled: bool) -> Self {
         self.enable_subsetting = enabled;
+        self
+    }
+
+    /// Replace the fallback-font name list. See [`FontConfig::fallback_fonts`].
+    pub fn with_fallback_fonts<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.fallback_fonts = names.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Append one fallback name to the existing list.
+    pub fn add_fallback_font(mut self, name: impl Into<String>) -> Self {
+        self.fallback_fonts.push(name.into());
+        self
+    }
+
+    /// Append one pre-resolved fallback font source.
+    pub fn add_fallback_font_source(mut self, source: FontSource) -> Self {
+        self.fallback_font_sources.push(source);
         self
     }
 }
@@ -165,18 +199,34 @@ pub fn system_font_dirs() -> Vec<&'static str> {
     }
 }
 
-/// Search system font directories for a TTF/OTF file matching `name`.
-/// Skips `.ttc` (TrueType Collection) files — most font parsers don't
-/// handle them.
+/// Search the platform's system font directories for a TTF/OTF file
+/// matching `name`. Skips `.ttc` (TrueType Collection) files — most
+/// font parsers don't handle them.
 pub fn find_system_font(name: &str) -> Option<PathBuf> {
+    find_system_font_in(name, &system_font_dirs())
+}
+
+/// `find_system_font` with the search directories injected, so the
+/// matching logic can be exercised against a controlled directory.
+fn find_system_font_in(name: &str, dirs: &[&str]) -> Option<PathBuf> {
     let name_lower = name.to_lowercase();
-    let patterns = [
+    let patterns: Vec<String> = [
         format!("{}.ttf", name),
         format!("{}.otf", name),
         format!("{}.ttf", name.replace(" MS", "")),
-    ];
+    ]
+    .iter()
+    .map(|p| p.to_lowercase())
+    .collect();
 
-    for dir in system_font_dirs() {
+    // An exact filename match always wins, but directory enumeration
+    // order is unspecified — a prefix like `Tahoma Bold.ttf` can be
+    // visited before the exact `Tahoma.ttf`. So scan every entry for
+    // an exact match first; only if none exists fall back to the
+    // shortest-named prefix match (regular faces have shorter names
+    // than their `X Bold` / `X Italic` siblings).
+    let mut prefix_match: Option<PathBuf> = None;
+    for dir in dirs {
         let dir_path = Path::new(dir);
         if !dir_path.exists() {
             continue;
@@ -192,19 +242,26 @@ pub fn find_system_font(name: &str) -> Option<PathBuf> {
                 continue;
             }
 
-            if patterns.iter().any(|p| file_lower == p.to_lowercase()) {
+            if patterns.iter().any(|p| file_lower == *p) {
                 return Some(entry.path());
             }
 
             if file_lower.starts_with(&name_lower)
                 && (file_lower.ends_with(".ttf") || file_lower.ends_with(".otf"))
             {
-                return Some(entry.path());
+                let shorter = prefix_match
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .map(|n| file_lower.len() < n.to_string_lossy().len())
+                    .unwrap_or(true);
+                if shorter {
+                    prefix_match = Some(entry.path());
+                }
             }
         }
     }
 
-    None
+    prefix_match
 }
 
 #[cfg(test)]
@@ -257,5 +314,54 @@ mod tests {
         // Don't assert anything platform-specific — just verify the
         // function returns successfully.
         let _ = system_font_dirs();
+    }
+
+    /// Builds a throwaway directory containing the named empty files
+    /// and runs `f` with its path. Cleans up afterwards. The directory
+    /// name is made unique with a process-wide atomic counter so the
+    /// parallel font tests can't collide on each other's files.
+    fn with_font_dir(files: &[&str], f: impl FnOnce(&str)) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "m2pdf_fonttest_{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in files {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        f(dir.to_str().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_system_font_prefers_exact_over_prefix() {
+        // `Tahoma Bold.ttf` sorts before `Tahoma.ttf` and may be
+        // enumerated first — the exact match must still win, else the
+        // bold face gets used as the regular weight.
+        with_font_dir(&["Tahoma Bold.ttf", "Tahoma.ttf"], |dir| {
+            let found = find_system_font_in("Tahoma", &[dir]).unwrap();
+            assert_eq!(found.file_name().unwrap(), "Tahoma.ttf");
+        });
+    }
+
+    #[test]
+    fn find_system_font_prefix_fallback_picks_shortest() {
+        // No exact `Tahoma.ttf` — fall back to the shortest-named
+        // prefix match rather than whatever the OS lists first.
+        with_font_dir(&["Tahoma Italic.ttf", "Tahoma Bold.ttf"], |dir| {
+            let found = find_system_font_in("Tahoma", &[dir]).unwrap();
+            assert_eq!(found.file_name().unwrap(), "Tahoma Bold.ttf");
+        });
+    }
+
+    #[test]
+    fn find_system_font_skips_ttc() {
+        with_font_dir(&["Helvetica Neue.ttc"], |dir| {
+            assert!(find_system_font_in("Helvetica Neue", &[dir]).is_none());
+        });
     }
 }

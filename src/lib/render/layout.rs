@@ -140,6 +140,26 @@ struct Engine<'a> {
     /// Highlight rects collected while the current text section is
     /// open; drained into `page_ops` when it closes.
     pending_highlights: Vec<HighlightBox>,
+    /// True while rendering a fenced code block, so monospace runs
+    /// keep the `[code_block]` colour instead of being repainted with
+    /// the `[code_inline]` colour (both carry the `monospace` flag).
+    in_code_block: bool,
+    /// When set, paragraphs take their *text* style (font, colour,
+    /// weight, slant, size, alignment, decorations) from this block
+    /// instead of `[paragraph]` — so a blockquote's or admonition's
+    /// body text inherits the container's typography. Structural
+    /// fields (margins, padding, border, background) stay paragraph's,
+    /// since the container already draws its own box.
+    text_style_override: Option<ResolvedBlock>,
+    /// First-line indent (points) for the next `write_wrapped_runs`
+    /// call. Set by `render_paragraph` from `[paragraph].indent_pt`;
+    /// the call consumes it (resets to 0) so it applies once.
+    first_line_indent_pt: f32,
+    /// Extra spacing (points) added after every glyph of the block
+    /// currently being rendered. Set by `begin_block` from the block's
+    /// `letter_spacing_pt` and restored by `end_block`; read by both
+    /// `measure_text` and `emit_text_chunks` so the two never drift.
+    letter_spacing_pt: f32,
     /// Stack of block backgrounds currently open (LIFO — matches the
     /// nesting of `begin_block` / `end_block`). When a page break
     /// happens mid-block, [`start_new_page`] paints the fragment that
@@ -205,6 +225,10 @@ impl<'a> Engine<'a> {
             in_text_section: false,
             text_section_marker: 0,
             pending_highlights: Vec::new(),
+            in_code_block: false,
+            text_style_override: None,
+            first_line_indent_pt: 0.0,
+            letter_spacing_pt: 0.0,
             open_bg: Vec::new(),
             math: None,
             math_inline_cache: HashMap::new(),
@@ -424,8 +448,50 @@ impl<'a> Engine<'a> {
         let top = mm_to_pt(self.style.page.margins_mm.top.max(1.0));
         let bottom = self.page_height_pt() - mm_to_pt(self.style.page.margins_mm.bottom.max(1.0));
         let usable_h = bottom - top;
+
+        // Optional cover image, centered above the title block. Scaled
+        // to fit the content width with height capped at ~45% of the
+        // usable page height so the title stack still fits.
+        let content_w = self.indent_right_pt - self.indent_left_pt;
+        let cover = tp
+            .cover_image_path
+            .as_deref()
+            .and_then(|p| self.decode_image_file(std::path::Path::new(p)))
+            .map(|raw| {
+                let nat_w = raw.width as f32 / 300.0 * 72.0;
+                let nat_h = raw.height as f32 / 300.0 * 72.0;
+                let scale = (content_w / nat_w)
+                    .min((usable_h * 0.45) / nat_h)
+                    .min(1.0);
+                (raw, nat_w * scale, nat_h * scale, scale)
+            });
+        if let Some((_, _, cover_h, _)) = &cover {
+            stack_h += cover_h + line_gap;
+        }
+
         let start_y = top + ((usable_h - stack_h) * 0.5).max(0.0);
         self.y_from_top_pt = start_y;
+
+        // Draw the cover image, then drop the cursor below it so the
+        // title stack renders underneath.
+        if let Some((raw, cover_w, cover_h, scale)) = cover {
+            let xobject_id: XObjectId = self.doc.add_image(&raw);
+            let x_pt = self.indent_left_pt + ((content_w - cover_w) * 0.5).max(0.0);
+            let y_bot_pt = self.page_height_pt() - self.y_from_top_pt - cover_h;
+            self.close_text_section();
+            self.page_ops.push(Op::UseXobject {
+                id: xobject_id,
+                transform: XObjectTransform {
+                    translate_x: Some(Pt(x_pt)),
+                    translate_y: Some(Pt(y_bot_pt)),
+                    rotate: None,
+                    scale_x: Some(scale),
+                    scale_y: Some(scale),
+                    dpi: Some(300.0),
+                },
+            });
+            self.y_from_top_pt += cover_h + line_gap;
+        }
 
         // Title (bold)
         self.render_title_page_text(
@@ -483,29 +549,26 @@ impl<'a> Engine<'a> {
             small_caps: false,
             small: false,
             underline: false,
+            inline_code: false,
         };
-        let measured = self.font_set.measure(flags, text, size_pt);
+        let measured = self.measure_text(flags, text, size_pt);
         let center_x = (self.page_width_pt() - measured) / 2.0;
         let baseline_y = self.y_from_top_pt + size_pt;
 
         self.close_text_section();
         self.ensure_text_section();
         self.move_cursor_to(center_x, baseline_y);
-        self.page_ops.push(Op::SetFont {
-            font: self.font_set.handle(flags),
-            size: Pt(size_pt),
-        });
         self.page_ops.push(Op::SetFillColor {
             col: rgb_color(style.text_color_rgb()),
         });
-        let emit = if self.font_set.needs_transliteration(flags) {
-            to_win1252(text)
-        } else {
-            text.to_string()
-        };
-        self.page_ops.push(Op::ShowText {
-            items: vec![TextItem::Text(emit)],
-        });
+        emit_text_chunks(
+            &mut self.page_ops,
+            self.font_set,
+            flags,
+            text,
+            size_pt,
+            self.letter_spacing_pt,
+        );
         self.close_text_section();
 
         self.advance_y(size_pt);
@@ -587,6 +650,7 @@ impl<'a> Engine<'a> {
             small_caps: false,
             small: false,
             underline: false,
+            inline_code: false,
         };
         let ctx = self.begin_block(&s);
         self.write_wrapped_runs(&runs, s.font_size_pt, s.line_height, flags, color);
@@ -620,41 +684,33 @@ impl<'a> Engine<'a> {
         self.close_text_section();
         self.ensure_text_section();
         self.move_cursor_to(row_left, baseline_y);
-        self.page_ops.push(Op::SetFont {
-            font: self.font_set.handle(flags),
-            size: Pt(size_pt),
-        });
         self.page_ops.push(Op::SetFillColor {
             col: rgb_color(style.text_color_rgb()),
         });
-        let text_to_emit = if self.font_set.needs_transliteration(flags) {
-            to_win1252(&anchor.text)
-        } else {
-            anchor.text.clone()
-        };
-        self.page_ops.push(Op::ShowText {
-            items: vec![TextItem::Text(text_to_emit)],
-        });
+        emit_text_chunks(
+            &mut self.page_ops,
+            self.font_set,
+            flags,
+            &anchor.text,
+            size_pt,
+            self.letter_spacing_pt,
+        );
 
         // Page-number portion (right-aligned at row_right).
         let page_str = page_num.to_string();
-        let num_w = self.font_set.measure(flags, &page_str, size_pt);
+        let num_w = self.measure_text(flags, &page_str, size_pt);
         let num_x = row_right - num_w;
         self.close_text_section();
         self.ensure_text_section();
         self.move_cursor_to(num_x, baseline_y);
-        self.page_ops.push(Op::SetFont {
-            font: self.font_set.handle(flags),
-            size: Pt(size_pt),
-        });
-        let num_emit = if self.font_set.needs_transliteration(flags) {
-            to_win1252(&page_str)
-        } else {
-            page_str
-        };
-        self.page_ops.push(Op::ShowText {
-            items: vec![TextItem::Text(num_emit)],
-        });
+        emit_text_chunks(
+            &mut self.page_ops,
+            self.font_set,
+            flags,
+            &page_str,
+            size_pt,
+            self.letter_spacing_pt,
+        );
         self.close_text_section();
 
         // Clickable rect spans the whole row.
@@ -779,13 +835,13 @@ impl<'a> Engine<'a> {
                 out.push(word);
                 continue;
             }
-            let total = self.font_set.measure(word.flags, &word.text, size_pt);
+            let total = self.measure_text(word.flags, &word.text, size_pt);
             if total <= max_width {
                 out.push(word);
                 continue;
             }
             let breaks = super::hyphenate::break_points(&word.text);
-            let hyphen_width = self.font_set.measure(word.flags, "-", size_pt);
+            let hyphen_width = self.measure_text(word.flags, "-", size_pt);
             let chars: Vec<(usize, char)> = word.text.char_indices().collect();
             let mut chunk_start_byte = 0usize;
             let mut chunk_start_char = 0usize;
@@ -799,7 +855,7 @@ impl<'a> Engine<'a> {
                         continue;
                     }
                     let prefix = &word.text[chunk_start_byte..b];
-                    let w = self.font_set.measure(word.flags, prefix, size_pt) + hyphen_width;
+                    let w = self.measure_text(word.flags, prefix, size_pt) + hyphen_width;
                     if w <= max_width {
                         hyphen_break = Some(b);
                     } else {
@@ -831,7 +887,7 @@ impl<'a> Engine<'a> {
                         .map(|c| c.0)
                         .unwrap_or(word.text.len());
                     let prefix = &word.text[chunk_start_byte..end_byte];
-                    let w = self.font_set.measure(word.flags, prefix, size_pt);
+                    let w = self.measure_text(word.flags, prefix, size_pt);
                     if w > max_width {
                         if last_fit == chunk_start_char {
                             last_fit = j;
@@ -948,19 +1004,16 @@ impl<'a> Engine<'a> {
             return;
         }
         let boxes = std::mem::take(&mut self.pending_highlights);
-        let Some(fill_rgb) = self.style.mark.background_color_rgb() else {
-            return;
-        };
         let page_h_pt = self.page_height_pt();
         let mut bg_ops: Vec<Op> = Vec::new();
         for b in &boxes {
             draw_filled_rect(
                 &mut bg_ops,
                 b.x0_pt,
-                b.baseline_y_pt - b.size_pt * 0.80,
+                b.baseline_y_pt - b.size_pt * 0.80 - b.pad_top_pt,
                 b.x1_pt,
-                b.baseline_y_pt + b.size_pt * 0.20,
-                rgb_color(fill_rgb),
+                b.baseline_y_pt + b.size_pt * 0.20 + b.pad_bottom_pt,
+                b.fill.clone(),
                 page_h_pt,
             );
         }
@@ -1010,6 +1063,9 @@ impl<'a> Engine<'a> {
             });
         }
 
+        let saved_letter_spacing = self.letter_spacing_pt;
+        self.letter_spacing_pt = style.letter_spacing_pt;
+
         BlockPaintCtx {
             saved_left: outer_x_left,
             saved_right: outer_x_right,
@@ -1020,6 +1076,7 @@ impl<'a> Engine<'a> {
             border: style.border.clone(),
             padding_bottom: style.padding.bottom,
             margin_after_pt: style.margin_after_pt,
+            saved_letter_spacing,
         }
     }
 
@@ -1073,6 +1130,7 @@ impl<'a> Engine<'a> {
 
         self.indent_left_pt = ctx.saved_left;
         self.indent_right_pt = ctx.saved_right;
+        self.letter_spacing_pt = ctx.saved_letter_spacing;
         self.advance_y(ctx.margin_after_pt);
     }
 
@@ -1140,9 +1198,10 @@ impl<'a> Engine<'a> {
             small_caps: false,
             small: false,
             underline: false,
+            inline_code: false,
         };
         let size_pt = style.font_size_pt;
-        let measured = self.font_set.measure(flags, text, size_pt);
+        let measured = self.measure_text(flags, text, size_pt);
         let x_pt = match anchor {
             FurnitureAnchor::Left => mm_to_pt(self.style.page.margins_mm.left.max(1.0)),
             FurnitureAnchor::Center => (self.page_width_pt() - measured) / 2.0,
@@ -1155,27 +1214,23 @@ impl<'a> Engine<'a> {
 
         let x_mm = pt_to_mm(x_pt);
         let y_mm = pt_to_mm(self.page_height_pt() - y_pt);
-        let emit = if self.font_set.needs_transliteration(flags) {
-            to_win1252(text)
-        } else {
-            text.to_string()
-        };
 
         ops.push(Op::SaveGraphicsState);
         ops.push(Op::StartTextSection);
         ops.push(Op::SetTextCursor {
             pos: Point::new(Mm(x_mm), Mm(y_mm)),
         });
-        ops.push(Op::SetFont {
-            font: self.font_set.handle(flags),
-            size: Pt(size_pt),
-        });
         ops.push(Op::SetFillColor {
             col: rgb_color(style.text_color_rgb()),
         });
-        ops.push(Op::ShowText {
-            items: vec![TextItem::Text(emit)],
-        });
+        emit_text_chunks(
+            ops,
+            self.font_set,
+            flags,
+            text,
+            size_pt,
+            self.letter_spacing_pt,
+        );
         ops.push(Op::EndTextSection);
         ops.push(Op::RestoreGraphicsState);
     }
@@ -1549,6 +1604,7 @@ impl<'a> Engine<'a> {
             subscript: false,
             small_caps: false,
             small: false,
+            inline_code: false,
         };
         let ctx = self.begin_block(&h2);
         self.write_wrapped_runs(&title_runs, h2.font_size_pt, h2.line_height, flags, color);
@@ -1663,14 +1719,11 @@ impl<'a> Engine<'a> {
         }]);
     }
 
-    fn render_image(&mut self, path: &std::path::Path, alt: &str, caption: Option<&str>) {
-        // Decode via the `image` crate. If anything fails, gracefully
-        // degrade to an italic alt-text paragraph so the document
-        // doesn't lose content. URL paths take a separate fetch
-        // pre-pass that downloads the bytes (gated under the `fetch`
-        // feature); without the feature, URL images fall back to alt
-        // text. SVG content is rasterized via resvg (gated under
-        // `svg`).
+    /// Decode an image from a local path or URL into a `RawImage`,
+    /// applying the 4000px dimension cap. Returns `None` on any
+    /// fetch / decode / conversion failure (logged). URL fetch is
+    /// gated under the `fetch` feature; SVG rasterization under `svg`.
+    fn decode_image_file(&mut self, path: &std::path::Path) -> Option<RawImage> {
         let path_str = path.to_string_lossy();
         let is_url = path_str.starts_with("http://") || path_str.starts_with("https://");
         let bytes_result: Result<Vec<u8>, String> = if is_url {
@@ -1693,8 +1746,7 @@ impl<'a> Engine<'a> {
             Ok(d) => d,
             Err(e) => {
                 log::warn!("could not decode image {:?}: {}", path, e);
-                self.render_image_fallback(alt);
-                return;
+                return None;
             }
         };
 
@@ -1702,8 +1754,7 @@ impl<'a> Engine<'a> {
         // XObject. Treat it like a decode failure.
         if img.width() == 0 || img.height() == 0 {
             log::warn!("image {:?} has zero dimension; skipping", path);
-            self.render_image_fallback(alt);
-            return;
+            return None;
         }
 
         // Bound decoded pixel dimensions. The URL fetch cap limits the
@@ -1729,10 +1780,21 @@ impl<'a> Engine<'a> {
             img
         };
 
-        let raw = match RawImage::from_dynamic_image(img) {
-            Ok(r) => r,
+        match RawImage::from_dynamic_image(img) {
+            Ok(r) => Some(r),
             Err(e) => {
                 log::warn!("could not convert image {:?}: {}", path, e);
+                None
+            }
+        }
+    }
+
+    fn render_image(&mut self, path: &std::path::Path, alt: &str, caption: Option<&str>) {
+        // Decode the image; on any failure degrade to an italic
+        // alt-text paragraph so the document doesn't lose content.
+        let raw = match self.decode_image_file(path) {
+            Some(r) => r,
+            None => {
                 self.render_image_fallback(alt);
                 return;
             }
@@ -1792,32 +1854,35 @@ impl<'a> Engine<'a> {
         self.y_from_top_pt += rendered_h_pt;
 
         if let Some(text) = caption.filter(|s| !s.trim().is_empty()) {
-            // Small gap, then a caption line styled as italic body text
-            // centered horizontally inside the image's content column.
-            self.advance_y(4.0);
-            let base = self.style.paragraph.clone();
-            let caption_size = base.font_size_pt * 0.88;
+            // Caption line styled by `[image.caption]`, wrapped within
+            // the image's width when the image is narrower than the
+            // column.
+            let cap = self.style.image.caption.clone();
+            self.advance_y(cap.margin_before_pt);
+            let base_flags = base_flags_from_block(&cap);
             let saved_left = self.indent_left_pt;
             let saved_right = self.indent_right_pt;
-            // Constrain the caption's wrap width to the image width
-            // when the image is narrower than the column.
             if rendered_w_pt < self.content_width_pt() {
                 self.indent_left_pt = x_pt;
                 self.indent_right_pt = x_pt + rendered_w_pt;
             }
-            let runs = vec![InlineRun { math: None,
+            let runs = vec![InlineRun {
+                math: None,
                 text: text.to_string(),
-                flags: RunFlags::default().with_italic(),
+                flags: RunFlags::default(),
                 link: None,
             }];
-            let color = Some(rgb_color(base.text_color_rgb()));
+            let color = Some(rgb_color(cap.text_color_rgb()));
+            let saved_align = self.current_text_align;
+            self.current_text_align = cap.text_align;
             self.write_wrapped_runs(
                 &runs,
-                caption_size,
-                base.line_height,
-                RunFlags::default().with_italic(),
+                cap.font_size_pt,
+                cap.line_height,
+                base_flags,
                 color,
             );
+            self.current_text_align = saved_align;
             self.indent_left_pt = saved_left;
             self.indent_right_pt = saved_right;
         }
@@ -1842,7 +1907,11 @@ impl<'a> Engine<'a> {
         let before_pt = self.style.table.margin_before_pt;
         let after_pt = self.style.table.margin_after_pt;
         let row_gap_pt = self.style.table.row_gap_pt;
-        const CELL_PAD_PT: f32 = 4.0;
+        // Tables don't go through begin_block; scope letter spacing
+        // here — header cells use `[table.header]`, data cells
+        // `[table.cell]`.
+        let saved_letter_spacing = self.letter_spacing_pt;
+        self.letter_spacing_pt = s_header.letter_spacing_pt;
 
         self.advance_y(before_pt);
 
@@ -1885,6 +1954,7 @@ impl<'a> Engine<'a> {
         self.advance_y(row_gap_pt);
 
         // Data rows.
+        self.letter_spacing_pt = s_cell.letter_spacing_pt;
         let mut table_rows: Vec<Vec<TableCell<InlineRun>>> = rows.to_vec();
         for row in &mut table_rows {
             row.resize_with(col_count, || TableCell::new(Vec::new()));
@@ -1920,6 +1990,26 @@ impl<'a> Engine<'a> {
                 self.advance_y(row_gap_pt);
             }
             let group_top = self.y_from_top_pt;
+            // Zebra striping: tint alternate data rows (every other
+            // row, first data row left untinted) when configured.
+            if let Some(bg) = self.style.table.alternating_row_background {
+                if row_idx % 2 == 1 {
+                    let table_left = self.indent_left_pt;
+                    let table_right = table_left + col_width * col_count as f32;
+                    let page_h = self.page_height_pt();
+                    let fill = rgb_color((bg.r, bg.g, bg.b));
+                    self.close_text_section();
+                    draw_filled_rect(
+                        &mut self.page_ops,
+                        table_left,
+                        group_top,
+                        table_right,
+                        group_top + group_height,
+                        fill,
+                        page_h,
+                    );
+                }
+            }
             let group_heights = &row_heights[row_idx..group_end];
             for local_idx in 0..(group_end - row_idx) {
                 self.y_from_top_pt = group_top + group_heights[..local_idx].iter().sum::<f32>();
@@ -1940,7 +2030,7 @@ impl<'a> Engine<'a> {
             row_idx = group_end;
         }
 
-        let _ = CELL_PAD_PT;
+        self.letter_spacing_pt = saved_letter_spacing;
         self.advance_y(after_pt);
     }
 
@@ -1953,6 +2043,7 @@ impl<'a> Engine<'a> {
         bold: bool,
     ) -> f32 {
         let line_h = font_size * line_height_mult.max(0.5);
+        let pad = self.style.table.cell_padding;
         let mut max_lines = 1usize;
         for cell in cells {
             if cell.covered {
@@ -1962,13 +2053,14 @@ impl<'a> Engine<'a> {
                 &cell.content,
                 font_size,
                 line_height_mult,
-                col_width * cell.colspan.max(1) as f32 - 8.0,
+                col_width * cell.colspan.max(1) as f32 - (pad.left + pad.right),
                 self.font_set,
                 bold,
+                self.letter_spacing_pt,
             );
             max_lines = max_lines.max(n_lines);
         }
-        max_lines as f32 * line_h + 6.0
+        max_lines as f32 * line_h + pad.top + pad.bottom
     }
 
     fn measure_table_row_heights(
@@ -2010,6 +2102,16 @@ impl<'a> Engine<'a> {
     /// Sum the rendered widths of a cell's inline runs (no wrapping).
     /// Used for table column alignment — we shift the per-cell text
     /// cursor by `(col_width - measured) / 2` for center, etc.
+    /// Rendered width of `text`, including the active block's letter
+    /// spacing. `letter_spacing_pt` is added after every glyph, so an
+    /// N-char run measures `font_set.measure() + N * letter_spacing_pt`
+    /// — exactly matching the PDF text-cursor advance, so measurement
+    /// and emission never drift.
+    fn measure_text(&self, flags: RunFlags, text: &str, size_pt: f32) -> f32 {
+        self.font_set.measure(flags, text, size_pt)
+            + self.letter_spacing_pt * text.chars().count() as f32
+    }
+
     fn measure_runs_width(&self, runs: &[InlineRun], font_size: f32, bold: bool) -> f32 {
         let mut total = 0.0f32;
         for run in runs {
@@ -2017,7 +2119,7 @@ impl<'a> Engine<'a> {
             if bold {
                 flags = flags.with_bold();
             }
-            total += self.font_set.measure(flags, &run.text, font_size);
+            total += self.measure_text(flags, &run.text, font_size);
         }
         total
     }
@@ -2034,7 +2136,7 @@ impl<'a> Engine<'a> {
         bold: bool,
         color: (u8, u8, u8),
     ) {
-        const CELL_PAD: f32 = 4.0;
+        let pad = self.style.table.cell_padding;
         let saved_left = self.indent_left_pt;
         let saved_right = self.indent_right_pt;
         let row_top = self.y_from_top_pt;
@@ -2046,8 +2148,8 @@ impl<'a> Engine<'a> {
             let colspan = cell.colspan.max(1).min(col_count - i);
             let rowspan = cell.rowspan.max(1).min(row_heights.len() - row_offset);
             let region_height: f32 = row_heights[row_offset..row_offset + rowspan].iter().sum();
-            let cell_left = saved_left + col_width * i as f32 + CELL_PAD;
-            let cell_right = saved_left + col_width * (i + colspan) as f32 - CELL_PAD;
+            let cell_left = saved_left + col_width * i as f32 + pad.left;
+            let cell_right = saved_left + col_width * (i + colspan) as f32 - pad.right;
             let inner_width = cell_right - cell_left;
             let mut runs = cell.content.clone();
             if bold {
@@ -2085,12 +2187,13 @@ impl<'a> Engine<'a> {
                     inner_width,
                     self.font_set,
                     false,
+                    self.letter_spacing_pt,
                 );
                 let content_height =
                     content_lines as f32 * font_size * line_height_mult.max(0.5);
-                row_top + ((region_height - content_height) / 2.0).max(3.0)
+                row_top + ((region_height - content_height) / 2.0).max(pad.top)
             } else {
-                row_top + 3.0
+                row_top + pad.top
             };
             self.write_wrapped_runs(
                 &runs,
@@ -2145,23 +2248,38 @@ impl<'a> Engine<'a> {
     }
 
     fn render_list(&mut self, entries: &[ListEntry]) {
-        const BULLET_GAP_MM: f32 = 2.0;
-        let bullet_gap_pt = mm_to_pt(BULLET_GAP_MM);
         let saved_left = self.indent_left_pt;
+        // Lists don't go through begin_block; scope letter spacing here
+        // so list text honors `[list.*].letter_spacing_pt`.
+        let saved_letter_spacing = self.letter_spacing_pt;
 
         // CommonMark §5.3: the whole list is loose if any item is loose.
         // Pre-compute once so every iteration uses the same gap.
         let any_loose = entries.iter().any(|e| e.loose);
 
         for (idx, entry) in entries.iter().enumerate() {
-            let list_style: ResolvedList = match entry.bullet {
+            let mut list_style: ResolvedList = match entry.bullet {
                 ListBullet::Unordered(_) => self.style.list_unordered.clone(),
                 ListBullet::Ordered(_) => self.style.list_ordered.clone(),
                 ListBullet::TaskChecked | ListBullet::TaskUnchecked => {
                     self.style.list_task.clone()
                 }
             };
+            // Inside a blockquote / admonition, list text inherits the
+            // container typography (the same fields a body paragraph
+            // does); bullet glyphs, indents and spacing stay the list's.
+            if let Some(ov) = &self.text_style_override {
+                let b = &mut list_style.block;
+                b.font_family = ov.font_family.clone();
+                b.font_size_pt = ov.font_size_pt;
+                b.font_weight = ov.font_weight;
+                b.font_style = ov.font_style;
+                b.text_color = ov.text_color;
+                b.line_height = ov.line_height;
+                b.letter_spacing_pt = ov.letter_spacing_pt;
+            }
             let s = &list_style.block;
+            self.letter_spacing_pt = s.letter_spacing_pt;
             let size_pt = s.font_size_pt;
             let line_height = s.line_height;
             let inter_item_gap = if any_loose {
@@ -2172,7 +2290,7 @@ impl<'a> Engine<'a> {
 
             let bullet_text = format_bullet(&entry.bullet, &list_style);
             let bullet_flags = RunFlags::default();
-            let bullet_width = self.font_set.measure(bullet_flags, &bullet_text, size_pt);
+            let bullet_width = self.measure_text(bullet_flags, &bullet_text, size_pt);
 
             // First item: honor `block.margin_before_pt` (list-level
             // "space before the whole list"). Subsequent items use the
@@ -2248,37 +2366,44 @@ impl<'a> Engine<'a> {
                     self.close_text_section();
                     self.ensure_text_section();
                     self.move_cursor_to(bullet_x, bullet_y);
-                    self.page_ops.push(Op::SetFont {
-                        font: self.font_set.handle(bullet_flags),
-                        size: Pt(size_pt),
-                    });
                     self.page_ops.push(Op::SetLineHeight {
                         lh: Pt(size_pt * line_height.max(0.5)),
                     });
                     self.page_ops.push(Op::SetFillColor { col: bullet_col });
-                    let bullet_emit = if needs_xlit {
-                        to_win1252(&bullet_text)
-                    } else {
-                        bullet_text.clone()
-                    };
-                    self.page_ops.push(Op::ShowText {
-                        items: vec![TextItem::Text(bullet_emit)],
-                    });
+                    emit_text_chunks(
+                        &mut self.page_ops,
+                        self.font_set,
+                        bullet_flags,
+                        &bullet_text,
+                        size_pt,
+                        self.letter_spacing_pt,
+                    );
                 }
             }
 
-            self.indent_left_pt = (saved_left + bullet_width + bullet_gap_pt)
+            let text_indent = (saved_left + bullet_width + list_style.bullet_gap_pt)
                 .min(self.indent_right_pt - 10.0);
+            self.indent_left_pt = text_indent;
 
             self.write_wrapped_runs(
                 &entry.runs,
                 size_pt,
                 line_height,
-                RunFlags::default(),
+                base_flags_from_block(s),
                 Some(rgb_color(s.text_color_rgb())),
             );
 
+            // A nested list steps in by `indent_per_level_pt` from this
+            // list's bullet column; an item's other children (e.g.
+            // continuation paragraphs) stay aligned with the item text.
+            let nested_indent = (saved_left + list_style.indent_per_level_pt)
+                .min(self.indent_right_pt - 10.0);
             for child in &entry.children {
+                self.indent_left_pt = if matches!(child, Block::List { .. }) {
+                    nested_indent
+                } else {
+                    text_indent
+                };
                 self.render_block(child);
             }
 
@@ -2291,6 +2416,7 @@ impl<'a> Engine<'a> {
                 self.advance_y(s.margin_after_pt.max(0.0));
             }
         }
+        self.letter_spacing_pt = saved_letter_spacing;
     }
 
     fn render_blockquote(&mut self, body: &[Block]) {
@@ -2301,9 +2427,12 @@ impl<'a> Engine<'a> {
         // it implicitly anymore.
         let s = self.style.blockquote.clone();
         let ctx = self.begin_block(&s);
+        let saved_override = self.text_style_override.take();
+        self.text_style_override = Some(s.clone());
         for child in body {
             self.render_block(child);
         }
+        self.text_style_override = saved_override;
         self.end_block(ctx);
     }
 
@@ -2412,9 +2541,12 @@ impl<'a> Engine<'a> {
         // Small gap between header and body.
         self.advance_y(block_style.font_size_pt * 0.35);
 
+        let saved_override = self.text_style_override.take();
+        self.text_style_override = Some(block_style.clone());
         for child in body {
             self.render_block(child);
         }
+        self.text_style_override = saved_override;
         self.end_block(ctx);
     }
 
@@ -2422,18 +2554,7 @@ impl<'a> Engine<'a> {
         let idx = level.clamp(1, 6) as usize - 1;
         let s = self.style.headings[idx].clone();
         let color = Some(rgb_color(s.text_color_rgb()));
-        let base_flags = RunFlags {
-            bold: s.is_bold(),
-            italic: s.is_italic(),
-            monospace: false,
-            strikethrough: false,
-            highlight: false,
-            superscript: false,
-            subscript: false,
-            small_caps: false,
-            small: false,
-            underline: false,
-        };
+        let base_flags = base_flags_from_block(&s);
 
         let text = collect_heading_text(runs);
         let base_slug = {
@@ -2466,15 +2587,33 @@ impl<'a> Engine<'a> {
             runs
         };
         self.current_text_align = s.text_align;
+        self.first_line_indent_pt = s.indent_pt;
         self.write_wrapped_runs(runs_ref, s.font_size_pt, s.line_height, base_flags, color);
         self.current_text_align = TextAlignment::Left;
         self.end_block(ctx);
     }
 
     fn render_paragraph(&mut self, runs: &[InlineRun]) {
-        let s = self.style.paragraph.clone();
+        let mut s = self.style.paragraph.clone();
+        // Inside a blockquote / admonition, body paragraphs inherit
+        // the container's text typography; structural fields (margins,
+        // padding, border, background) stay paragraph's.
+        if let Some(ov) = &self.text_style_override {
+            s.font_family = ov.font_family.clone();
+            s.font_size_pt = ov.font_size_pt;
+            s.font_weight = ov.font_weight;
+            s.font_style = ov.font_style;
+            s.text_color = ov.text_color;
+            s.line_height = ov.line_height;
+            s.text_align = ov.text_align;
+            s.underline = ov.underline;
+            s.strikethrough = ov.strikethrough;
+            s.small_caps = ov.small_caps;
+            s.letter_spacing_pt = ov.letter_spacing_pt;
+            s.indent_pt = ov.indent_pt;
+        }
         let color = Some(rgb_color(s.text_color_rgb()));
-        let base = RunFlags::default();
+        let base = base_flags_from_block(&s);
         let ctx = self.begin_block(&s);
         let owned_runs;
         let runs_ref: &[InlineRun] = if s.small_caps {
@@ -2484,6 +2623,7 @@ impl<'a> Engine<'a> {
             runs
         };
         self.current_text_align = s.text_align;
+        self.first_line_indent_pt = s.indent_pt;
         self.write_wrapped_runs(runs_ref, s.font_size_pt, s.line_height, base, color);
         self.current_text_align = TextAlignment::Left;
         self.end_block(ctx);
@@ -2492,8 +2632,11 @@ impl<'a> Engine<'a> {
     fn render_code_block(&mut self, lines: &[String]) {
         let s = self.style.code_block.clone();
         let color = Some(rgb_color(s.text_color_rgb()));
-        let base = RunFlags::default().with_monospace();
+        let base = base_flags_from_block(&s).with_monospace();
         let ctx = self.begin_block(&s);
+        self.in_code_block = true;
+        self.current_text_align = s.text_align;
+        self.first_line_indent_pt = s.indent_pt;
         for line in lines {
             let run = InlineRun { math: None,
                 text: line.clone(),
@@ -2508,6 +2651,8 @@ impl<'a> Engine<'a> {
                 color.clone(),
             );
         }
+        self.current_text_align = TextAlignment::Left;
+        self.in_code_block = false;
         self.end_block(ctx);
     }
 
@@ -2558,7 +2703,7 @@ impl<'a> Engine<'a> {
         runs: &[InlineRun],
         font_size: f32,
         line_height_mult: f32,
-        _base_flags: RunFlags,
+        base_flags: RunFlags,
         color: Option<Color>,
     ) {
         if runs.is_empty() {
@@ -2566,6 +2711,26 @@ impl<'a> Engine<'a> {
         }
         let size_pt = font_size;
         let line_height_pt = size_pt * line_height_mult.max(0.5);
+        // First-line indent applies once; consume it so nested calls
+        // (e.g. list children) don't inherit it.
+        let first_line_indent_pt = std::mem::take(&mut self.first_line_indent_pt);
+
+        // Fold the block-level base style (e.g. a heading's bold
+        // weight) into every run so it isn't lost when a run carries
+        // its own inline flags. A default `base_flags` is a no-op.
+        let merged_runs;
+        let runs: &[InlineRun] = if base_flags == RunFlags::default() {
+            runs
+        } else {
+            merged_runs = runs
+                .iter()
+                .map(|r| InlineRun {
+                    flags: r.flags.or(base_flags),
+                    ..r.clone()
+                })
+                .collect::<Vec<_>>();
+            &merged_runs
+        };
 
         // Split runs into a flat sequence of (word, flags) pairs.
         // Whitespace is the only break opportunity in this phase.
@@ -2579,22 +2744,57 @@ impl<'a> Engine<'a> {
         // chopped at character boundaries so the chunks each fit. URLs,
         // long identifiers, CJK runs without spaces, etc.
         words = self.split_long_words(words, max_width, size_pt);
+        // `[code_inline].padding` is applied to the first / last word
+        // of each contiguous inline-code span: pad.left on the first,
+        // pad.right on the last. Middle words and runs that aren't
+        // inline-code get (0, 0), so a non-inline-code document picks
+        // up no per-word overhead.
+        let ci_pad_l = self.style.code_inline.padding.left;
+        let ci_pad_r = self.style.code_inline.padding.right;
+        let is_inline_code_word = |w: &InlineRun| {
+            w.math.is_none() && w.flags.inline_code && !self.in_code_block
+        };
+        let word_pads: Vec<(f32, f32)> = if ci_pad_l == 0.0 && ci_pad_r == 0.0 {
+            vec![(0.0, 0.0); words.len()]
+        } else {
+            (0..words.len())
+                .map(|i| {
+                    if !is_inline_code_word(&words[i]) {
+                        return (0.0, 0.0);
+                    }
+                    let prev_ic = i > 0 && is_inline_code_word(&words[i - 1]);
+                    let next_ic = i + 1 < words.len() && is_inline_code_word(&words[i + 1]);
+                    (
+                        if prev_ic { 0.0 } else { ci_pad_l },
+                        if next_ic { 0.0 } else { ci_pad_r },
+                    )
+                })
+                .collect()
+        };
         let mut lines: Vec<Vec<TextSegment>> = Vec::new();
         let mut current: Vec<TextSegment> = Vec::new();
         let mut current_width = 0.0f32;
 
-        for word in &words {
+        for (wi, word) in words.iter().enumerate() {
+            let (pad_before_pt, pad_after_pt) = word_pads[wi];
             let word_width = match &word.math {
                 Some(tex) => self
                     .inline_math_frag(tex, size_pt)
                     .map(|f| f.w)
                     .unwrap_or(0.0),
-                None => self.font_set.measure(word.flags, &word.text, size_pt),
-            };
+                None => self.measure_text(word.flags, &word.text, size_pt),
+            } + pad_before_pt
+                + pad_after_pt;
 
+            // The first line is narrowed by the first-line indent.
+            let line_limit = if lines.is_empty() {
+                max_width - first_line_indent_pt
+            } else {
+                max_width
+            };
             // If the very first piece of a line is wider than the
             // page, push it anyway — we don't break inside a word.
-            if !current.is_empty() && current_width + word_width > max_width {
+            if !current.is_empty() && current_width + word_width > line_limit {
                 lines.push(std::mem::take(&mut current));
                 current_width = 0.0;
                 // Drop any leading whitespace on the new line.
@@ -2608,6 +2808,8 @@ impl<'a> Engine<'a> {
                 flags: word.flags,
                 link: word.link.clone(),
                 math: word.math.clone(),
+                pad_before_pt,
+                pad_after_pt,
             });
             current_width += word_width;
         }
@@ -2621,7 +2823,9 @@ impl<'a> Engine<'a> {
         // wrapping is settled, those pieces can collapse back into
         // one `ShowText` per same-style run. Fewer Tj operators =
         // tighter selection highlights with no visual gap between
-        // logically-contiguous text.
+        // logically-contiguous text. The merged seg keeps the leader's
+        // `pad_before_pt` and takes on the trailer's `pad_after_pt`
+        // (middle words contribute 0 on both sides by construction).
         for line in &mut lines {
             line.dedup_by(|next, prev| {
                 if prev.math.is_none()
@@ -2630,6 +2834,7 @@ impl<'a> Engine<'a> {
                     && prev.link == next.link
                 {
                     prev.text.push_str(&next.text);
+                    prev.pad_after_pt = next.pad_after_pt;
                     true
                 } else {
                     false
@@ -2638,6 +2843,8 @@ impl<'a> Engine<'a> {
         }
 
         let link_color = Some(rgb_color(self.style.link.text_color_rgb()));
+        let mark_color = rgb_color(self.style.mark.text_color_rgb());
+        let code_inline_color = rgb_color(self.style.code_inline.text_color_rgb());
 
         // Close any open section so the first line of this block
         // starts with a fresh BT (and absolute Td). Subsequent lines
@@ -2645,6 +2852,8 @@ impl<'a> Engine<'a> {
         self.close_text_section();
         let align = self.current_text_align;
         let last_line_idx = lines.len().saturating_sub(1);
+        let mut prev_line_x_start = 0.0f32;
+        let mut prev_baseline_y_pt = 0.0f32;
         for (line_idx, line) in lines.iter().enumerate() {
             // One BT...ET block per paragraph, not per line — PDF
             // viewers use text-block boundaries to determine
@@ -2681,20 +2890,25 @@ impl<'a> Engine<'a> {
                 } else {
                     size_pt
                 };
-                natural_w_pt += self.font_set.measure(seg.flags, &seg.text, s_size);
+                natural_w_pt += self.measure_text(seg.flags, &seg.text, s_size)
+                    + seg.pad_before_pt
+                    + seg.pad_after_pt;
                 if seg.text.chars().all(char::is_whitespace) && !seg.text.is_empty() {
                     space_count += 1;
                 }
             }
-            let slack_pt = (max_width - natural_w_pt).max(0.0);
+            // The first line is shifted right and narrowed by the
+            // first-line indent; later lines use the full column.
+            let line_indent = if line_idx == 0 { first_line_indent_pt } else { 0.0 };
+            let eff_left = self.indent_left_pt + line_indent;
+            let eff_max_width = (max_width - line_indent).max(0.0);
+            let slack_pt = (eff_max_width - natural_w_pt).max(0.0);
             let is_last_line = line_idx == last_line_idx;
 
             let (line_x_start, word_spacing_pt) = match align {
-                TextAlignment::Left => (self.indent_left_pt, 0.0),
-                TextAlignment::Center => {
-                    (self.indent_left_pt + slack_pt * 0.5, 0.0)
-                }
-                TextAlignment::Right => (self.indent_left_pt + slack_pt, 0.0),
+                TextAlignment::Left => (eff_left, 0.0),
+                TextAlignment::Center => (eff_left + slack_pt * 0.5, 0.0),
+                TextAlignment::Right => (eff_left + slack_pt, 0.0),
                 TextAlignment::Justify => {
                     // Don't justify the last line of a paragraph, lines
                     // with no break opportunities, or lines whose slack
@@ -2703,13 +2917,13 @@ impl<'a> Engine<'a> {
                     // short word).
                     let stretch_ok = space_count > 0
                         && slack_pt > 0.0
-                        && slack_pt < max_width * 0.30;
+                        && slack_pt < eff_max_width * 0.30;
                     let tw = if !is_last_line && stretch_ok {
                         (slack_pt / space_count as f32).min(size_pt * 0.5)
                     } else {
                         0.0
                     };
-                    (self.indent_left_pt, tw)
+                    (eff_left, tw)
                 }
             };
             let needs_absolute_td = !matches!(
@@ -2726,10 +2940,20 @@ impl<'a> Engine<'a> {
                     self.page_ops.push(Op::SetFillColor { col: c });
                 }
             } else if needs_absolute_td {
-                self.move_cursor_to(line_x_start, baseline_y_pt);
+                // `Td` moves relative to the previous line's origin,
+                // not absolutely — center/right lines each have a
+                // different left edge, so emit the delta from the
+                // previous line (x shift, one line down).
+                let dx = line_x_start - prev_line_x_start;
+                let dy = -(baseline_y_pt - prev_baseline_y_pt);
+                self.page_ops.push(Op::SetTextCursor {
+                    pos: Point::new(Mm(pt_to_mm(dx)), Mm(pt_to_mm(dy))),
+                });
             } else {
                 self.page_ops.push(Op::AddLineBreak);
             }
+            prev_line_x_start = line_x_start;
+            prev_baseline_y_pt = baseline_y_pt;
 
             // Justify uses the PDF Tw operator (set word spacing) so
             // every space char picks up the extra slack. Set it before
@@ -2776,14 +3000,26 @@ impl<'a> Engine<'a> {
                 } else {
                     (size_pt, baseline_y_pt)
                 };
-                let seg_width = self.font_set.measure(seg.flags, &seg.text, seg_size);
-                let font_handle = self.font_set.handle(seg.flags);
-                let needs_trans = self.font_set.needs_transliteration(seg.flags);
-                let emit_text = if needs_trans {
-                    to_win1252(&seg.text)
-                } else {
-                    seg.text.clone()
-                };
+                let seg_width = self.measure_text(seg.flags, &seg.text, seg_size);
+                // Justified lines widen every space via the PDF `Tw`
+                // operator. `seg_width` (glyphs + letter spacing) does
+                // not include that, so the cursor and decoration rects
+                // must add `word_spacing_pt` per space or underlines /
+                // link boxes drift left of the text. Super/subscript
+                // segments break into their own `Tw`-free section, and
+                // an inline-code span at the boundary contributes
+                // `pad_before_pt + pad_after_pt` of horizontal gap
+                // around its glyphs.
+                let pad_before_pt = seg.pad_before_pt;
+                let pad_after_pt = seg.pad_after_pt;
+                let glyph_advance = seg_width
+                    + if seg.flags.superscript || seg.flags.subscript {
+                        0.0
+                    } else {
+                        word_spacing_pt
+                            * seg.text.chars().filter(|&c| c == ' ').count() as f32
+                    };
+                let seg_advance = pad_before_pt + glyph_advance + pad_after_pt;
 
                 if seg.flags.superscript || seg.flags.subscript {
                     // Close the line's main section, emit the small
@@ -2798,16 +3034,17 @@ impl<'a> Engine<'a> {
                     self.page_ops.push(Op::SetTextCursor {
                         pos: Point::new(Mm(x_mm), Mm(y_mm)),
                     });
-                    self.page_ops.push(Op::SetFont {
-                        font: font_handle,
-                        size: Pt(seg_size),
-                    });
                     if let Some(c) = color.clone() {
                         self.page_ops.push(Op::SetFillColor { col: c });
                     }
-                    self.page_ops.push(Op::ShowText {
-                        items: vec![TextItem::Text(emit_text)],
-                    });
+                    emit_text_chunks(
+                        &mut self.page_ops,
+                        self.font_set,
+                        seg.flags,
+                        &seg.text,
+                        seg_size,
+                        self.letter_spacing_pt,
+                    );
                     self.page_ops.push(Op::EndTextSection);
                     self.page_ops.push(Op::RestoreGraphicsState);
                     cursor_needs_reset = true;
@@ -2834,58 +3071,119 @@ impl<'a> Engine<'a> {
                         }
                         cursor_needs_reset = false;
                     }
-                    // Restore the text fill colour if this is a link
-                    // (link colour) vs body (block colour).
-                    if seg.flags.underline {
+                    // Restore the text fill colour: link colour for a
+                    // link, `[mark]` colour for a highlight, `[code_inline]`
+                    // colour for inline code, otherwise the block colour.
+                    if seg.link.is_some() {
                         if let Some(lc) = link_color.clone() {
                             self.page_ops.push(Op::SetFillColor { col: lc });
                         }
+                    } else if seg.flags.highlight {
+                        self.page_ops.push(Op::SetFillColor {
+                            col: mark_color.clone(),
+                        });
+                    } else if seg.flags.monospace && !self.in_code_block {
+                        self.page_ops.push(Op::SetFillColor {
+                            col: code_inline_color.clone(),
+                        });
                     } else if let Some(c) = color.clone() {
                         self.page_ops.push(Op::SetFillColor { col: c });
                     }
-                    self.page_ops.push(Op::SetFont {
-                        font: font_handle,
-                        size: Pt(seg_size),
-                    });
-                    self.page_ops.push(Op::ShowText {
-                        items: vec![TextItem::Text(emit_text)],
-                    });
+                    // Insert the inline-code left padding as a TJ
+                    // negative offset (in thousandths of em) — moves
+                    // the text cursor right by `pad_before_pt` without
+                    // emitting a glyph, so the inline-code text starts
+                    // `pad_before_pt` past the previous seg's end.
+                    if pad_before_pt > 0.0 {
+                        self.page_ops.push(Op::ShowText {
+                            items: vec![TextItem::Offset(-pad_before_pt * 1000.0 / seg_size)],
+                        });
+                    }
+                    emit_text_chunks(
+                        &mut self.page_ops,
+                        self.font_set,
+                        seg.flags,
+                        &seg.text,
+                        seg_size,
+                        self.letter_spacing_pt,
+                    );
+                    if pad_after_pt > 0.0 {
+                        self.page_ops.push(Op::ShowText {
+                            items: vec![TextItem::Offset(-pad_after_pt * 1000.0 / seg_size)],
+                        });
+                    }
                 }
 
                 // Buffer decorations and link rects until the line is
                 // finished — they need a closed text section to draw
-                // paths on top.
-                if seg.flags.underline || seg.flags.strikethrough || seg.link.is_some() {
-                    let decoration_y_pt = if seg.flags.strikethrough {
+                // paths on top. Underline / strikethrough come from the
+                // run flags (`<u>`, `~~`), from `[link]` for links, and
+                // from `[code_inline]` / `[mark]` for inline code and
+                // highlighted spans.
+                let link_underline = seg.link.is_some() && self.style.link.underline;
+                let is_inline_code = seg.flags.monospace && !self.in_code_block;
+                let dec_underline = seg.flags.underline
+                    || link_underline
+                    || (is_inline_code && self.style.code_inline.underline)
+                    || (seg.flags.highlight && self.style.mark.underline);
+                let dec_strike = seg.flags.strikethrough
+                    || (is_inline_code && self.style.code_inline.strikethrough)
+                    || (seg.flags.highlight && self.style.mark.strikethrough);
+                if dec_underline || dec_strike || seg.link.is_some() {
+                    let decoration_y_pt = if dec_strike {
                         baseline_y_pt - size_pt * 0.30
                     } else {
                         baseline_y_pt + size_pt * 0.12
                     };
                     self.pending_decorations.push(PendingDecoration {
-                        kind: if seg.flags.strikethrough {
+                        kind: if dec_strike {
                             DecorationKind::Strike
-                        } else if seg.flags.underline {
+                        } else if dec_underline {
                             DecorationKind::Underline
                         } else {
                             DecorationKind::None
                         },
-                        x0_pt: x_cursor_pt,
-                        x1_pt: x_cursor_pt + seg_width,
+                        x0_pt: x_cursor_pt + pad_before_pt,
+                        x1_pt: x_cursor_pt + pad_before_pt + glyph_advance,
                         y_pt: decoration_y_pt,
                         link: seg.link.clone(),
                         size_pt,
                         baseline_y_pt,
                     });
                 }
-                if seg.flags.highlight {
+                // Inline background box: `[mark]` fill for a highlight,
+                // `[code_inline]` fill for inline code (not code blocks).
+                // Inline-code boxes span the full padded extent (the
+                // padding is the *whole point* of the box — it sits
+                // outside the text); mark highlights carry no padding.
+                let inline_bg = if seg.flags.highlight {
+                    self.style.mark.background_color_rgb()
+                } else if seg.flags.monospace && !self.in_code_block {
+                    self.style.code_inline.background_color_rgb()
+                } else {
+                    None
+                };
+                if let Some(rgb) = inline_bg {
+                    let is_ic_box = seg.flags.monospace && !self.in_code_block;
+                    let (pad_top, pad_bot) = if is_ic_box {
+                        (
+                            self.style.code_inline.padding.top,
+                            self.style.code_inline.padding.bottom,
+                        )
+                    } else {
+                        (0.0, 0.0)
+                    };
                     self.pending_highlights.push(HighlightBox {
                         x0_pt: x_cursor_pt,
-                        x1_pt: x_cursor_pt + seg_width,
+                        x1_pt: x_cursor_pt + seg_advance,
                         baseline_y_pt,
                         size_pt,
+                        fill: rgb_color(rgb),
+                        pad_top_pt: pad_top,
+                        pad_bottom_pt: pad_bot,
                     });
                 }
-                x_cursor_pt += seg_width;
+                x_cursor_pt += seg_advance;
             }
 
             // A line that had any superscript break also has its
@@ -3018,6 +3316,7 @@ struct BlockPaintCtx {
     border: ResolvedBorder,
     padding_bottom: f32,
     margin_after_pt: f32,
+    saved_letter_spacing: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3038,15 +3337,63 @@ struct PendingDecoration {
     baseline_y_pt: f32,
 }
 
-/// One `==highlight==` segment's box, in top-down points. Collected
-/// while a text section is open and painted (under the glyphs) when
-/// the section closes.
+/// One inline background box (a `==highlight==` span or inline-code
+/// span), in top-down points. Collected while a text section is open
+/// and painted — with its own `fill` — under the glyphs when the
+/// section closes.
 #[derive(Debug)]
 struct HighlightBox {
     x0_pt: f32,
     x1_pt: f32,
     baseline_y_pt: f32,
     size_pt: f32,
+    fill: Color,
+    /// Extra pt above the natural top edge (inline-code
+    /// `padding.top`). Zero for `==mark==` highlights.
+    pad_top_pt: f32,
+    /// Extra pt below the natural bottom edge (inline-code
+    /// `padding.bottom`).
+    pad_bottom_pt: f32,
+}
+
+/// Emit `text` at `size_pt` using the run flags' resolved font chain.
+/// When the FontSet has no fallbacks, this produces exactly one
+/// `SetFont` + `ShowText` pair — identical to the pre-fallback emit
+/// path. When fallbacks are loaded, the text is split into per-font
+/// chunks ([`FontSet::split_for_emit`]) and one `SetFont` + `ShowText`
+/// pair is emitted per chunk, so codepoints uncovered by the primary
+/// render in their first covering fallback.
+fn emit_text_chunks(
+    ops: &mut Vec<Op>,
+    font_set: &FontSet,
+    flags: RunFlags,
+    text: &str,
+    size_pt: f32,
+    letter_spacing_pt: f32,
+) {
+    // `Tc` adds spacing after every glyph. Emit it only when set —
+    // a zero value leaves the op out so non-letter-spaced documents
+    // render byte-identically. `Tc` is reset by the next `BT`, so a
+    // block keeps its own spacing without leaking to the next.
+    if letter_spacing_pt != 0.0 {
+        ops.push(Op::SetCharacterSpacing {
+            multiplier: letter_spacing_pt,
+        });
+    }
+    for chunk in font_set.split_for_emit(flags, text, size_pt) {
+        ops.push(Op::SetFont {
+            font: chunk.handle,
+            size: Pt(size_pt),
+        });
+        let emit = if chunk.needs_transliteration {
+            to_win1252(&chunk.text)
+        } else {
+            chunk.text
+        };
+        ops.push(Op::ShowText {
+            items: vec![TextItem::Text(emit)],
+        });
+    }
 }
 
 /// Convert a UTF-8 string to ASCII for safe rendering with
@@ -3070,24 +3417,7 @@ struct HighlightBox {
 fn to_win1252(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        match c as u32 {
-            // ASCII passes through untouched.
-            0x00..=0x7F => out.push(c),
-            // Common Win-1252 punctuation -> ASCII equivalents.
-            0x2014 => out.push_str("--"),  // — em-dash
-            0x2013 => out.push('-'),       // – en-dash
-            0x2022 => out.push('*'),       // • bullet
-            0x2018 | 0x2019 => out.push('\''), // ' '
-            0x201C | 0x201D => out.push('"'),  // " "
-            0x2026 => out.push_str("..."), // …
-            0x00A0 => out.push(' '),       // non-breaking space
-            0x00A9 => out.push_str("(c)"),
-            0x00AE => out.push_str("(R)"),
-            0x2122 => out.push_str("(TM)"),
-            // Everything else is mapped to '?' so the loss is visible
-            // and not silently scrambled.
-            _ => out.push('?'),
-        }
+        super::font::for_each_builtin_emit_char(c, |emitted| out.push(emitted));
     }
     out
 }
@@ -3101,11 +3431,16 @@ fn count_wrapped_lines(
     max_width: f32,
     font_set: &FontSet,
     bold: bool,
+    letter_spacing_pt: f32,
 ) -> usize {
     if runs.is_empty() {
         return 1;
     }
     let size_pt = font_size;
+    let measure = |flags: RunFlags, text: &str| {
+        font_set.measure(flags, text, size_pt)
+            + letter_spacing_pt * text.chars().count() as f32
+    };
     let mut current = 0.0f32;
     let mut lines = 1usize;
     for run in runs {
@@ -3114,8 +3449,8 @@ fn count_wrapped_lines(
             flags = flags.with_bold();
         }
         for word in run.text.split_whitespace() {
-            let w = font_set.measure(flags, word, size_pt);
-            let space = font_set.measure(flags, " ", size_pt);
+            let w = measure(flags, word);
+            let space = measure(flags, " ");
             if current + w > max_width {
                 lines += 1;
                 current = w + space;
@@ -3686,6 +4021,14 @@ struct TextSegment {
     link: Option<String>,
     /// Raw TeX when this segment is an inline-math box (`text` empty).
     math: Option<String>,
+    /// Horizontal pt of padding to insert before this segment's glyphs
+    /// (and after, respectively). Non-zero only for the first / last
+    /// segment of a contiguous inline-code span when
+    /// `[code_inline].padding.left` / `.right` are set. Emitted as a
+    /// `TextItem::Offset` so the gap lives inside the line's BT and
+    /// text selection stays contiguous.
+    pad_before_pt: f32,
+    pad_after_pt: f32,
 }
 
 /// Flatten a run list to a sequence of (word | whitespace) pieces,
@@ -3748,6 +4091,20 @@ fn pt_to_mm(pt: f32) -> f32 {
     pt / MM_TO_PT
 }
 
+
+/// Block-level style → base run flags. Weight, slant, and the
+/// underline / strikethrough decorations are set on the style block
+/// rather than by inline markup, so they have to be folded into the
+/// base flags that `write_wrapped_runs` applies to every run.
+fn base_flags_from_block(s: &ResolvedBlock) -> RunFlags {
+    RunFlags {
+        bold: s.is_bold(),
+        italic: s.is_italic(),
+        underline: s.underline,
+        strikethrough: s.strikethrough,
+        ..RunFlags::default()
+    }
+}
 
 /// Concatenate the plain text of a heading's inline runs. The PDF
 /// outline + slug source. Markdown emphasis / inline code inside a

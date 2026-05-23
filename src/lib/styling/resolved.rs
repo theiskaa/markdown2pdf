@@ -36,6 +36,11 @@ pub struct ResolvedStyle {
     pub footer: Option<ResolvedPageFurniture>,
     pub title_page: Option<ResolvedTitlePage>,
     pub toc: Option<ResolvedToc>,
+    /// Ordered list of fallback font names (resolved from
+    /// `[defaults].fallback_fonts`). The renderer consults these in
+    /// order when the primary body / code font lacks a glyph for a
+    /// codepoint.
+    pub fallback_fonts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -92,6 +97,7 @@ pub struct ResolvedList {
     pub indent_per_level_pt: f32,
     pub item_spacing_tight_pt: f32,
     pub item_spacing_loose_pt: f32,
+    pub bullet_gap_pt: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,13 +113,15 @@ pub struct ResolvedTable {
     pub margin_after_pt: f32,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ResolvedImage {
     pub max_width_pct: f32,
     pub align: ImageAlign,
     pub margin_before_pt: f32,
     pub margin_after_pt: f32,
+    /// Styling for the caption line drawn under an image.
+    pub caption: ResolvedBlock,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

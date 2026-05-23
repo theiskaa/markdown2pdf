@@ -177,6 +177,13 @@ pub struct VariantUsage {
     pub mono_bold: bool,
     pub mono_italic: bool,
     pub mono_bold_italic: bool,
+    /// Variants used by inline-code / `<kbd>` runs (separate from
+    /// fenced code blocks so a configured `[code_inline].font_family`
+    /// only loads the variants inline code actually references).
+    pub inline_code_regular: bool,
+    pub inline_code_bold: bool,
+    pub inline_code_italic: bool,
+    pub inline_code_bold_italic: bool,
 }
 
 impl VariantUsage {
@@ -280,6 +287,15 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
 
 fn walk_run(run: &InlineRun, u: &mut VariantUsage) {
     let f = run.flags;
+    if f.inline_code {
+        match (f.bold, f.italic) {
+            (false, false) => u.inline_code_regular = true,
+            (true, false) => u.inline_code_bold = true,
+            (false, true) => u.inline_code_italic = true,
+            (true, true) => u.inline_code_bold_italic = true,
+        }
+        return;
+    }
     match (f.monospace, f.bold, f.italic) {
         (false, false, false) => {}
         (false, true, false) => u.body_bold = true,
@@ -320,6 +336,12 @@ pub struct RunFlags {
     /// Renders at ~85% of body size on the original baseline. Set
     /// by `<small>` inline HTML.
     pub small: bool,
+    /// True for monospace runs that originated from `` `inline code` ``
+    /// or `<kbd>` (not fenced code blocks). When `[code_inline]
+    /// font_family` is configured, these runs route through a separate
+    /// `external_code_inline` family so inline code can use a different
+    /// monospace face than block code.
+    pub inline_code: bool,
 }
 
 impl RunFlags {
@@ -358,5 +380,29 @@ impl RunFlags {
     pub fn with_small(mut self) -> Self {
         self.small = true;
         self
+    }
+    pub fn with_inline_code(mut self) -> Self {
+        self.inline_code = true;
+        self.monospace = true;
+        self
+    }
+
+    /// OR every flag with `other`. Folds a block-level base style
+    /// (e.g. a heading's bold weight) into per-run inline flags so
+    /// the block style isn't lost when a run carries its own flags.
+    pub fn or(self, other: Self) -> Self {
+        Self {
+            bold: self.bold || other.bold,
+            italic: self.italic || other.italic,
+            monospace: self.monospace || other.monospace,
+            strikethrough: self.strikethrough || other.strikethrough,
+            underline: self.underline || other.underline,
+            highlight: self.highlight || other.highlight,
+            superscript: self.superscript || other.superscript,
+            subscript: self.subscript || other.subscript,
+            small_caps: self.small_caps || other.small_caps,
+            small: self.small || other.small,
+            inline_code: self.inline_code || other.inline_code,
+        }
     }
 }

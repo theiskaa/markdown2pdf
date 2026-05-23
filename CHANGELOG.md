@@ -6,6 +6,62 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Each release section below is what ships as the GitHub Release notes.
 
+## [1.4.0] - 2026-05-21
+
+**Fallback font chain.** A new `fallback_fonts` list on `[defaults]`
+in the TOML config (and `FontConfig::with_fallback_fonts(...)` for
+programmatic callers) takes an ordered list of font names. At render
+time each codepoint is matched against the primary first, then each
+fallback in declaration order; the first font that has a real glyph
+emits it. A codepoint covered by nothing in the chain degrades
+visibly (a `?` with the built-in primary, a missing-glyph box with an
+external Unicode primary) rather than failing the render. Names
+resolve the same way as `font_family`: built-in aliases, system font
+names, or paths to `.ttf` / `.otf` files; a font that can't be
+located logs a warning and is skipped. Wrapping and emission stay
+consistent across font boundaries, so mixed-script paragraphs don't
+overlap or break early.
+
+**Built-in measurement matches emission.** When no Unicode font is
+configured, the renderer transliterates non-ASCII punctuation to
+ASCII before emission (`•` → `*`, `—` → `--`, `…` → `...`, `(c)`,
+`(R)`, `(TM)`, smart quotes, NBSP). Line measurement, however, priced
+those source codepoints at the font's average glyph width, so the
+measured advance disagreed with what was actually drawn. The layout
+cursor drifted ahead of the PDF text matrix by the difference on
+every transliterated character, and the error compounded along the
+line — decorations and link hit-rectangles ended up beside their
+text rather than under it, most visibly on a line of several links
+separated by `•` or `—`. Measurement now routes every codepoint
+through the same transliteration the emit path uses, so the two
+agree exactly. Documents with no transliterated characters, and any
+document rendered with a Unicode font, are unaffected.
+
+**Config file discovery.** With no `-c` flag, the CLI now finds a
+config automatically — `MARKDOWN2PDF_CONFIG`, then `./markdown2pdf.toml`,
+then `~/.config/markdown2pdf/config.toml` — before the default theme.
+
+**Style-config fidelity.** A class of style fields the renderer was
+silently dropping is now honoured end-to-end. Body font: system-font
+lookup returning a bold face (e.g. `Tahoma Bold.ttf`) as the regular
+weight is fixed (exact filename wins), `[defaults].font_family`
+actually loads and embeds, heading bold from the style block is
+applied with its bold/italic faces embedded, and `[link].underline =
+false` suppresses the link underline. Per-block: `letter_spacing_pt`,
+`indent_pt`, `underline` / `strikethrough` / `text_align`, table
+`cell_padding` and `alternating_row_background`. Inline: every
+`code_inline` and `[mark]` field including `font_family` and
+`padding`. Layout: list `indent_per_level_pt` (plus a new
+`bullet_gap_pt` knob on `[list.common]`, defaulting to the previous
+`5.67` pt), image caption styling, title-page cover image, admonition
+body inheritance — nested lists inside a blockquote / admonition now
+adopt the container's typography. Center- and right-aligned
+paragraphs no longer collapse their wrapped lines onto line one.
+Multi-column page layout (`page.columns`) is the only audited field
+still deferred — [#102](https://github.com/theiskaa/markdown2pdf/issues/102).
+
+Resolves [#81](https://github.com/theiskaa/markdown2pdf/issues/81), [#97](https://github.com/theiskaa/markdown2pdf/issues/97), and [#100](https://github.com/theiskaa/markdown2pdf/issues/100).
+
 ## [1.3.0] - 2026-05-20
 
 Three additions: merged GFM table cells, inline HTML anchors and
@@ -418,6 +474,7 @@ Initial release: a Markdown lexer and a `genpdfi`-backed PDF
 converter with basic styling, configuration via `mdprc`, code blocks,
 emphasis, links, and nested tokens.
 
+[1.4.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.4.0
 [1.3.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.3.0
 [1.2.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.2.0
 [1.1.0]: https://github.com/theiskaa/markdown2pdf/releases/tag/v1.1.0
