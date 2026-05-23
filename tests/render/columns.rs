@@ -585,3 +585,32 @@ Trailing text at the column edge.
          (max Td x = {max_x:.1})"
     );
 }
+
+#[test]
+fn bare_url_longer_than_column_wraps_at_char_boundary() {
+    // Lock in the existing split_long_words behavior: an unbroken
+    // token longer than the column gets chopped at character
+    // boundaries so the chunks fit. A regression would let the URL
+    // overflow into the next column.
+    let md = r##"# Long URL
+
+https://example.com/very/long/path/that/is/wider/than/any/single/column/and/should/wrap/at/character/boundaries/instead/of/overflowing?query=true&another=more
+
+Trailing text.
+"##;
+    let bytes = render(
+        md,
+        r##"
+        [page]
+        columns = 4
+        column_gap_mm = 4
+        "##,
+    );
+    let xs = td_xs(&bytes);
+    let max_x = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        max_x < 200.0,
+        "bare URL must wrap inside col 0 (max Td x = {max_x:.1}, \
+         col 0 right ≈ 168pt)"
+    );
+}
