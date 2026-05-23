@@ -6,7 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Each release section below is what ships as the GitHub Release notes.
 
-## [1.4.0] - 2026-05-21
+## [1.4.0] - 2026-05-23
 
 **Fallback font chain.** A new `fallback_fonts` list on `[defaults]`
 in the TOML config (and `FontConfig::with_fallback_fonts(...)` for
