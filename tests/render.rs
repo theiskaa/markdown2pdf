@@ -64,3 +64,6 @@ mod _pdf_size_audit;
 
 #[path = "render/config_fidelity.rs"]
 mod config_fidelity;
+
+#[path = "render/columns.rs"]
+mod columns;
