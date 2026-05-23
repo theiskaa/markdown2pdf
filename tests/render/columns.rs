@@ -316,3 +316,190 @@ aliqua. Ut enim ad minim veniam, quis nostrud exercitation.
         "mixed-block doc should still flow into a second column"
     );
 }
+
+/// All `y` values from `<x> <y> Td` ops, in emission order.
+fn td_ys(bytes: &[u8]) -> Vec<f32> {
+    let decoded = scan(bytes);
+    let s = String::from_utf8_lossy(&decoded);
+    let mut ys = Vec::new();
+    for line in s.lines() {
+        let trimmed = line.trim_end();
+        if !trimmed.ends_with(" Td") {
+            continue;
+        }
+        let mut it = trimmed.split_whitespace();
+        let _x = it.next();
+        let y = it.next();
+        let op = it.next();
+        if op != Some("Td") {
+            continue;
+        }
+        if let Some(y) = y.and_then(|t| t.parse::<f32>().ok()) {
+            ys.push(y);
+        }
+    }
+    ys
+}
+
+#[test]
+fn table_in_narrow_column_stays_within_body_right_edge() {
+    // Regression for the MIN_COL_WIDTH_PT=24 floor that forced a
+    // 6-cell table in a 4-column layout (col_w ≈ 122pt, /6 ≈ 20pt per
+    // cell) to overflow by 26pt and bleed into the next column's
+    // text. With the padding-aware floor (~9pt), 20pt cells fit
+    // exactly inside the column.
+    let md = r##"# Header
+
+Some leading text.
+
+| Column One | Column Two | Column Three | Column Four | Column Five | Column Six |
+| ---------- | ---------- | ------------ | ----------- | ----------- | ---------- |
+| a          | b          | c            | d           | e           | f          |
+| 1          | 2          | 3            | 4           | 5           | 6          |
+
+Trailing paragraph.
+"##;
+    let bytes = render(
+        md,
+        r##"
+        [page]
+        columns = 4
+        column_gap_mm = 4
+        "##,
+    );
+    let xs = td_xs(&bytes);
+    // Letter @ 16mm margins: body right ≈ 566.6pt. The table's last
+    // cell text origin must sit inside the body — without the fix the
+    // last cell origin was beyond the column edge it should have
+    // belonged to, and the per-cell `Td` x went past ~430pt while
+    // its column ended at ~300pt.
+    let max_x = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        max_x < 567.0,
+        "no Td origin should land past the body right edge \
+         (max_x={max_x:.1})"
+    );
+}
+
+#[test]
+fn table_cells_dont_overflow_their_column() {
+    // Stronger guard than the body-edge check: in a 4-column layout
+    // the table sits in one of the 4 columns, and every per-cell
+    // origin should land inside that column's [left, right] range.
+    // The column gap is 4mm ≈ 11.34pt, so each column occupies a
+    // ~122pt-wide band starting at 45.4 / 178.5 / 311.7 / 444.8.
+    let md = r##"## Header
+
+Body filler so the table doesn't end up at page-top alone.
+
+| Column One | Column Two | Column Three | Column Four | Column Five | Column Six |
+| ---------- | ---------- | ------------ | ----------- | ----------- | ---------- |
+| a          | b          | c            | d           | e           | f          |
+
+More text.
+"##;
+    let bytes = render(
+        md,
+        r##"
+        [page]
+        columns = 4
+        column_gap_mm = 4
+        "##,
+    );
+    let xs = td_xs(&bytes);
+    // 4 column ranges on Letter with 16mm margins, 4mm gaps.
+    let col_ranges: &[(f32, f32)] = &[
+        (45.0, 168.0),   // col 0
+        (178.0, 301.0),  // col 1
+        (311.0, 434.0),  // col 2
+        (444.0, 567.0),  // col 3
+    ];
+    for x in &xs {
+        let in_any = col_ranges
+            .iter()
+            .any(|(l, r)| *x >= *l - 0.5 && *x <= *r + 0.5);
+        assert!(
+            in_any,
+            "Td origin x={x:.1} fell into a column gap or outside the body"
+        );
+    }
+}
+
+#[test]
+fn multicolumn_collapses_first_block_top_margin() {
+    // B2: in `num_columns > 1` mode, the first block at the top of
+    // each column drops its `margin_before_pt` so col 0 (H1) and
+    // col 1+ (paragraph) align. A heading with a large
+    // `margin_before_pt` is the easiest signal — without the fix
+    // the first Td is pushed down by that margin; with the fix it
+    // sits at the top.
+    let md = "# Title\n\nLong paragraph. ".repeat(40);
+    let big_margin_cfg = r##"
+        [headings.h1]
+        margin_before_pt = 30.0
+        [page]
+        columns = 2
+        column_gap_mm = 8
+    "##;
+    let small_margin_cfg = r##"
+        [headings.h1]
+        margin_before_pt = 30.0
+    "##;
+    let multi = render(&md, big_margin_cfg);
+    let single = render(&md, small_margin_cfg);
+    // PDF y grows upward, so a larger topmost-y means closer to the
+    // page top. Suppression in multi-column should push the first
+    // block up by ~30pt vs single-column where the margin is honored.
+    let topmost_multi = td_ys(&multi)
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let topmost_single = td_ys(&single)
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let delta = topmost_multi - topmost_single;
+    assert!(
+        delta > 20.0,
+        "multi-column first block should sit ~30pt higher \
+         (topmost_multi={topmost_multi:.1}, \
+          topmost_single={topmost_single:.1}, delta={delta:.1})"
+    );
+}
+
+#[test]
+fn singlecolumn_preserves_first_block_top_margin() {
+    // Companion to the multi-column collapse test: single-column
+    // (the default) must keep `margin_before_pt` on the first block
+    // so existing renders stay byte-identical.
+    let md = "# Title\n\nBody text. ".repeat(10);
+    let no_margin = render(
+        &md,
+        r##"
+        [headings.h1]
+        margin_before_pt = 0.0
+        "##,
+    );
+    let big_margin = render(
+        &md,
+        r##"
+        [headings.h1]
+        margin_before_pt = 40.0
+        "##,
+    );
+    // The top Td y must be lower (smaller PDF-y) when the heading
+    // has a bigger top margin — single-column never collapses it.
+    let topmost_no = td_ys(&no_margin)
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let topmost_big = td_ys(&big_margin)
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        topmost_no > topmost_big,
+        "single-column must honor margin_before_pt on the first block \
+         (topmost_no={topmost_no:.1}, topmost_big={topmost_big:.1})"
+    );
+}
