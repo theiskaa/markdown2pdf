@@ -1681,7 +1681,7 @@ impl<'a> Engine<'a> {
         let color = rgb_color((m.color.r, m.color.g, m.color.b));
         let base_pt = self.style.paragraph.font_size_pt * m.scale;
 
-        let frag = {
+        let mut frag = {
             let ms = self.math.as_ref().unwrap().as_ref().unwrap();
             match super::math::typeset(&ms.font, content, true, base_pt) {
                 Some(f) => f,
@@ -1696,6 +1696,17 @@ impl<'a> Engine<'a> {
         s.margin_before_pt = m.margin_before_pt;
         s.margin_after_pt = m.margin_after_pt;
         let ctx = self.begin_block(&s);
+        // Scale-to-fit if the equation is wider than the current
+        // column. Re-typeset at a smaller base point size rather than
+        // overflowing into the adjacent column.
+        let avail_w = self.content_width_pt();
+        if frag.w > avail_w && avail_w > 0.0 {
+            let scaled_pt = (base_pt * (avail_w / frag.w)).max(4.0);
+            let ms = self.math.as_ref().unwrap().as_ref().unwrap();
+            if let Some(f) = super::math::typeset(&ms.font, content, true, scaled_pt) {
+                frag = f;
+            }
+        }
         let total_h = frag.asc + frag.desc;
         // Keep the whole equation on one page when it fits. In a
         // multi-column layout this means "in the same column" — push
