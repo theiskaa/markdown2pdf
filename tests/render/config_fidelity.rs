@@ -1,7 +1,9 @@
-//! Hardcore coverage for the `bugfix/config-style-fidelity` branch
-//! fixes. Each behavioral change gets at least one happy-path test, a
-//! "did the no-op stay a no-op?" test, and (where relevant) a negative
-//! test that pins down deliberately-not-inherited behavior.
+//! Coverage for the class of bug where a config field resolves into
+//! `ResolvedStyle` but the renderer silently ignores it. Each test
+//! pairs a positive assertion ("this field actually moves the output")
+//! with a no-op guard ("with the field unset the render is unchanged")
+//! and, where the behavior is deliberate ("code blocks inside a
+//! blockquote do NOT inherit"), a negative test that pins it down.
 //!
 //! All tests live behind the public `parse_into_bytes` API. Two
 //! helpers make the byte-level assertions reliable:
