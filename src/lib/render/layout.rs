@@ -1208,7 +1208,14 @@ impl<'a> Engine<'a> {
     /// Caller must hold the returned ctx unmodified and pass it to
     /// `end_block` after the block's content has been emitted.
     fn begin_block(&mut self, style: &ResolvedBlock) -> BlockPaintCtx {
-        self.advance_y(style.margin_before_pt);
+        // Match CSS multi-column: collapse the first block's top
+        // margin at the top of each column so col 0 (H1) and col 1+
+        // (paragraph) align. Single-column layouts keep the original
+        // breathing room.
+        let at_column_top = (self.y_from_top_pt - self.top_margin_pt()).abs() < 0.01;
+        if !(self.num_columns > 1 && at_column_top) {
+            self.advance_y(style.margin_before_pt);
+        }
         let outer_y_top = self.y_from_top_pt;
         let outer_x_left = self.indent_left_pt;
         let outer_x_right = self.indent_right_pt;
@@ -2107,14 +2114,11 @@ impl<'a> Engine<'a> {
 
         let col_count = headers.len();
         let total_width = self.content_width_pt();
-        // A very wide table (hundreds of columns) drives the even split
-        // below the cell padding, making `col_width - pad` negative:
-        // every word then "overflows" and row height explodes, and the
-        // cell box (left+pad .. right-pad) inverts. Floor the column so
-        // geometry stays positive — the table overflows the right
-        // margin (ugly) instead of degenerating.
-        const MIN_COL_WIDTH_PT: f32 = 24.0;
-        let col_width = (total_width / col_count as f32).max(MIN_COL_WIDTH_PT);
+        // Floor the column wide enough that the inner cell box
+        // (left+pad .. right-pad) can't invert.
+        let pad = self.style.table.cell_padding;
+        let min_col_width_pt = pad.left + pad.right + 1.0;
+        let col_width = (total_width / col_count as f32).max(min_col_width_pt);
 
         // Header row.
         let header_height = self.measure_row_height(
