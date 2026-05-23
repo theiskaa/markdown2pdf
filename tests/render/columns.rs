@@ -542,3 +542,46 @@ et dolore magna aliqua. Ut enim ad minim veniam.\n\n"
          were not rebased to the current column)"
     );
 }
+
+#[test]
+fn wide_display_math_in_narrow_column_renders() {
+    // Regression for the missing horizontal-fit in render_math_block:
+    // a display equation wider than the column used to render at its
+    // natural width and bleed past col 0 into col 1/2's text space.
+    // Post-fix the equation is re-typeset at a smaller base font size
+    // so it stays inside the current column. Math is drawn as cached
+    // glyph XObjects, so the absolute page-x of the rendering isn't
+    // recoverable from the byte stream — visual sign-off is the
+    // strict gate. The structural assertion here is: the trailing
+    // paragraph's first Td origin still lands at the column-left
+    // (i.e., the math block doesn't corrupt the indent state for
+    // following blocks).
+    let md = r##"# Wide math
+
+Lead.
+
+$$
+\int_{-\infty}^{\infty} e^{-x^2 + 2ax - b} \, dx \cdot \sum_{n=1}^{\infty} \frac{(-1)^n}{n^2} \cdot \prod_{k=0}^{\infty} \left(1 - \frac{z^2}{(k\pi)^2}\right) = \frac{\sqrt{\pi} \cdot e^{a^2 - b}}{6} \cdot \frac{\sin(z)}{z}
+$$
+
+Trailing text at the column edge.
+"##;
+    let bytes = render(
+        md,
+        r##"
+        [page]
+        columns = 4
+        column_gap_mm = 4
+        "##,
+    );
+    assert!(pdf_well_formed(&bytes));
+    // Trailing paragraph's Td origins should sit at col 0 left (~45pt)
+    // — never beyond col 0 right (~168pt).
+    let xs = td_xs(&bytes);
+    let max_x = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        max_x < 200.0,
+        "wide math block must not push following text past col 0 \
+         (max Td x = {max_x:.1})"
+    );
+}
