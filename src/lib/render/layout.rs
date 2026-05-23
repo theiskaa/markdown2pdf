@@ -549,6 +549,7 @@ impl<'a> Engine<'a> {
             small_caps: false,
             small: false,
             underline: false,
+            inline_code: false,
         };
         let measured = self.measure_text(flags, text, size_pt);
         let center_x = (self.page_width_pt() - measured) / 2.0;
@@ -649,6 +650,7 @@ impl<'a> Engine<'a> {
             small_caps: false,
             small: false,
             underline: false,
+            inline_code: false,
         };
         let ctx = self.begin_block(&s);
         self.write_wrapped_runs(&runs, s.font_size_pt, s.line_height, flags, color);
@@ -1008,9 +1010,9 @@ impl<'a> Engine<'a> {
             draw_filled_rect(
                 &mut bg_ops,
                 b.x0_pt,
-                b.baseline_y_pt - b.size_pt * 0.80,
+                b.baseline_y_pt - b.size_pt * 0.80 - b.pad_top_pt,
                 b.x1_pt,
-                b.baseline_y_pt + b.size_pt * 0.20,
+                b.baseline_y_pt + b.size_pt * 0.20 + b.pad_bottom_pt,
                 b.fill.clone(),
                 page_h_pt,
             );
@@ -1196,6 +1198,7 @@ impl<'a> Engine<'a> {
             small_caps: false,
             small: false,
             underline: false,
+            inline_code: false,
         };
         let size_pt = style.font_size_pt;
         let measured = self.measure_text(flags, text, size_pt);
@@ -1601,6 +1604,7 @@ impl<'a> Engine<'a> {
             subscript: false,
             small_caps: false,
             small: false,
+            inline_code: false,
         };
         let ctx = self.begin_block(&h2);
         self.write_wrapped_runs(&title_runs, h2.font_size_pt, h2.line_height, flags, color);
@@ -2254,13 +2258,26 @@ impl<'a> Engine<'a> {
         let any_loose = entries.iter().any(|e| e.loose);
 
         for (idx, entry) in entries.iter().enumerate() {
-            let list_style: ResolvedList = match entry.bullet {
+            let mut list_style: ResolvedList = match entry.bullet {
                 ListBullet::Unordered(_) => self.style.list_unordered.clone(),
                 ListBullet::Ordered(_) => self.style.list_ordered.clone(),
                 ListBullet::TaskChecked | ListBullet::TaskUnchecked => {
                     self.style.list_task.clone()
                 }
             };
+            // Inside a blockquote / admonition, list text inherits the
+            // container typography (the same fields a body paragraph
+            // does); bullet glyphs, indents and spacing stay the list's.
+            if let Some(ov) = &self.text_style_override {
+                let b = &mut list_style.block;
+                b.font_family = ov.font_family.clone();
+                b.font_size_pt = ov.font_size_pt;
+                b.font_weight = ov.font_weight;
+                b.font_style = ov.font_style;
+                b.text_color = ov.text_color;
+                b.line_height = ov.line_height;
+                b.letter_spacing_pt = ov.letter_spacing_pt;
+            }
             let s = &list_style.block;
             self.letter_spacing_pt = s.letter_spacing_pt;
             let size_pt = s.font_size_pt;
@@ -2372,7 +2389,7 @@ impl<'a> Engine<'a> {
                 &entry.runs,
                 size_pt,
                 line_height,
-                RunFlags::default(),
+                base_flags_from_block(s),
                 Some(rgb_color(s.text_color_rgb())),
             );
 
@@ -2727,18 +2744,47 @@ impl<'a> Engine<'a> {
         // chopped at character boundaries so the chunks each fit. URLs,
         // long identifiers, CJK runs without spaces, etc.
         words = self.split_long_words(words, max_width, size_pt);
+        // `[code_inline].padding` is applied to the first / last word
+        // of each contiguous inline-code span: pad.left on the first,
+        // pad.right on the last. Middle words and runs that aren't
+        // inline-code get (0, 0), so a non-inline-code document picks
+        // up no per-word overhead.
+        let ci_pad_l = self.style.code_inline.padding.left;
+        let ci_pad_r = self.style.code_inline.padding.right;
+        let is_inline_code_word = |w: &InlineRun| {
+            w.math.is_none() && w.flags.inline_code && !self.in_code_block
+        };
+        let word_pads: Vec<(f32, f32)> = if ci_pad_l == 0.0 && ci_pad_r == 0.0 {
+            vec![(0.0, 0.0); words.len()]
+        } else {
+            (0..words.len())
+                .map(|i| {
+                    if !is_inline_code_word(&words[i]) {
+                        return (0.0, 0.0);
+                    }
+                    let prev_ic = i > 0 && is_inline_code_word(&words[i - 1]);
+                    let next_ic = i + 1 < words.len() && is_inline_code_word(&words[i + 1]);
+                    (
+                        if prev_ic { 0.0 } else { ci_pad_l },
+                        if next_ic { 0.0 } else { ci_pad_r },
+                    )
+                })
+                .collect()
+        };
         let mut lines: Vec<Vec<TextSegment>> = Vec::new();
         let mut current: Vec<TextSegment> = Vec::new();
         let mut current_width = 0.0f32;
 
-        for word in &words {
+        for (wi, word) in words.iter().enumerate() {
+            let (pad_before_pt, pad_after_pt) = word_pads[wi];
             let word_width = match &word.math {
                 Some(tex) => self
                     .inline_math_frag(tex, size_pt)
                     .map(|f| f.w)
                     .unwrap_or(0.0),
                 None => self.measure_text(word.flags, &word.text, size_pt),
-            };
+            } + pad_before_pt
+                + pad_after_pt;
 
             // The first line is narrowed by the first-line indent.
             let line_limit = if lines.is_empty() {
@@ -2762,6 +2808,8 @@ impl<'a> Engine<'a> {
                 flags: word.flags,
                 link: word.link.clone(),
                 math: word.math.clone(),
+                pad_before_pt,
+                pad_after_pt,
             });
             current_width += word_width;
         }
@@ -2775,7 +2823,9 @@ impl<'a> Engine<'a> {
         // wrapping is settled, those pieces can collapse back into
         // one `ShowText` per same-style run. Fewer Tj operators =
         // tighter selection highlights with no visual gap between
-        // logically-contiguous text.
+        // logically-contiguous text. The merged seg keeps the leader's
+        // `pad_before_pt` and takes on the trailer's `pad_after_pt`
+        // (middle words contribute 0 on both sides by construction).
         for line in &mut lines {
             line.dedup_by(|next, prev| {
                 if prev.math.is_none()
@@ -2784,6 +2834,7 @@ impl<'a> Engine<'a> {
                     && prev.link == next.link
                 {
                     prev.text.push_str(&next.text);
+                    prev.pad_after_pt = next.pad_after_pt;
                     true
                 } else {
                     false
@@ -2839,7 +2890,9 @@ impl<'a> Engine<'a> {
                 } else {
                     size_pt
                 };
-                natural_w_pt += self.measure_text(seg.flags, &seg.text, s_size);
+                natural_w_pt += self.measure_text(seg.flags, &seg.text, s_size)
+                    + seg.pad_before_pt
+                    + seg.pad_after_pt;
                 if seg.text.chars().all(char::is_whitespace) && !seg.text.is_empty() {
                     space_count += 1;
                 }
@@ -2953,14 +3006,20 @@ impl<'a> Engine<'a> {
                 // not include that, so the cursor and decoration rects
                 // must add `word_spacing_pt` per space or underlines /
                 // link boxes drift left of the text. Super/subscript
-                // segments break into their own `Tw`-free section.
-                let seg_advance = seg_width
+                // segments break into their own `Tw`-free section, and
+                // an inline-code span at the boundary contributes
+                // `pad_before_pt + pad_after_pt` of horizontal gap
+                // around its glyphs.
+                let pad_before_pt = seg.pad_before_pt;
+                let pad_after_pt = seg.pad_after_pt;
+                let glyph_advance = seg_width
                     + if seg.flags.superscript || seg.flags.subscript {
                         0.0
                     } else {
                         word_spacing_pt
                             * seg.text.chars().filter(|&c| c == ' ').count() as f32
                     };
+                let seg_advance = pad_before_pt + glyph_advance + pad_after_pt;
 
                 if seg.flags.superscript || seg.flags.subscript {
                     // Close the line's main section, emit the small
@@ -3030,6 +3089,16 @@ impl<'a> Engine<'a> {
                     } else if let Some(c) = color.clone() {
                         self.page_ops.push(Op::SetFillColor { col: c });
                     }
+                    // Insert the inline-code left padding as a TJ
+                    // negative offset (in thousandths of em) — moves
+                    // the text cursor right by `pad_before_pt` without
+                    // emitting a glyph, so the inline-code text starts
+                    // `pad_before_pt` past the previous seg's end.
+                    if pad_before_pt > 0.0 {
+                        self.page_ops.push(Op::ShowText {
+                            items: vec![TextItem::Offset(-pad_before_pt * 1000.0 / seg_size)],
+                        });
+                    }
                     emit_text_chunks(
                         &mut self.page_ops,
                         self.font_set,
@@ -3038,6 +3107,11 @@ impl<'a> Engine<'a> {
                         seg_size,
                         self.letter_spacing_pt,
                     );
+                    if pad_after_pt > 0.0 {
+                        self.page_ops.push(Op::ShowText {
+                            items: vec![TextItem::Offset(-pad_after_pt * 1000.0 / seg_size)],
+                        });
+                    }
                 }
 
                 // Buffer decorations and link rects until the line is
@@ -3069,8 +3143,8 @@ impl<'a> Engine<'a> {
                         } else {
                             DecorationKind::None
                         },
-                        x0_pt: x_cursor_pt,
-                        x1_pt: x_cursor_pt + seg_advance,
+                        x0_pt: x_cursor_pt + pad_before_pt,
+                        x1_pt: x_cursor_pt + pad_before_pt + glyph_advance,
                         y_pt: decoration_y_pt,
                         link: seg.link.clone(),
                         size_pt,
@@ -3079,6 +3153,9 @@ impl<'a> Engine<'a> {
                 }
                 // Inline background box: `[mark]` fill for a highlight,
                 // `[code_inline]` fill for inline code (not code blocks).
+                // Inline-code boxes span the full padded extent (the
+                // padding is the *whole point* of the box — it sits
+                // outside the text); mark highlights carry no padding.
                 let inline_bg = if seg.flags.highlight {
                     self.style.mark.background_color_rgb()
                 } else if seg.flags.monospace && !self.in_code_block {
@@ -3087,12 +3164,23 @@ impl<'a> Engine<'a> {
                     None
                 };
                 if let Some(rgb) = inline_bg {
+                    let is_ic_box = seg.flags.monospace && !self.in_code_block;
+                    let (pad_top, pad_bot) = if is_ic_box {
+                        (
+                            self.style.code_inline.padding.top,
+                            self.style.code_inline.padding.bottom,
+                        )
+                    } else {
+                        (0.0, 0.0)
+                    };
                     self.pending_highlights.push(HighlightBox {
                         x0_pt: x_cursor_pt,
                         x1_pt: x_cursor_pt + seg_advance,
                         baseline_y_pt,
                         size_pt,
                         fill: rgb_color(rgb),
+                        pad_top_pt: pad_top,
+                        pad_bottom_pt: pad_bot,
                     });
                 }
                 x_cursor_pt += seg_advance;
@@ -3260,6 +3348,12 @@ struct HighlightBox {
     baseline_y_pt: f32,
     size_pt: f32,
     fill: Color,
+    /// Extra pt above the natural top edge (inline-code
+    /// `padding.top`). Zero for `==mark==` highlights.
+    pad_top_pt: f32,
+    /// Extra pt below the natural bottom edge (inline-code
+    /// `padding.bottom`).
+    pad_bottom_pt: f32,
 }
 
 /// Emit `text` at `size_pt` using the run flags' resolved font chain.
@@ -3927,6 +4021,14 @@ struct TextSegment {
     link: Option<String>,
     /// Raw TeX when this segment is an inline-math box (`text` empty).
     math: Option<String>,
+    /// Horizontal pt of padding to insert before this segment's glyphs
+    /// (and after, respectively). Non-zero only for the first / last
+    /// segment of a contiguous inline-code span when
+    /// `[code_inline].padding.left` / `.right` are set. Emitted as a
+    /// `TextItem::Offset` so the gap lives inside the line's BT and
+    /// text selection stays contiguous.
+    pad_before_pt: f32,
+    pad_after_pt: f32,
 }
 
 /// Flatten a run list to a sequence of (word | whitespace) pieces,

@@ -141,9 +141,30 @@ pub fn render_to_bytes(
             usage.body_italic = true;
         }
     }
+    let cb = &style.code_block;
+    if cb.is_bold() && cb.is_italic() {
+        usage.mono_bold_italic = true;
+    } else if cb.is_bold() {
+        usage.mono_bold = true;
+    } else if cb.is_italic() {
+        usage.mono_italic = true;
+    }
+    // Load a distinct inline-code family only when `[code_inline]
+    // font_family` is set AND differs from `[code_block] font_family`.
+    // Otherwise inline and block code share the same path (so the
+    // default theme, which spells both `"Courier"`, stays byte-
+    // identical to the pre-feature output).
+    let code_inline_font = match (
+        style.code_inline.font_family.as_deref(),
+        style.code_block.font_family.as_deref(),
+    ) {
+        (Some(ci), Some(cb)) if ci.eq_ignore_ascii_case(cb) => None,
+        (ci, _) => ci,
+    };
     let font_set = font::FontSet::load_with_style_fallbacks(
         font_config,
         &style.fallback_fonts,
+        code_inline_font,
         &used_codepoints,
         usage,
         &mut doc,

@@ -58,3 +58,9 @@ mod _showcase_inspect;
 
 #[path = "render/_admonition_showcase.rs"]
 mod _admonition_showcase;
+
+#[path = "render/_pdf_size_audit.rs"]
+mod _pdf_size_audit;
+
+#[path = "render/config_fidelity.rs"]
+mod config_fidelity;
