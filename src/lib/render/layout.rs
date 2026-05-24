@@ -806,6 +806,27 @@ impl<'a> Engine<'a> {
         mm_to_pt(self.style.page.margins_mm.top.max(1.0))
     }
 
+    /// Advance to the next column/page if `header` plus one line of
+    /// `follow` won't fit in the remaining space. No-op at column top
+    /// (already maximum room — advancing would just add a blank page).
+    fn keep_with_next_break(&mut self, header: &ResolvedBlock, follow: &ResolvedBlock) {
+        if (self.y_from_top_pt - self.top_margin_pt()).abs() < 0.01 {
+            return;
+        }
+        let header_h = header.margin_before_pt
+            + header.padding.top
+            + header.font_size_pt * header.line_height.max(0.5)
+            + header.padding.bottom
+            + header.margin_after_pt;
+        let follow_first_line_h = follow.margin_before_pt
+            + follow.padding.top
+            + follow.font_size_pt * follow.line_height.max(0.5);
+        let needed = header_h + follow_first_line_h;
+        if self.y_from_top_pt + needed + self.bottom_margin_pt() > self.page_height_pt() {
+            self.advance_column();
+        }
+    }
+
     fn bottom_margin_pt(&self) -> f32 {
         mm_to_pt(self.style.page.margins_mm.bottom.max(1.0))
     }
@@ -1823,8 +1844,8 @@ impl<'a> Engine<'a> {
         if entries.is_empty() {
             return;
         }
-        // Render the "Footnotes" section heading using h2 typography.
         let h2 = self.style.headings[1].clone();
+        self.keep_with_next_break(&h2, &self.style.paragraph);
         let title_runs = vec![InlineRun { math: None,
             text: "Footnotes".to_string(),
             flags: RunFlags::default(),
@@ -2792,6 +2813,7 @@ impl<'a> Engine<'a> {
     fn render_heading(&mut self, level: u8, runs: &[InlineRun]) {
         let idx = level.clamp(1, 6) as usize - 1;
         let s = self.style.headings[idx].clone();
+        self.keep_with_next_break(&s, &self.style.paragraph);
         let color = Some(rgb_color(s.text_color_rgb()));
         let base_flags = base_flags_from_block(&s);
 

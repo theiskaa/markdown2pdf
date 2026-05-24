@@ -67,3 +67,6 @@ mod config_fidelity;
 
 #[path = "render/columns.rs"]
 mod columns;
+
+#[path = "render/widow_orphan.rs"]
+mod widow_orphan;
