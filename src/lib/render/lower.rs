@@ -142,6 +142,23 @@ fn lower_blocks(
                     // </center>: pure GFM wrappers around real
                     // markdown. Rendering them verbatim noisy; dropping
                     // them lets the wrapped content render normally.
+                } else if let Some(inner) = strip_framing_wrapper(content) {
+                    // Wrapper-with-content: <div>...</div>,
+                    // <section>...</section>, etc. Strip the outer tags
+                    // and re-lex the inner so its markdown renders
+                    // properly instead of leaking as literal HTML.
+                    if let Ok(inner_tokens) = crate::markdown::Lexer::new(inner).parse() {
+                        let inner_blocks = lower_blocks(
+                            &inner_tokens,
+                            footnote_numbers,
+                            footnote_definitions,
+                        );
+                        out.extend(inner_blocks);
+                    } else if !is_only_html_comments(content) {
+                        out.push(Block::HtmlBlock {
+                            content: content.clone(),
+                        });
+                    }
                 } else if !is_only_html_comments(content) {
                     out.push(Block::HtmlBlock {
                         content: content.clone(),
@@ -309,9 +326,23 @@ fn lower_blocks(
                         i += 1;
                         continue;
                     }
+                    // `<br/>` at paragraph level: flush the buffer and
+                    // start a new paragraph so the break is visible.
+                    if is_void_br(tag) {
+                        flush_paragraph(&mut out, &mut buffered_inline);
+                        i += 1;
+                        continue;
+                    }
+                    // `<hr/>` at paragraph level: flush + emit HR.
+                    if is_void_hr(tag) {
+                        flush_paragraph(&mut out, &mut buffered_inline);
+                        out.push(Block::HorizontalRule);
+                        i += 1;
+                        continue;
+                    }
                 }
                 let effective = root_html_depth.apply(RunFlags::default());
-                flatten_one(&tokens[i], effective, None, &mut buffered_inline, &footnote_numbers);
+                flatten_one(&tokens[i], effective, None, &mut buffered_inline, footnote_numbers);
                 i += 1;
             }
         }
@@ -467,6 +498,53 @@ fn strip_html_comments(s: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// True for any spelling of `<br>` / `<br/>` / `<br />` / `</br>`.
+fn is_void_br(raw: &str) -> bool {
+    let s = raw.trim().to_ascii_lowercase();
+    matches!(s.as_str(), "<br>" | "<br/>" | "<br />" | "</br>")
+}
+
+/// True for any spelling of `<hr>` / `<hr/>` / `<hr />` / `</hr>`.
+fn is_void_hr(raw: &str) -> bool {
+    let s = raw.trim().to_ascii_lowercase();
+    matches!(s.as_str(), "<hr>" | "<hr/>" | "<hr />" | "</hr>")
+}
+
+/// If the HTML block is a framing wrapper around real content (e.g.
+/// `<div>…markdown…</div>`, `<section>…</section>`,
+/// `<p>text</p>`), return the inner with the outer open + close tags
+/// removed so it can be re-lexed as markdown. Returns `None` if the
+/// content isn't a single matching wrapper pair, so the caller can
+/// fall back to rendering it as a verbatim HTML block.
+fn strip_framing_wrapper(s: &str) -> Option<String> {
+    const WRAPPERS: &[&str] = &["div", "section", "figure", "figcaption", "center", "p"];
+    let trimmed = s.trim();
+    if !trimmed.starts_with('<') {
+        return None;
+    }
+    let open_end = trimmed.find('>')?;
+    let open_inner = &trimmed[1..open_end];
+    let open_tag_end = open_inner
+        .find(|c: char| c.is_ascii_whitespace())
+        .unwrap_or(open_inner.len());
+    let open_tag = open_inner[..open_tag_end].to_ascii_lowercase();
+    if !WRAPPERS.contains(&open_tag.as_str()) {
+        return None;
+    }
+    // Must end with the matching closing tag.
+    let close_lower = format!("</{}>", open_tag);
+    let trimmed_lower = trimmed.to_ascii_lowercase();
+    if !trimmed_lower.ends_with(&close_lower) {
+        return None;
+    }
+    let close_start = trimmed.len() - close_lower.len();
+    let inner = trimmed[open_end + 1..close_start].trim().to_string();
+    if inner.is_empty() {
+        return None;
+    }
+    Some(inner)
 }
 
 /// True if the HTML block is just a structural wrapper tag with no
@@ -796,6 +874,14 @@ enum InlineHtmlTag {
     SmallClose,
     KbdOpen,
     KbdClose,
+    BoldOpen,
+    BoldClose,
+    ItalicOpen,
+    ItalicClose,
+    CodeOpen,
+    CodeClose,
+    SpanOpen,
+    SpanClose,
 }
 
 fn classify_inline_html_tag(raw: &str) -> Option<InlineHtmlTag> {
@@ -813,6 +899,14 @@ fn classify_inline_html_tag(raw: &str) -> Option<InlineHtmlTag> {
         "</small>" => Some(InlineHtmlTag::SmallClose),
         "<kbd>" => Some(InlineHtmlTag::KbdOpen),
         "</kbd>" => Some(InlineHtmlTag::KbdClose),
+        "<strong>" | "<b>" => Some(InlineHtmlTag::BoldOpen),
+        "</strong>" | "</b>" => Some(InlineHtmlTag::BoldClose),
+        "<em>" | "<i>" => Some(InlineHtmlTag::ItalicOpen),
+        "</em>" | "</i>" => Some(InlineHtmlTag::ItalicClose),
+        "<code>" => Some(InlineHtmlTag::CodeOpen),
+        "</code>" => Some(InlineHtmlTag::CodeClose),
+        "<span>" => Some(InlineHtmlTag::SpanOpen),
+        "</span>" => Some(InlineHtmlTag::SpanClose),
         _ => None,
     }
 }
@@ -825,6 +919,9 @@ struct InlineHtmlDepth {
     strike: u32,
     small: u32,
     kbd: u32,
+    bold: u32,
+    italic: u32,
+    code: u32,
 }
 
 impl InlineHtmlDepth {
@@ -844,6 +941,15 @@ impl InlineHtmlDepth {
             InlineHtmlTag::SmallClose => self.small = self.small.saturating_sub(1),
             InlineHtmlTag::KbdOpen => self.kbd += 1,
             InlineHtmlTag::KbdClose => self.kbd = self.kbd.saturating_sub(1),
+            InlineHtmlTag::BoldOpen => self.bold += 1,
+            InlineHtmlTag::BoldClose => self.bold = self.bold.saturating_sub(1),
+            InlineHtmlTag::ItalicOpen => self.italic += 1,
+            InlineHtmlTag::ItalicClose => self.italic = self.italic.saturating_sub(1),
+            InlineHtmlTag::CodeOpen => self.code += 1,
+            InlineHtmlTag::CodeClose => self.code = self.code.saturating_sub(1),
+            // <span> is a transparent wrapper: tracked so a stray
+            // </span> is also consumed, but contributes no flag.
+            InlineHtmlTag::SpanOpen | InlineHtmlTag::SpanClose => {}
         }
     }
 
@@ -864,6 +970,15 @@ impl InlineHtmlDepth {
             flags = flags.with_small();
         }
         if self.kbd > 0 {
+            flags = flags.with_inline_code();
+        }
+        if self.bold > 0 {
+            flags = flags.with_bold();
+        }
+        if self.italic > 0 {
+            flags = flags.with_italic();
+        }
+        if self.code > 0 {
             flags = flags.with_inline_code();
         }
         flags
