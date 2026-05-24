@@ -2276,7 +2276,6 @@ impl Lexer {
         }
 
         let current_char = self.current_char();
-        let is_line_start = self.is_at_line_start();
         // Block markers accept up to 3 columns of leading space indent. We
         // call `skip_whitespace` above, so by the time we land here the
         // position has already moved past those spaces; `is_block_marker_start`
@@ -2451,7 +2450,7 @@ impl Lexer {
                 }
             }
             '\n' => self.parse_newline()?,
-            '|' if is_line_start => {
+            '|' if is_block_start && allow_block_tokens(ctx) => {
                 if self.is_table_start() {
                     self.parse_table()?
                 } else {
