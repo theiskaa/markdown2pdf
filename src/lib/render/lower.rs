@@ -239,25 +239,23 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             // by other inline content) gets promoted to a block-level
             // image. We require the buffered paragraph to be empty
             // and the next non-newline token to be either EOF or
-            // another block boundary.
+            // another block boundary. Both successful loads (URL or
+            // existing local file) and failures (missing local file,
+            // unreachable URL) route through `Block::Image`; the
+            // layout pass decodes and falls back to
+            // `render_image_fallback` on failure so every "image not
+            // shown" path produces the same italic `[image: ALT]`
+            // placeholder.
             Token::Image { alt, url, title }
                 if buffered_inline.is_empty() && image_is_standalone(tokens, i) =>
             {
-                let is_url = url.starts_with("http://") || url.starts_with("https://");
                 let path = std::path::PathBuf::from(url);
-                if is_url || path.exists() {
-                    let alt_text = crate::markdown::Token::collect_all_text(alt);
-                    out.push(Block::Image {
-                        path,
-                        alt: alt_text,
-                        caption: title.clone(),
-                    });
-                    i += 1;
-                    continue;
-                }
-                // Fall through to inline rendering if the file isn't
-                // there — we'd rather show the alt text than nothing.
-                flatten_one(&tokens[i], RunFlags::default(), None, &mut buffered_inline, &footnote_numbers);
+                let alt_text = crate::markdown::Token::collect_all_text(alt);
+                out.push(Block::Image {
+                    path,
+                    alt: alt_text,
+                    caption: title.clone(),
+                });
                 i += 1;
             }
             // Inline-level tokens at the root accumulate into the
@@ -952,12 +950,32 @@ fn flatten_one(
             // arm is unreachable in practice but kept exhaustive.
         }
         Token::Image { alt, .. } => {
-            // Inline images render only their alt text. Block-level
-            // standalone images are promoted to `Block::Image` in the
-            // top-level lower loop and get the full embedded image.
-            for t in alt {
-                flatten_one(t, flags, link, out, footnotes);
+            // Inline images render their alt text wrapped in an
+            // italic `[image: …]` placeholder so readers can tell at
+            // a glance which inline glyphs stood in for an image,
+            // regardless of context (paragraph, list item, table
+            // cell, admonition, blockquote). Block-level standalone
+            // images that successfully load are promoted to
+            // `Block::Image` in the top-level lower loop and get the
+            // full embedded image; a failed Block::Image goes through
+            // `render_image_fallback`, which produces the same italic
+            // wrapper as a paragraph — so every "image not shown"
+            // path renders identically.
+            //
+            // Empty-alt images stay invisible: `[image: ]` is uglier
+            // than skipping, and the author signaled the image was
+            // decorative (or didn't bother with alt) so dropping it
+            // matches `render_image_fallback`'s same-case behavior.
+            let alt_text = crate::markdown::Token::collect_all_text(alt);
+            if alt_text.trim().is_empty() {
+                return;
             }
+            let italic = flags.with_italic();
+            push_text(out, "[image: ", italic, link);
+            for t in alt {
+                flatten_one(t, italic, link, out, footnotes);
+            }
+            push_text(out, "]", italic, link);
         }
         Token::HtmlInline(tag) => {
             // Tags we semantically handle (sup/sub/u/s/del/small/kbd)
