@@ -322,3 +322,46 @@ page {}",
     );
 }
 
+/// An admonition landing right at the page bottom must not split
+/// its kind-label strip from its body — the label-only strip on
+/// page 1 with body on page 2 is the bug from GH #107. Sweep
+/// filler counts to find the orphan-prone landings, then assert
+/// label + body always share a page.
+#[test]
+fn admonition_label_stays_with_body_at_page_boundary() {
+    let mut checked = 0usize;
+    for n in 52..=62 {
+        let mut md = String::from("# t\n\n");
+        for i in 0..n {
+            md.push_str(&format!("P{i}. line\n\n"));
+        }
+        md.push_str(
+            "> [!CAUTION]\n> ADMOORPHAN long body content. Lorem ipsum dolor \
+sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut \
+labore et dolore magna aliqua.\n",
+        );
+        let bytes = render(&md, "");
+        let streams = page_streams(&bytes);
+        if streams.len() < 2 {
+            continue;
+        }
+        let label_page = streams.iter().position(|s| page_contains(s, "CAUTION"));
+        let body_page = streams.iter().position(|s| page_contains(s, "ADMOORPHAN"));
+        if let (Some(l), Some(b)) = (label_page, body_page) {
+            checked += 1;
+            assert_eq!(
+                l, b,
+                "admonition orphaned at filler={n}: label on page {} but \
+body on page {}",
+                l + 1,
+                b + 1
+            );
+        }
+    }
+    assert!(
+        checked > 0,
+        "no fixture in the sweep produced both label and body — test would \
+silently pass on a broken renderer"
+    );
+}
+

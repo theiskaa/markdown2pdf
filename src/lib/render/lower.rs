@@ -16,22 +16,63 @@ use std::collections::HashMap;
 
 /// Lower a slice of top-level tokens into the block IR.
 pub fn lower(tokens: &[Token]) -> Vec<Block> {
+    // First-reference-order numbering for footnotes — built once over
+    // the entire token tree, then threaded into every recursive
+    // sub-lowering so nested contexts (blockquote, admonition, list
+    // item children) resolve refs against the document-wide map
+    // instead of re-numbering local labels from 1.
+    let footnote_numbers = collect_footnote_numbering(tokens);
+    let mut footnote_definitions: HashMap<String, Vec<InlineRun>> = HashMap::new();
+    collect_inline_footnote_defs(tokens, &footnote_numbers, &mut footnote_definitions);
+
+    let mut out = lower_blocks(tokens, &footnote_numbers, &mut footnote_definitions);
+
+    // Tail Footnotes section, ordered by first-reference number.
+    // Definitions defined but never referenced trail in label-sort
+    // order so they don't disappear.
+    if !footnote_definitions.is_empty() {
+        let mut entries: Vec<FootnoteEntry> = Vec::with_capacity(footnote_definitions.len());
+        for (label, number) in {
+            let mut v: Vec<(String, usize)> = footnote_numbers
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            v.sort_by_key(|(_, n)| *n);
+            v
+        } {
+            if let Some(runs) = footnote_definitions.remove(&label) {
+                entries.push(FootnoteEntry {
+                    label,
+                    number,
+                    runs,
+                });
+            }
+        }
+        let mut next = entries.len() + 1;
+        let mut unused: Vec<(String, Vec<InlineRun>)> = footnote_definitions.into_iter().collect();
+        unused.sort_by(|a, b| a.0.cmp(&b.0));
+        for (label, runs) in unused {
+            entries.push(FootnoteEntry {
+                label,
+                number: next,
+                runs,
+            });
+            next += 1;
+        }
+        out.push(Block::FootnoteDefinitions { entries });
+    }
+
+    out
+}
+
+fn lower_blocks(
+    tokens: &[Token],
+    footnote_numbers: &HashMap<String, usize>,
+    footnote_definitions: &mut HashMap<String, Vec<InlineRun>>,
+) -> Vec<Block> {
     let mut out = Vec::new();
     let mut buffered_inline: Vec<InlineRun> = Vec::new();
 
-    // First-reference-order numbering for footnotes. The map is built
-    // once over the entire token tree; flatten_one consults it to
-    // render references with the right superscript number, and the
-    // post-pass walks definitions in numeric order.
-    let footnote_numbers = collect_footnote_numbering(tokens);
-    let mut footnote_definitions: HashMap<String, Vec<InlineRun>> = HashMap::new();
-    // Inline footnotes (`text^[body]`) carry their definition with
-    // them; pull every body out up-front so it lands in the tail
-    // "Footnotes" section without disturbing the inline stream.
-    collect_inline_footnote_defs(tokens, &footnote_numbers, &mut footnote_definitions);
-
-    // Inline-HTML scope tracking at the top level (sup/sub/u/s/del/
-    // small/kbd). Mirrors `flatten_inline`'s nested-context handling.
     let mut root_html_depth = InlineHtmlDepth::default();
 
     fn flush_paragraph(out: &mut Vec<Block>, buffered: &mut Vec<InlineRun>) {
@@ -110,7 +151,7 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             }
             Token::BlockQuote(body) => {
                 flush_paragraph(&mut out, &mut buffered_inline);
-                let nested = lower(body);
+                let nested = lower_blocks(body, footnote_numbers, footnote_definitions);
                 out.push(Block::BlockQuote { body: nested });
                 i += 1;
             }
@@ -122,9 +163,9 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 let title_runs = title.as_ref().map(|t| {
-                    flatten_inline(t, RunFlags::default(), None, &footnote_numbers)
+                    flatten_inline(t, RunFlags::default(), None, footnote_numbers)
                 });
-                let nested = lower(body);
+                let nested = lower_blocks(body, footnote_numbers, footnote_definitions);
                 out.push(Block::Admonition {
                     kind: kind.clone(),
                     raw_label: raw_label.clone(),
@@ -199,7 +240,8 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                         *checked,
                         *loose,
                         content,
-                        &footnote_numbers,
+                        footnote_numbers,
+                        footnote_definitions,
                     ));
                     i += 1;
                     // Skip blank lines between list items so we don't
@@ -276,45 +318,6 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
     }
 
     flush_paragraph(&mut out, &mut buffered_inline);
-
-    // Collect all footnote definitions captured during lowering into
-    // a single tail-of-document block, ordered by the number assigned
-    // when each label was first referenced in the body. Labels that
-    // were defined but never referenced are appended at the end in
-    // label-sort order so they don't disappear.
-    if !footnote_definitions.is_empty() {
-        let mut entries: Vec<FootnoteEntry> = Vec::with_capacity(footnote_definitions.len());
-        for (label, number) in {
-            let mut v: Vec<(String, usize)> = footnote_numbers
-                .iter()
-                .map(|(k, v)| (k.clone(), *v))
-                .collect();
-            v.sort_by_key(|(_, n)| *n);
-            v
-        } {
-            if let Some(runs) = footnote_definitions.remove(&label) {
-                entries.push(FootnoteEntry {
-                    label,
-                    number,
-                    runs,
-                });
-            }
-        }
-        // Unused definitions (never referenced) — assign trailing numbers.
-        let mut next = entries.len() + 1;
-        let mut unused: Vec<(String, Vec<InlineRun>)> = footnote_definitions.into_iter().collect();
-        unused.sort_by(|a, b| a.0.cmp(&b.0));
-        for (label, runs) in unused {
-            entries.push(FootnoteEntry {
-                label,
-                number: next,
-                runs,
-            });
-            next += 1;
-        }
-        out.push(Block::FootnoteDefinitions { entries });
-    }
-
     out
 }
 
@@ -549,6 +552,16 @@ fn collect_footnote_numbering(tokens: &[Token]) -> HashMap<String, usize> {
                     walk(c, map);
                 }
             }
+            Token::Admonition { title, body, .. } => {
+                if let Some(t) = title {
+                    for c in t {
+                        walk(c, map);
+                    }
+                }
+                for c in body {
+                    walk(c, map);
+                }
+            }
             Token::FootnoteDefinition { content, .. } => {
                 for c in content {
                     walk(c, map);
@@ -630,6 +643,16 @@ fn collect_inline_footnote_defs(
                     walk(c, footnotes, out);
                 }
             }
+            Token::Admonition { title, body, .. } => {
+                if let Some(t) = title {
+                    for c in t {
+                        walk(c, footnotes, out);
+                    }
+                }
+                for c in body {
+                    walk(c, footnotes, out);
+                }
+            }
             Token::DefinitionList { entries } => {
                 for entry in entries {
                     for c in &entry.term {
@@ -684,6 +707,7 @@ fn make_list_entry(
     loose: bool,
     content: &[Token],
     footnotes: &HashMap<String, usize>,
+    footnote_definitions: &mut HashMap<String, Vec<InlineRun>>,
 ) -> ListEntry {
     let bullet = match checked {
         Some(true) => ListBullet::TaskChecked,
@@ -721,7 +745,7 @@ fn make_list_entry(
     let children = if tail.is_empty() {
         Vec::new()
     } else {
-        lower(tail)
+        lower_blocks(tail, footnotes, footnote_definitions)
     };
 
     ListEntry {
@@ -1265,5 +1289,108 @@ mod tests {
             entries[1].runs.iter().map(|r| r.text.as_str()).collect();
         assert!(first.contains("inline note"), "got {first:?}");
         assert!(second.contains("ref def"), "got {second:?}");
+    }
+
+    fn walk_superscript_markers(blocks: &[Block], out: &mut Vec<String>) {
+        for b in blocks {
+            match b {
+                Block::Paragraph { runs }
+                | Block::Heading { runs, .. } => {
+                    for r in runs {
+                        if r.flags.superscript {
+                            out.push(r.text.clone());
+                        }
+                    }
+                }
+                Block::BlockQuote { body } | Block::Admonition { body, .. } => {
+                    walk_superscript_markers(body, out);
+                }
+                Block::List { entries } => {
+                    for e in entries {
+                        for r in &e.runs {
+                            if r.flags.superscript {
+                                out.push(r.text.clone());
+                            }
+                        }
+                        walk_superscript_markers(&e.children, out);
+                    }
+                }
+                Block::Table { headers, rows, .. } => {
+                    for h in headers {
+                        for r in &h.content {
+                            if r.flags.superscript {
+                                out.push(r.text.clone());
+                            }
+                        }
+                    }
+                    for row in rows {
+                        for cell in row {
+                            for r in &cell.content {
+                                if r.flags.superscript {
+                                    out.push(r.text.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Footnote refs nested inside blockquote / admonition / list-item
+    /// bodies must resolve against the document-wide first-reference
+    /// numbering, not a fresh per-body 1.
+    #[test]
+    fn nested_contexts_share_document_wide_footnote_numbering() {
+        let src = "Top[^a].\n\n\
+> Quote[^b].\n\n\
+> [!NOTE]\n\
+> Admo[^c].\n\n\
+- list[^d]\n\n\
+[^a]: A.\n[^b]: B.\n[^c]: C.\n[^d]: D.\n";
+        let blocks = lower(&lex(src));
+        let mut markers = Vec::new();
+        walk_superscript_markers(&blocks, &mut markers);
+        // First-reference order is a, b, c, d -> 1, 2, 3, 4. Each
+        // ref must show its assigned number, NOT 1.
+        assert_eq!(
+            markers,
+            vec!["1".to_string(), "2".to_string(), "3".to_string(), "4".to_string()],
+            "footnote markers in nested contexts must use document-wide numbering"
+        );
+    }
+
+    /// Footnote definitions remain emitted as a single tail block, in
+    /// first-reference order, even when refs are scattered across
+    /// blockquote / admonition / list-item bodies.
+    #[test]
+    fn nested_footnote_refs_keep_single_tail_section() {
+        let src = "Top[^a].\n\n\
+> Quote[^b].\n\n\
+> [!NOTE]\n\
+> Admo[^c].\n\n\
+[^a]: A.\n[^b]: B.\n[^c]: C.\n";
+        let blocks = lower(&lex(src));
+        let tail_blocks: Vec<&FootnoteEntry> = blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::FootnoteDefinitions { entries } => Some(entries.iter()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        // Three definitions, one tail block, ordered a,b,c by first ref.
+        assert_eq!(tail_blocks.len(), 3);
+        assert_eq!(tail_blocks[0].number, 1);
+        assert_eq!(tail_blocks[1].number, 2);
+        assert_eq!(tail_blocks[2].number, 3);
+        // And only one tail block — no per-body duplicates leaking into
+        // the document body.
+        let tail_count = blocks
+            .iter()
+            .filter(|b| matches!(b, Block::FootnoteDefinitions { .. }))
+            .count();
+        assert_eq!(tail_count, 1);
     }
 }

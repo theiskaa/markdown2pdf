@@ -119,14 +119,24 @@ pub fn render_to_bytes(
     }
 
     let body_text = Token::collect_all_text(&tokens);
+    let blocks = lower::lower(&tokens);
+    // Codepoint set seeded from the source body, then extended with
+    // every string the layout pass synthesizes (admonition kind
+    // labels, the auto "Footnotes" heading, TOC title, title-page
+    // text, header/footer furniture templates) so the external-font
+    // subset includes the glyphs needed to render them. Without this
+    // seeding e.g. `[!IMPORTANT]` would emit `.notdef` boxes for
+    // every letter in `IMPORTANT` that didn't happen to appear in
+    // the source body.
     let used_codepoints: Vec<char> = {
         let mut chars: Vec<char> = body_text.chars().collect();
+        collect_synthesized_codepoints(&blocks, &style, &mut chars);
+        collect_style_codepoints(&style, &mut chars);
         chars.sort();
         chars.dedup();
         chars
     };
 
-    let blocks = lower::lower(&tokens);
     let mut usage = ir::VariantUsage::analyze(&blocks);
     // Headings and blockquotes get their weight / slant from the
     // theme, not from per-run flags, so the IR walk above can't see
@@ -210,6 +220,80 @@ pub fn render_to_bytes(
     let bytes = postprocess::compress(bytes);
 
     Ok(bytes)
+}
+
+/// Append every character that flows from `style` straight into the
+/// rendered output without ever passing through the source markdown:
+/// the TOC title, the title page's title / subtitle / author / date
+/// fields, and the header / footer furniture templates on each of
+/// the three (left / center / right) anchors. These are
+/// user-configurable strings the body text need not contain, so an
+/// external font's subset has to be told about them up front.
+fn collect_style_codepoints(style: &ResolvedStyle, out: &mut Vec<char>) {
+    if let Some(toc) = &style.toc {
+        out.extend(toc.title.chars());
+    }
+    if let Some(tp) = &style.title_page {
+        out.extend(tp.title.chars());
+        if let Some(s) = &tp.subtitle {
+            out.extend(s.chars());
+        }
+        if let Some(a) = &tp.author {
+            out.extend(a.chars());
+        }
+        if let Some(d) = &tp.date {
+            out.extend(d.chars());
+        }
+    }
+    for f in [style.header.as_ref(), style.footer.as_ref()].into_iter().flatten() {
+        for slot in [f.left.as_ref(), f.center.as_ref(), f.right.as_ref()] {
+            if let Some(t) = slot {
+                out.extend(t.chars());
+            }
+        }
+    }
+}
+
+/// Walk the lowered IR and append every character the layout pass
+/// might emit on its own — admonition kind labels, the auto
+/// "Footnotes" section heading, etc. Recurses into containers so
+/// labels from an admonition inside a blockquote are also captured.
+fn collect_synthesized_codepoints(
+    blocks: &[ir::Block],
+    style: &ResolvedStyle,
+    out: &mut Vec<char>,
+) {
+    for block in blocks {
+        match block {
+            ir::Block::Admonition { kind, raw_label, title, body } => {
+                // The renderer uses raw_label.to_ascii_uppercase() when
+                // no user title is set; fall back to the per-kind label
+                // when raw_label is empty.
+                if title.is_none() || title.as_deref().map(|r| r.is_empty()).unwrap_or(true) {
+                    if !raw_label.is_empty() {
+                        out.extend(raw_label.to_ascii_uppercase().chars());
+                    } else {
+                        out.extend(style.admonition.for_kind(kind).label.chars());
+                    }
+                }
+                collect_synthesized_codepoints(body, style, out);
+            }
+            ir::Block::BlockQuote { body } => {
+                collect_synthesized_codepoints(body, style, out);
+            }
+            ir::Block::List { entries } => {
+                for entry in entries {
+                    collect_synthesized_codepoints(&entry.children, style, out);
+                }
+            }
+            ir::Block::FootnoteDefinitions { .. } => {
+                // render_footnote_definitions auto-emits "Footnotes"
+                // as the section heading text.
+                out.extend("Footnotes".chars());
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]

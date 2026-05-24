@@ -859,6 +859,20 @@ impl<'a> Engine<'a> {
     /// paragraph style (conservative; preserves the pre-lookahead
     /// behavior when callers can't see what follows).
     fn next_block_lead_pt(&self, next: Option<&Block>) -> f32 {
+        // Admonitions reserve their own label + gap + first body line
+        // via render_admonition's own keep_with_next_break — so the
+        // caller (e.g. a heading right before this admonition) must
+        // reserve the admonition's full label-plus-body chunk, not
+        // just one line, or the admonition will push to the next
+        // page and orphan the heading.
+        if let Some(Block::Admonition { kind, .. }) = next {
+            let s = &self.style.admonition.for_kind(kind).block;
+            return s.margin_before_pt
+                + s.padding.top
+                + s.font_size_pt * s.line_height.max(0.5)
+                + s.font_size_pt * 0.35
+                + s.font_size_pt * s.line_height.max(0.5);
+        }
         let s: &ResolvedBlock = match next {
             None => &self.style.paragraph,
             Some(Block::Paragraph { .. }) => &self.style.paragraph,
@@ -881,9 +895,6 @@ impl<'a> Engine<'a> {
                 } else {
                     &self.style.paragraph
                 }
-            }
-            Some(Block::Admonition { kind, .. }) => {
-                &self.style.admonition.for_kind(kind).block
             }
             Some(Block::Table { .. }) => &self.style.table.header,
             // Image / HR / HtmlBlock / Math / FootnoteDefinitions /
@@ -2820,6 +2831,18 @@ impl<'a> Engine<'a> {
             style: BorderStyle::Solid,
         });
 
+        // Keep-with-next: the kind-label strip and the first body
+        // chunk must land together. Reserve margin_before + padding.top
+        // + one label line + the post-label gap + one first-body-line
+        // worth of space; if that won't fit before the page bottom,
+        // push the whole admonition to the next column/page.
+        let header_h = block_style.margin_before_pt
+            + block_style.padding.top
+            + block_style.font_size_pt * block_style.line_height.max(0.5)
+            + block_style.font_size_pt * 0.35;
+        let follow_h = self.next_block_lead_pt(body.first());
+        self.keep_with_next_break(header_h, follow_h);
+
         let ctx = self.begin_block(&block_style);
 
         // Header line: title runs (already inline-flattened by lower)
@@ -2839,7 +2862,13 @@ impl<'a> Engine<'a> {
                     .collect()
             }
             _ => {
-                let label_text = if kind == "generic" && !raw_label.is_empty() {
+                // Use the author's typed label (uppercased) instead of
+                // the canonical kind's preset label, so aliases like
+                // `caution`/`important` keep their own word even when
+                // their canonical kind (danger / info) supplies the
+                // styling. Falls back to the canonical preset only
+                // when raw_label is somehow empty.
+                let label_text = if !raw_label.is_empty() {
                     raw_label.to_ascii_uppercase()
                 } else {
                     resolved.label.clone()
