@@ -2839,7 +2839,13 @@ impl<'a> Engine<'a> {
                     .collect()
             }
             _ => {
-                let label_text = if kind == "generic" && !raw_label.is_empty() {
+                // Use the author's typed label (uppercased) instead of
+                // the canonical kind's preset label, so aliases like
+                // `caution`/`important` keep their own word even when
+                // their canonical kind (danger / info) supplies the
+                // styling. Falls back to the canonical preset only
+                // when raw_label is somehow empty.
+                let label_text = if !raw_label.is_empty() {
                     raw_label.to_ascii_uppercase()
                 } else {
                     resolved.label.clone()
