@@ -122,14 +122,16 @@ pub fn render_to_bytes(
     let blocks = lower::lower(&tokens);
     // Codepoint set seeded from the source body, then extended with
     // every string the layout pass synthesizes (admonition kind
-    // labels, the auto-emitted "Footnotes" section heading) so the
-    // external-font subset includes the glyphs needed to render them.
-    // Without this seeding, e.g. an `[!IMPORTANT]` admonition would
-    // emit `.notdef` boxes for every letter in `IMPORTANT` that
-    // didn't happen to appear in the source body.
+    // labels, the auto "Footnotes" heading, TOC title, title-page
+    // text, header/footer furniture templates) so the external-font
+    // subset includes the glyphs needed to render them. Without this
+    // seeding e.g. `[!IMPORTANT]` would emit `.notdef` boxes for
+    // every letter in `IMPORTANT` that didn't happen to appear in
+    // the source body.
     let used_codepoints: Vec<char> = {
         let mut chars: Vec<char> = body_text.chars().collect();
         collect_synthesized_codepoints(&blocks, &style, &mut chars);
+        collect_style_codepoints(&style, &mut chars);
         chars.sort();
         chars.dedup();
         chars
@@ -218,6 +220,38 @@ pub fn render_to_bytes(
     let bytes = postprocess::compress(bytes);
 
     Ok(bytes)
+}
+
+/// Append every character that flows from `style` straight into the
+/// rendered output without ever passing through the source markdown:
+/// the TOC title, the title page's title / subtitle / author / date
+/// fields, and the header / footer furniture templates on each of
+/// the three (left / center / right) anchors. These are
+/// user-configurable strings the body text need not contain, so an
+/// external font's subset has to be told about them up front.
+fn collect_style_codepoints(style: &ResolvedStyle, out: &mut Vec<char>) {
+    if let Some(toc) = &style.toc {
+        out.extend(toc.title.chars());
+    }
+    if let Some(tp) = &style.title_page {
+        out.extend(tp.title.chars());
+        if let Some(s) = &tp.subtitle {
+            out.extend(s.chars());
+        }
+        if let Some(a) = &tp.author {
+            out.extend(a.chars());
+        }
+        if let Some(d) = &tp.date {
+            out.extend(d.chars());
+        }
+    }
+    for f in [style.header.as_ref(), style.footer.as_ref()].into_iter().flatten() {
+        for slot in [f.left.as_ref(), f.center.as_ref(), f.right.as_ref()] {
+            if let Some(t) = slot {
+                out.extend(t.chars());
+            }
+        }
+    }
 }
 
 /// Walk the lowered IR and append every character the layout pass
