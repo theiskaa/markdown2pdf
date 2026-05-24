@@ -25,6 +25,12 @@ use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
 
 type Color = printpdf::Color;
 
+/// Colour for a link whose `#slug` target doesn't match any heading
+/// in the document — a dead wikilink. A muted red that reads as
+/// "broken" against any theme. Underline is also suppressed for
+/// these links so they don't visually claim to be live.
+const UNRESOLVED_LINK_COLOR: (u8, u8, u8) = (192, 57, 43);
+
 /// Resolve a `ResolvedPage` to (width_mm, height_mm). Landscape
 /// swaps the named-size dimensions; `PageSize::Custom` is taken
 /// verbatim.
@@ -70,9 +76,11 @@ pub fn lay_out_pages(
     blocks: &[Block],
     style: &ResolvedStyle,
     font_set: &FontSet,
+    known_heading_slugs: &HashSet<String>,
     doc: &mut PdfDocument,
 ) -> Vec<PdfPage> {
     let mut engine = Engine::new(style, font_set, doc);
+    engine.known_heading_slugs = known_heading_slugs.clone();
     let mut it = blocks.iter().peekable();
     while let Some(block) = it.next() {
         let next = it.peek().copied();
@@ -121,6 +129,11 @@ struct Engine<'a> {
     /// Slugs already used in this document; new headings with the
     /// same base slug get `-2`, `-3`, ... suffixes.
     used_slugs: HashSet<String>,
+    /// Document-wide set of heading slugs, populated before layout
+    /// starts. Used to style internal `#slug` links: a target in the
+    /// set is a resolvable link (live styling); not in the set is a
+    /// dead link (red, no underline).
+    known_heading_slugs: HashSet<String>,
     /// Alignment used by the next call to [`write_wrapped_runs`]. Set
     /// by `render_paragraph` / `render_heading` / etc. before the
     /// call and reset back to `Left` afterwards (so other code paths
@@ -277,6 +290,7 @@ impl<'a> Engine<'a> {
             heading_anchors: Vec::new(),
             pending_internal_links: Vec::new(),
             used_slugs: HashSet::new(),
+            known_heading_slugs: HashSet::new(),
             current_text_align: TextAlignment::Left,
             url_image_cache: HashMap::new(),
             in_text_section: false,
@@ -906,6 +920,16 @@ impl<'a> Engine<'a> {
         s.margin_before_pt + s.padding.top + s.font_size_pt * s.line_height.max(0.5)
     }
 
+    /// True if `link` is an internal `#slug` reference whose slug
+    /// isn't among the document's heading anchors — i.e. a dead
+    /// wikilink. External links (`http://`, etc.) are never
+    /// "unresolved" by this check.
+    fn is_unresolved_internal_link(&self, link: &Option<String>) -> bool {
+        let Some(url) = link else { return false };
+        let Some(slug) = url.strip_prefix('#') else { return false };
+        !self.known_heading_slugs.contains(slug)
+    }
+
     fn bottom_margin_pt(&self) -> f32 {
         mm_to_pt(self.style.page.margins_mm.bottom.max(1.0))
     }
@@ -1005,12 +1029,58 @@ impl<'a> Engine<'a> {
                 continue;
             }
             let breaks = super::hyphenate::break_points(&word.text);
+            // URL / path segment break candidates: positions just
+            // after `/`, `?`, `&`, `#`. Picked when a URL is too long
+            // to fit on one line so the break lands on a logical
+            // segment boundary instead of mid-token. Unlike
+            // hyphenation breaks, no trailing `-` is added.
+            let soft_breaks: Vec<usize> = word
+                .text
+                .char_indices()
+                .filter_map(|(i, c)| {
+                    if matches!(c, '/' | '?' | '&' | '#') {
+                        let next = i + c.len_utf8();
+                        if next < word.text.len() { Some(next) } else { None }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             let hyphen_width = self.measure_text(word.flags, "-", size_pt);
             let chars: Vec<(usize, char)> = word.text.char_indices().collect();
             let mut chunk_start_byte = 0usize;
             let mut chunk_start_char = 0usize;
             while chunk_start_char < chars.len() {
-                // Try hyphenation first: pick the largest break offset
+                // Try soft (URL/path) break first — cleanest split for
+                // long URLs. No trailing hyphen is added.
+                let mut soft_break: Option<usize> = None;
+                for &b in &soft_breaks {
+                    if b <= chunk_start_byte {
+                        continue;
+                    }
+                    let prefix = &word.text[chunk_start_byte..b];
+                    let w = self.measure_text(word.flags, prefix, size_pt);
+                    if w <= max_width {
+                        soft_break = Some(b);
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(b) = soft_break {
+                    let chunk_text = word.text[chunk_start_byte..b].to_string();
+                    out.push(InlineRun { math: None,
+                        text: chunk_text,
+                        flags: word.flags,
+                        link: word.link.clone(),
+                    });
+                    chunk_start_byte = b;
+                    chunk_start_char = chars
+                        .iter()
+                        .position(|(off, _)| *off == b)
+                        .unwrap_or(chars.len());
+                    continue;
+                }
+                // Try hyphenation: pick the largest break offset
                 // that's strictly past chunk_start AND produces a
                 // prefix (plus "-") that fits in max_width.
                 let mut hyphen_break: Option<usize> = None;
@@ -3475,9 +3545,12 @@ impl<'a> Engine<'a> {
                     // link, `[mark]` colour for a highlight, `[code_inline]`
                     // colour for inline code, otherwise the block colour.
                     if seg.link.is_some() {
-                        if let Some(lc) = link_color.clone() {
-                            self.page_ops.push(Op::SetFillColor { col: lc });
-                        }
+                        let lc = if self.is_unresolved_internal_link(&seg.link) {
+                            rgb_color(UNRESOLVED_LINK_COLOR)
+                        } else {
+                            link_color.clone().unwrap_or_else(|| rgb_color((0, 0, 0)))
+                        };
+                        self.page_ops.push(Op::SetFillColor { col: lc });
                     } else if seg.flags.highlight {
                         self.page_ops.push(Op::SetFillColor {
                             col: mark_color.clone(),
@@ -3520,7 +3593,12 @@ impl<'a> Engine<'a> {
                 // run flags (`<u>`, `~~`), from `[link]` for links, and
                 // from `[code_inline]` / `[mark]` for inline code and
                 // highlighted spans.
-                let link_underline = seg.link.is_some() && self.style.link.underline;
+                // Unresolved internal links read as broken via the
+                // red colour above and skip the underline so they
+                // don't visually claim to be live destinations.
+                let link_underline = seg.link.is_some()
+                    && self.style.link.underline
+                    && !self.is_unresolved_internal_link(&seg.link);
                 let is_inline_code = seg.flags.monospace && !self.in_code_block;
                 let dec_underline = seg.flags.underline
                     || link_underline
@@ -4681,7 +4759,7 @@ mod tests {
     fn empty_block_list_produces_no_pages() {
         let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
         let style = ResolvedStyle::default();
-        let pages = lay_out_pages(&[], &style, &font_set, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&[], &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
         assert!(pages.is_empty());
     }
 
@@ -4692,7 +4770,7 @@ mod tests {
         let blocks = vec![Block::Paragraph {
             runs: vec![InlineRun::new("hello world")],
         }];
-        let pages = lay_out_pages(&blocks, &style, &font_set, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&blocks, &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
         assert_eq!(pages.len(), 1);
     }
 
@@ -4705,7 +4783,7 @@ mod tests {
                 runs: vec![InlineRun::new(format!("paragraph {}", i))],
             })
             .collect();
-        let pages = lay_out_pages(&blocks, &style, &font_set, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&blocks, &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
         assert!(pages.len() >= 2, "expected page split, got {}", pages.len());
     }
 
@@ -4721,7 +4799,7 @@ mod tests {
         let blocks = vec![Block::Paragraph {
             runs: vec![InlineRun::new(long_text)],
         }];
-        let pages = lay_out_pages(&blocks, &style, &font_set, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&blocks, &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
         assert!(!pages.is_empty());
     }
 }
