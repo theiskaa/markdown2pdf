@@ -73,8 +73,10 @@ pub fn lay_out_pages(
     doc: &mut PdfDocument,
 ) -> Vec<PdfPage> {
     let mut engine = Engine::new(style, font_set, doc);
-    for block in blocks {
-        engine.render_block(block);
+    let mut it = blocks.iter().peekable();
+    while let Some(block) = it.next() {
+        let next = it.peek().copied();
+        engine.render_block(block, next);
     }
     engine.finish()
 }
@@ -806,25 +808,91 @@ impl<'a> Engine<'a> {
         mm_to_pt(self.style.page.margins_mm.top.max(1.0))
     }
 
-    /// Advance to the next column/page if `header` plus one line of
-    /// `follow` won't fit in the remaining space. No-op at column top
-    /// (already maximum room — advancing would just add a blank page).
-    fn keep_with_next_break(&mut self, header: &ResolvedBlock, follow: &ResolvedBlock) {
+    /// Advance to the next column/page if `header_h + follow_h` won't
+    /// fit in the remaining space. No-op at column top (already maximum
+    /// room — advancing would just add a blank page). Callers supply
+    /// the actual measured heights so the heuristic can adapt to
+    /// multi-line headings and non-paragraph follow blocks.
+    fn keep_with_next_break(&mut self, header_h: f32, follow_h: f32) {
         if (self.y_from_top_pt - self.top_margin_pt()).abs() < 0.01 {
             return;
         }
-        let header_h = header.margin_before_pt
-            + header.padding.top
-            + header.font_size_pt * header.line_height.max(0.5)
-            + header.padding.bottom
-            + header.margin_after_pt;
-        let follow_first_line_h = follow.margin_before_pt
-            + follow.padding.top
-            + follow.font_size_pt * follow.line_height.max(0.5);
-        let needed = header_h + follow_first_line_h;
+        let needed = header_h + follow_h;
         if self.y_from_top_pt + needed + self.bottom_margin_pt() > self.page_height_pt() {
             self.advance_column();
         }
+    }
+
+    /// Conservative wrap-count estimate: total word ink at `font_size`
+    /// divided by current content width, rounded up. Used by
+    /// keep-with-next to reserve enough vertical space for a heading
+    /// that wraps. Biased to over-count by a fraction of a line in
+    /// pathological cases, which is the desired direction — pushing a
+    /// heading to a fresh page is cheaper than orphaning it.
+    fn estimate_wrapped_lines(
+        &self,
+        runs: &[InlineRun],
+        font_size: f32,
+        base_flags: RunFlags,
+    ) -> usize {
+        if runs.is_empty() {
+            return 0;
+        }
+        let max_width = self.content_width_pt();
+        if max_width <= 0.0 {
+            return 1;
+        }
+        let mut total = 0.0f32;
+        for run in runs {
+            if run.math.is_some() {
+                continue;
+            }
+            let flags = run.flags.or(base_flags);
+            total += self.measure_text(flags, &run.text, font_size);
+        }
+        ((total / max_width).ceil() as usize).max(1)
+    }
+
+    /// Vertical reservation for the *first visible chunk* of `next` —
+    /// the space its `margin_before + padding.top + one line height`
+    /// would occupy at the current cursor. `None` falls back to the
+    /// paragraph style (conservative; preserves the pre-lookahead
+    /// behavior when callers can't see what follows).
+    fn next_block_lead_pt(&self, next: Option<&Block>) -> f32 {
+        let s: &ResolvedBlock = match next {
+            None => &self.style.paragraph,
+            Some(Block::Paragraph { .. }) => &self.style.paragraph,
+            Some(Block::Heading { level, .. }) => {
+                let idx = (*level).clamp(1, 6) as usize - 1;
+                &self.style.headings[idx]
+            }
+            Some(Block::CodeBlock { .. }) => &self.style.code_block,
+            Some(Block::BlockQuote { .. }) => &self.style.blockquote,
+            Some(Block::List { entries }) => {
+                if let Some(first) = entries.first() {
+                    let list = match first.bullet {
+                        ListBullet::Ordered(_) => &self.style.list_ordered,
+                        ListBullet::Unordered(_) => &self.style.list_unordered,
+                        ListBullet::TaskChecked | ListBullet::TaskUnchecked => {
+                            &self.style.list_task
+                        }
+                    };
+                    &list.block
+                } else {
+                    &self.style.paragraph
+                }
+            }
+            Some(Block::Admonition { kind, .. }) => {
+                &self.style.admonition.for_kind(kind).block
+            }
+            Some(Block::Table { .. }) => &self.style.table.header,
+            // Image / HR / HtmlBlock / Math / FootnoteDefinitions /
+            // DefinitionList / PageBreak: paragraph is the conservative
+            // default (these all have some leading margin and at least
+            // one line-height worth of content).
+            Some(_) => &self.style.paragraph,
+        };
+        s.margin_before_pt + s.padding.top + s.font_size_pt * s.line_height.max(0.5)
     }
 
     fn bottom_margin_pt(&self) -> f32 {
@@ -1468,9 +1536,9 @@ impl<'a> Engine<'a> {
         ops.push(Op::RestoreGraphicsState);
     }
 
-    fn render_block(&mut self, block: &Block) {
+    fn render_block(&mut self, block: &Block, next: Option<&Block>) {
         match block {
-            Block::Heading { level, runs } => self.render_heading(*level, runs),
+            Block::Heading { level, runs } => self.render_heading(*level, runs, next),
             Block::Paragraph { runs } => self.render_paragraph(runs),
             Block::CodeBlock { lines } => self.render_code_block(lines),
             Block::HorizontalRule => self.render_horizontal_rule(),
@@ -1845,12 +1913,23 @@ impl<'a> Engine<'a> {
             return;
         }
         let h2 = self.style.headings[1].clone();
-        self.keep_with_next_break(&h2, &self.style.paragraph);
         let title_runs = vec![InlineRun { math: None,
             text: "Footnotes".to_string(),
             flags: RunFlags::default(),
             link: None,
         }];
+        let header_h = {
+            let lines = self
+                .estimate_wrapped_lines(&title_runs, h2.font_size_pt, base_flags_from_block(&h2));
+            h2.margin_before_pt
+                + h2.padding.top
+                + lines as f32 * h2.font_size_pt * h2.line_height.max(0.5)
+                + h2.padding.bottom
+                + h2.margin_after_pt
+        };
+        let p = &self.style.paragraph;
+        let follow_h = p.margin_before_pt + p.padding.top + p.font_size_pt * p.line_height.max(0.5);
+        self.keep_with_next_break(header_h, follow_h);
         let color = Some(rgb_color(h2.text_color_rgb()));
         let flags = RunFlags {
             bold: h2.is_bold(),
@@ -2560,6 +2639,21 @@ impl<'a> Engine<'a> {
             } else {
                 self.advance_y(inter_item_gap.max(0.0));
             }
+            // Bullet-orphan guard: if the cursor + one line of entry
+            // text wouldn't fit, advance now so the bullet glyph and
+            // its first text line land together on the next column /
+            // page. Without this, the bullet renders at the old y, the
+            // text wraps onto the next page, and the glyph is left
+            // alone at the bottom of the previous page. Skip at column
+            // top (already maximum room).
+            if (self.y_from_top_pt - self.top_margin_pt()).abs() >= 0.01 {
+                let line_h = size_pt * line_height.max(0.5);
+                if self.y_from_top_pt + line_h + self.bottom_margin_pt()
+                    > self.page_height_pt()
+                {
+                    self.advance_column();
+                }
+            }
             let bullet_x = saved_left;
             let bullet_y = self.y_from_top_pt + size_pt;
             // An unordered bullet whose configured glyph the active
@@ -2658,13 +2752,14 @@ impl<'a> Engine<'a> {
             // continuation paragraphs) stay aligned with the item text.
             let nested_indent = (saved_left + list_style.indent_per_level_pt)
                 .min(self.indent_right_pt - 10.0);
-            for child in &entry.children {
+            let mut child_it = entry.children.iter().peekable();
+            while let Some(child) = child_it.next() {
                 self.indent_left_pt = if matches!(child, Block::List { .. }) {
                     nested_indent
                 } else {
                     text_indent
                 };
-                self.render_block(child);
+                self.render_block(child, child_it.peek().copied());
             }
 
             self.indent_left_pt = saved_left;
@@ -2689,8 +2784,9 @@ impl<'a> Engine<'a> {
         let ctx = self.begin_block(&s);
         let saved_override = self.text_style_override.take();
         self.text_style_override = Some(s.clone());
-        for child in body {
-            self.render_block(child);
+        let mut it = body.iter().peekable();
+        while let Some(child) = it.next() {
+            self.render_block(child, it.peek().copied());
         }
         self.text_style_override = saved_override;
         self.end_block(ctx);
@@ -2803,19 +2899,27 @@ impl<'a> Engine<'a> {
 
         let saved_override = self.text_style_override.take();
         self.text_style_override = Some(block_style.clone());
-        for child in body {
-            self.render_block(child);
+        let mut it = body.iter().peekable();
+        while let Some(child) = it.next() {
+            self.render_block(child, it.peek().copied());
         }
         self.text_style_override = saved_override;
         self.end_block(ctx);
     }
 
-    fn render_heading(&mut self, level: u8, runs: &[InlineRun]) {
+    fn render_heading(&mut self, level: u8, runs: &[InlineRun], next: Option<&Block>) {
         let idx = level.clamp(1, 6) as usize - 1;
         let s = self.style.headings[idx].clone();
-        self.keep_with_next_break(&s, &self.style.paragraph);
-        let color = Some(rgb_color(s.text_color_rgb()));
         let base_flags = base_flags_from_block(&s);
+        let line_count = self.estimate_wrapped_lines(runs, s.font_size_pt, base_flags);
+        let header_h = s.margin_before_pt
+            + s.padding.top
+            + line_count as f32 * s.font_size_pt * s.line_height.max(0.5)
+            + s.padding.bottom
+            + s.margin_after_pt;
+        let follow_h = self.next_block_lead_pt(next);
+        self.keep_with_next_break(header_h, follow_h);
+        let color = Some(rgb_color(s.text_color_rgb()));
 
         let text = collect_heading_text(runs);
         let base_slug = {
