@@ -137,16 +137,10 @@ fn lower_blocks(
                         alt: img.alt,
                         caption: img.title,
                     });
-                } else if is_framing_only_html(content) {
-                    // Standalone <p>, </p>, <div>, </div>, <center>,
-                    // </center>: pure GFM wrappers around real
-                    // markdown. Rendering them verbatim noisy; dropping
-                    // them lets the wrapped content render normally.
                 } else if let Some(inner) = strip_framing_wrapper(content) {
-                    // Wrapper-with-content: <div>...</div>,
-                    // <section>...</section>, etc. Strip the outer tags
-                    // and re-lex the inner so its markdown renders
-                    // properly instead of leaking as literal HTML.
+                    // Runs before is_framing_only_html so wrappers with
+                    // attributes (`<div class="…">body</div>`) get
+                    // unwrapped instead of dropped as a standalone tag.
                     if let Ok(inner_tokens) = crate::markdown::Lexer::new(inner).parse() {
                         let inner_blocks = lower_blocks(
                             &inner_tokens,
@@ -159,6 +153,11 @@ fn lower_blocks(
                             content: content.clone(),
                         });
                     }
+                } else if is_framing_only_html(content) {
+                    // Standalone <p>, </p>, <div>, </div>, <center>,
+                    // </center>: pure GFM wrappers around real
+                    // markdown. Rendering them verbatim noisy; dropping
+                    // them lets the wrapped content render normally.
                 } else if !is_only_html_comments(content) {
                     out.push(Block::HtmlBlock {
                         content: content.clone(),
@@ -885,30 +884,47 @@ enum InlineHtmlTag {
 }
 
 fn classify_inline_html_tag(raw: &str) -> Option<InlineHtmlTag> {
-    let s = raw.trim().to_ascii_lowercase();
-    match s.as_str() {
-        "<sup>" => Some(InlineHtmlTag::SupOpen),
-        "</sup>" => Some(InlineHtmlTag::SupClose),
-        "<sub>" => Some(InlineHtmlTag::SubOpen),
-        "</sub>" => Some(InlineHtmlTag::SubClose),
-        "<u>" => Some(InlineHtmlTag::UnderlineOpen),
-        "</u>" => Some(InlineHtmlTag::UnderlineClose),
-        "<s>" | "<del>" | "<strike>" => Some(InlineHtmlTag::StrikeOpen),
-        "</s>" | "</del>" | "</strike>" => Some(InlineHtmlTag::StrikeClose),
-        "<small>" => Some(InlineHtmlTag::SmallOpen),
-        "</small>" => Some(InlineHtmlTag::SmallClose),
-        "<kbd>" => Some(InlineHtmlTag::KbdOpen),
-        "</kbd>" => Some(InlineHtmlTag::KbdClose),
-        "<strong>" | "<b>" => Some(InlineHtmlTag::BoldOpen),
-        "</strong>" | "</b>" => Some(InlineHtmlTag::BoldClose),
-        "<em>" | "<i>" => Some(InlineHtmlTag::ItalicOpen),
-        "</em>" | "</i>" => Some(InlineHtmlTag::ItalicClose),
-        "<code>" => Some(InlineHtmlTag::CodeOpen),
-        "</code>" => Some(InlineHtmlTag::CodeClose),
-        "<span>" => Some(InlineHtmlTag::SpanOpen),
-        "</span>" => Some(InlineHtmlTag::SpanClose),
-        _ => None,
-    }
+    let s = raw.trim();
+    let rest = s.strip_prefix('<')?.strip_suffix('>')?;
+    let (rest, is_close) = match rest.strip_prefix('/') {
+        Some(r) => (r, true),
+        None => (rest, false),
+    };
+    let rest = rest.trim_start();
+    let name_end = rest
+        .find(|c: char| c.is_ascii_whitespace() || c == '/')
+        .unwrap_or(rest.len());
+    let name = rest[..name_end].to_ascii_lowercase();
+    let opener = match name.as_str() {
+        "sup" => InlineHtmlTag::SupOpen,
+        "sub" => InlineHtmlTag::SubOpen,
+        "u" => InlineHtmlTag::UnderlineOpen,
+        "s" | "del" | "strike" => InlineHtmlTag::StrikeOpen,
+        "small" => InlineHtmlTag::SmallOpen,
+        "kbd" => InlineHtmlTag::KbdOpen,
+        "strong" | "b" => InlineHtmlTag::BoldOpen,
+        "em" | "i" => InlineHtmlTag::ItalicOpen,
+        "code" => InlineHtmlTag::CodeOpen,
+        "span" => InlineHtmlTag::SpanOpen,
+        _ => return None,
+    };
+    Some(if is_close {
+        match opener {
+            InlineHtmlTag::SupOpen => InlineHtmlTag::SupClose,
+            InlineHtmlTag::SubOpen => InlineHtmlTag::SubClose,
+            InlineHtmlTag::UnderlineOpen => InlineHtmlTag::UnderlineClose,
+            InlineHtmlTag::StrikeOpen => InlineHtmlTag::StrikeClose,
+            InlineHtmlTag::SmallOpen => InlineHtmlTag::SmallClose,
+            InlineHtmlTag::KbdOpen => InlineHtmlTag::KbdClose,
+            InlineHtmlTag::BoldOpen => InlineHtmlTag::BoldClose,
+            InlineHtmlTag::ItalicOpen => InlineHtmlTag::ItalicClose,
+            InlineHtmlTag::CodeOpen => InlineHtmlTag::CodeClose,
+            InlineHtmlTag::SpanOpen => InlineHtmlTag::SpanClose,
+            _ => unreachable!(),
+        }
+    } else {
+        opener
+    })
 }
 
 #[derive(Default, Clone, Copy)]
