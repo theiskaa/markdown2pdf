@@ -8,50 +8,44 @@ Each release section below is what ships as the GitHub Release notes.
 
 ## [1.5.0]
 
-A layout polish release. Multi-column page flow lands, and a focused
-pass closes the remaining open rendering bugs around tables,
-admonitions, HTML and link rendering, and page breaks.
+A layout polish release. Multi-column page flow lands; a focused
+pass closes the open rendering bugs around tables, definition
+lists, admonitions, HTML and link rendering, and page breaks.
 
 **Multi-column page layout.** `[page] columns = N` (1..=4) flows
-body content into N equal-width columns separated by `column_gap_mm`.
-Blocks too tall break to the next column, then to a new page;
-backgrounds, padding, and indents rebase across column breaks;
-display math scales to fit. Headers, footers, title page, and TOC
-stay single-column. `columns = 1` (default) is byte-identical to the
-pre-feature output.
+body into N equal-width columns with `column_gap_mm` between them;
+blocks too tall break to the next column, then to a new page.
+Headers, footers, title page, and TOC stay single-column.
+`columns = 1` (default) is byte-identical to pre-feature output.
 
-**Admonition rendering gaps.** Footnotes inside a blockquote /
-admonition / list-item body resolve against the document-wide
-numbering. `caution` and `important` keep their author-typed label
-while picking up canonical kind styling. Auto-emitted strings
-(kind labels, "Footnotes" heading, TOC title, title-page text,
-header/footer furniture) seed the external-font subset so they
-render with real glyphs instead of `□` notdef boxes. A page-bottom
-admonition keeps its label strip with its first body line.
+**Admonition rendering gaps.** Footnotes in nested bodies resolve
+against doc-wide numbering; `caution` / `important` keep their
+author-typed label with canonical kind styling; auto-emitted
+strings seed the external-font subset (no more `□` notdef boxes);
+a page-bottom admonition keeps its label with its first body line.
 
-**GFM tables inside list items.** A 4-space-indented table inside a
-list-item, blockquote, or admonition body tokenises as `Token::Table`
-instead of leaking literal pipes. Tables at column 4+ correctly stay
-in indented-code territory.
+**GFM tables inside list items.** A 4-space-indented table inside
+a list-item, blockquote, or admonition body tokenises as a table
+instead of leaking literal pipes.
 
-**HTML and link rendering.** Inline `<span>` / `<strong>` / `<em>` /
-`<code>` / `<u>` / `<sup>` / `<sub>` and friends are interpreted
-semantically, including with attributes (`<span class="x">…</span>`).
-`<div class="…">body</div>` unwraps instead of being silently
-dropped. `<br/>` and `<hr/>` are recognised at paragraph level.
-Unresolved wikilinks render in a distinct dead-link colour so they
-read as broken at a glance. Long URLs wrap at `/?&#` boundaries
-while non-URL tokens stop splitting at `#`. A `#dup-2` link to the
-second of two same-text headings now resolves.
+**Definition lists.** Definition bodies capture 4-space-indented
+continuations and re-lex them in block context, so one definition
+can hold a code block, table, blockquote, nested list, or multiple
+paragraphs. Multi-term groups (`Alpha\nBeta\n: shared`) and a
+second `:` block after a blank line are recognised.
 
-**Widow / orphan control.** A heading at the page bottom drags the
-first chunk of its follow-on block across the break; a bullet glyph
-no longer renders alone at the page bottom. The
-`keep_with_next_break` heuristic measures the heading's actual
-wrapped lines and uses the real next-block style for the follow
-reservation.
+**HTML and link rendering.** Inline `<span>` / `<strong>` / `<em>`
+/ `<code>` / `<sup>` / `<sub>` and friends render semantically,
+attributes and all. `<div class="…">body</div>` unwraps;
+`<br/>` / `<hr/>` are interpreted. Unresolved wikilinks render in
+a dead-link colour. Long URLs wrap at `/?&#` boundaries; non-URL
+tokens stop splitting at `#`. `#dup-2` links resolve.
 
-Resolves [#102](https://github.com/theiskaa/markdown2pdf/issues/102), [#107](https://github.com/theiskaa/markdown2pdf/issues/107), [#108](https://github.com/theiskaa/markdown2pdf/issues/108), and [#109](https://github.com/theiskaa/markdown2pdf/issues/109).
+**Widow / orphan control.** Headings drag their first follow-on
+chunk across page breaks; a bullet glyph no longer renders alone
+at the page bottom.
+
+Resolves [#102](https://github.com/theiskaa/markdown2pdf/issues/102), [#106](https://github.com/theiskaa/markdown2pdf/issues/106), [#107](https://github.com/theiskaa/markdown2pdf/issues/107), [#108](https://github.com/theiskaa/markdown2pdf/issues/108), and [#109](https://github.com/theiskaa/markdown2pdf/issues/109).
 
 ## [1.4.0] - 2026-05-23
 
