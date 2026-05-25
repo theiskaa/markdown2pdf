@@ -76,7 +76,14 @@ fn lower_blocks(
     let mut root_html_depth = InlineHtmlDepth::default();
 
     fn flush_paragraph(out: &mut Vec<Block>, buffered: &mut Vec<InlineRun>) {
-        if !buffered.iter().all(|r| r.text.trim().is_empty()) {
+        // Drop the buffer only if every run is *both* empty text and has
+        // no inline math. Math runs carry their content in `math`, not
+        // `text` — without checking it, a paragraph that contains only
+        // an inline `$…$` would be silently dropped.
+        let all_empty = buffered
+            .iter()
+            .all(|r| r.text.trim().is_empty() && r.math.is_none());
+        if !all_empty {
             out.push(Block::Paragraph {
                 runs: std::mem::take(buffered),
             });
@@ -1318,6 +1325,23 @@ mod tests {
         assert!(runs
             .iter()
             .any(|r| r.math.as_deref() == Some("x^2") && r.text.is_empty()));
+    }
+
+    #[test]
+    fn inline_math_only_paragraph_survives_flush() {
+        // A paragraph that contains *only* an inline `$…$` was getting
+        // silently dropped because flush_paragraph treated empty-text
+        // runs as whitespace-only. Math content lives in `run.math`,
+        // not `run.text`, so the buffer is non-empty.
+        let blocks = lower(&[Token::Math {
+            inline: true,
+            content: "x+y=z".into(),
+        }]);
+        assert_eq!(blocks.len(), 1, "expected one paragraph, got {blocks:?}");
+        let Block::Paragraph { runs } = &blocks[0] else {
+            panic!("expected paragraph, got {:?}", blocks[0]);
+        };
+        assert!(runs.iter().any(|r| r.math.as_deref() == Some("x+y=z")));
     }
 
     #[test]

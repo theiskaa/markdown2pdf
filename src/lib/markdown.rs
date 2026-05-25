@@ -5878,6 +5878,16 @@ impl Lexer {
             if c == '>' {
                 return None;
             }
+            // `$$` opens a display-math block, which must not be folded
+            // into a setext heading. Without this guard a `$$ … =\n …$$`
+            // body gets eaten as an H1 because the `=` line looks like a
+            // setext underline.
+            if c == '$'
+                && scan_start + 1 < self.input.len()
+                && self.input[scan_start + 1] == '$'
+            {
+                return None;
+            }
         }
 
         // Walk one or more paragraph-like lines until we find either a
