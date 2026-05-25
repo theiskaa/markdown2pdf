@@ -10,7 +10,8 @@ Each release section below is what ships as the GitHub Release notes.
 
 A layout polish release. Multi-column page flow lands; a focused
 pass closes the open rendering bugs around tables, definition
-lists, admonitions, HTML and link rendering, and page breaks.
+lists, admonitions, HTML and link rendering, the math engine, and
+page breaks.
 
 **Multi-column page layout.** `[page] columns = N` (1..=4) flows
 body into N equal-width columns with `column_gap_mm` between them;
@@ -41,11 +42,21 @@ attributes and all. `<div class="…">body</div>` unwraps;
 a dead-link colour. Long URLs wrap at `/?&#` boundaries; non-URL
 tokens stop splitting at `#`. `#dup-2` links resolve.
 
+**Math engine.** A `$$ … = … $$` body no longer gets eaten as a
+setext H1 underline, so matrix-multiplication and other
+multi-equation patterns survive. `\lvert` / `\rvert` / `\lVert` /
+`\rVert` and `\omicron` join the symbol table. Tall paren / bracket
+assemblies for 4+ row matrices stack in the right order (the
+top-corner glyph no longer ends up at the bottom, making `(` look
+like `\`). Long display equations scale-to-fit instead of running
+off the right margin. An inline `$…$` is no longer silently dropped
+when it is the only content in its paragraph.
+
 **Widow / orphan control.** Headings drag their first follow-on
 chunk across page breaks; a bullet glyph no longer renders alone
 at the page bottom.
 
-Resolves [#102](https://github.com/theiskaa/markdown2pdf/issues/102), [#106](https://github.com/theiskaa/markdown2pdf/issues/106), [#107](https://github.com/theiskaa/markdown2pdf/issues/107), [#108](https://github.com/theiskaa/markdown2pdf/issues/108), and [#109](https://github.com/theiskaa/markdown2pdf/issues/109).
+Resolves [#102](https://github.com/theiskaa/markdown2pdf/issues/102), [#105](https://github.com/theiskaa/markdown2pdf/issues/105), [#106](https://github.com/theiskaa/markdown2pdf/issues/106), [#107](https://github.com/theiskaa/markdown2pdf/issues/107), [#108](https://github.com/theiskaa/markdown2pdf/issues/108), and [#109](https://github.com/theiskaa/markdown2pdf/issues/109).
 
 ## [1.4.0] - 2026-05-23
 
