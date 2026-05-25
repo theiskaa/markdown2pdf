@@ -236,6 +236,57 @@ fn unknown_fallback_font_renders_and_degrades_gracefully() {
 }
 
 #[test]
+fn unicode_text_without_font_config_takes_auto_detected_external_path() {
+    // #111: without any FontConfig, the renderer used to fall through
+    // to built-in Type 1 Helvetica — WinAnsi-only, so `café — naïve`
+    // and curly quotes silently turned into `?` replacement chars.
+    // The default-body-source probe now keeps rendering on the
+    // external Identity-H Unicode path on any host that has at least
+    // one candidate font installed.
+    if markdown2pdf::fonts::default_body_source().is_none() {
+        eprintln!("skip: host has no candidate system Unicode font");
+        return;
+    }
+    let md = "Hello café — naïve “quoted” word.".to_string();
+    let bytes = parse_into_bytes(md, ConfigSource::Default, None)
+        .expect("render must succeed");
+    assert!(bytes.starts_with(b"%PDF-"));
+
+    // External Identity-H embedding writes one `/Ascent` per loaded
+    // FontDescriptor. The built-in Type 1 path doesn't, so any
+    // `/Ascent` at all proves the external path was taken.
+    let asc = ascents(&bytes);
+    assert!(
+        !asc.is_empty(),
+        "expected an embedded external body font when default_body_source resolves"
+    );
+}
+
+#[test]
+fn unresolved_builtin_alias_falls_through_to_auto_detect() {
+    // Default themes spell `font_family = \"Helvetica\"`, and macOS
+    // ships Helvetica only inside `Helvetica.ttc` — the loader skips
+    // .ttc collections, so the configured name resolves to nothing
+    // and we used to land on built-in Type 1 Helvetica. The
+    // auto-detect fallback now retries with the per-OS Unicode
+    // candidate list so Unicode rendering still works.
+    if markdown2pdf::fonts::default_body_source().is_none() {
+        eprintln!("skip: host has no candidate system Unicode font");
+        return;
+    }
+    let md = "Body with café and — dashes.".to_string();
+    let cfg = FontConfig::new().with_default_font("Helvetica");
+    let bytes = parse_into_bytes(md, ConfigSource::Default, Some(&cfg))
+        .expect("render must succeed");
+    assert!(bytes.starts_with(b"%PDF-"));
+    let asc = ascents(&bytes);
+    assert!(
+        !asc.is_empty(),
+        "Helvetica that can't resolve should fall through to auto-detected external font"
+    );
+}
+
+#[test]
 fn fallback_font_loads_when_system_font_available() {
     // When a *real* system font is configured as the fallback, the
     // renderer must load it and embed it alongside the primary. With

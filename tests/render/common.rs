@@ -6,13 +6,26 @@
 #![allow(dead_code)] // not every test file uses every helper
 
 use markdown2pdf::config::ConfigSource;
+use markdown2pdf::fonts::{FontConfig, FontSource};
 use markdown2pdf::parse_into_bytes;
 
 /// Render markdown + an embedded TOML config to PDF bytes. Panics on
 /// any error so individual tests don't have to unwrap.
+///
+/// Forces the renderer onto the built-in Type 1 Helvetica/Courier
+/// path: every text op is emitted as a parenthesized WinAnsi string
+/// (`(hello) Tj`), which the test assertions (`contains_text`,
+/// `count_substr`, byte-level scans) can search verbatim. The
+/// production default — auto-detect a system Unicode font when the
+/// caller passes `None` — uses Identity-H glyph IDs, which would make
+/// every text-content scan fail. Tests that specifically exercise the
+/// auto-detect path (in `tests/render/fonts.rs`) call
+/// `parse_into_bytes` directly with `None`.
 pub fn render(md: &str, cfg_toml: &str) -> Vec<u8> {
-    let bytes = parse_into_bytes(md.to_string(), ConfigSource::Embedded(cfg_toml), None)
-        .expect("render must succeed");
+    let cfg = FontConfig::new().with_default_font_source(FontSource::Builtin("Helvetica"));
+    let bytes =
+        parse_into_bytes(md.to_string(), ConfigSource::Embedded(cfg_toml), Some(&cfg))
+            .expect("render must succeed");
     // The renderer Flate-compresses streams (printpdf 0.9 never does,
     // so we deflate in post-process). Tests inspect drawing operators
     // and visible text in the byte stream, so expand it back to the

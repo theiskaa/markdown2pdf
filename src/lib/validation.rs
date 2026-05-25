@@ -3,7 +3,7 @@
 //! This module provides pre-flight checks that warn users about potential issues
 //! without blocking PDF generation.
 
-use crate::fonts::FontConfig;
+use crate::fonts::{FontConfig, default_body_source};
 use std::path::Path;
 
 /// Represents a non-critical warning that doesn't prevent PDF generation
@@ -158,17 +158,26 @@ fn detect_unicode_chars(markdown: &str) -> Option<Vec<char>> {
 /// `FontConfig` or via `[defaults].fallback_fonts` in TOML) also count:
 /// uncovered codepoints route to them via the renderer's split path,
 /// so the document is not stuck on the Win-Ansi-only built-in path.
+///
+/// When nothing user-facing is set, the renderer probes a per-OS list
+/// of likely-installed system Unicode fonts via [`default_body_source`].
+/// If that probe succeeds, the warning is suppressed too — the
+/// document will render through the external Unicode path, not the
+/// ASCII-only built-in.
 fn has_unicode_font(font_config: Option<&FontConfig>, style_fallback_fonts: &[String]) -> bool {
     if !style_fallback_fonts.is_empty() {
         return true;
     }
-    let Some(config) = font_config else {
-        return false;
-    };
-    config.default_font.is_some()
-        || config.default_font_source.is_some()
-        || !config.fallback_fonts.is_empty()
-        || !config.fallback_font_sources.is_empty()
+    if let Some(config) = font_config {
+        if config.default_font.is_some()
+            || config.default_font_source.is_some()
+            || !config.fallback_fonts.is_empty()
+            || !config.fallback_font_sources.is_empty()
+        {
+            return true;
+        }
+    }
+    default_body_source().is_some()
 }
 
 /// Checks for common markdown syntax issues
@@ -417,13 +426,39 @@ mod tests {
     }
 
     #[test]
-    fn missing_font_config_still_warns_about_unicode() {
-        // No font specified → renderer falls back to built-in
-        // WinAnsi-encoded Helvetica/Courier; warning still fires.
+    fn missing_font_config_warning_tracks_system_unicode_probe() {
+        // With no FontConfig the renderer probes the host for a system
+        // Unicode body font. The warning must fire iff that probe fails
+        // — typically only on minimal Linux containers without DejaVu /
+        // Liberation / Noto installed. macOS and Windows defaults make
+        // it succeed in practice.
         let warnings = validate_conversion("Hello café", None, &[], None);
-        assert!(warnings
+        let has_warning = warnings
             .iter()
-            .any(|w| w.kind == WarningKind::UnicodeWithoutFont));
+            .any(|w| w.kind == WarningKind::UnicodeWithoutFont);
+        let probe_found = default_body_source().is_some();
+        assert_eq!(
+            has_warning, !probe_found,
+            "warning state must mirror probe outcome (probe found a font: {probe_found})"
+        );
+    }
+
+    #[test]
+    fn auto_detected_body_font_suppresses_unicode_warning() {
+        // Direct check that the auto-detect path is wired in: when the
+        // probe succeeds, the warning is suppressed even without any
+        // FontConfig. Skipped where the probe returns None.
+        if default_body_source().is_none() {
+            eprintln!("skip: no system Unicode font available on this host");
+            return;
+        }
+        let warnings = validate_conversion("Hello café", None, &[], None);
+        assert!(
+            warnings
+                .iter()
+                .all(|w| w.kind != WarningKind::UnicodeWithoutFont),
+            "auto-detected system body font should suppress the warning"
+        );
     }
 
     #[test]
