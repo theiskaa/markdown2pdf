@@ -56,7 +56,9 @@ fn walk(tokens: &[Token], map: &mut HashMap<String, String>) {
             }
             Token::DefinitionList { entries } => {
                 for e in entries {
-                    walk(&e.term, map);
+                    for t in &e.terms {
+                        walk(t, map);
+                    }
                     for d in &e.definitions {
                         walk(d, map);
                     }

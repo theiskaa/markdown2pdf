@@ -505,9 +505,11 @@ fn render_inline_token(t: &Token, out: &mut String) {
         Token::DefinitionList { entries } => {
             out.push_str("<dl>");
             for entry in entries {
-                out.push_str("<dt>");
-                render_inlines(&entry.term, out);
-                out.push_str("</dt>");
+                for term in &entry.terms {
+                    out.push_str("<dt>");
+                    render_inlines(term, out);
+                    out.push_str("</dt>");
+                }
                 for def in &entry.definitions {
                     out.push_str("<dd>");
                     render_inlines(def, out);
