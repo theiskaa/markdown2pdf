@@ -807,6 +807,26 @@ fn long_word_with_unicode_breaks_at_char_boundaries() {
 }
 
 #[test]
+fn non_url_word_with_hash_does_not_soft_break_at_hash() {
+    let md = "Identifier C#program_with_an_extremely_long_name_that_forces_wrap end.\n";
+    let cfg = r#"
+[page]
+size = "A4"
+[page.margins]
+top = 25.0
+right = 150.0
+bottom = 25.0
+left = 30.0
+"#;
+    let bytes = render(md, cfg);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(
+        !s.contains("(C#)"),
+        "non-URL token containing '#' must not split right after '#'"
+    );
+}
+
+#[test]
 fn html_sup_renders_as_superscript() {
     let bytes = render("Einstein: E = mc<sup>2</sup>.", "");
     let s = String::from_utf8_lossy(&bytes);

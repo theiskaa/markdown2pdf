@@ -1029,23 +1029,25 @@ impl<'a> Engine<'a> {
                 continue;
             }
             let breaks = super::hyphenate::break_points(&word.text);
-            // URL / path segment break candidates: positions just
-            // after `/`, `?`, `&`, `#`. Picked when a URL is too long
-            // to fit on one line so the break lands on a logical
-            // segment boundary instead of mid-token. Unlike
-            // hyphenation breaks, no trailing `-` is added.
-            let soft_breaks: Vec<usize> = word
-                .text
-                .char_indices()
-                .filter_map(|(i, c)| {
-                    if matches!(c, '/' | '?' | '&' | '#') {
-                        let next = i + c.len_utf8();
-                        if next < word.text.len() { Some(next) } else { None }
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            // URL / path segment break candidates (positions after `/`,
+            // `?`, `&`, `#`). Only collected for URL-like words — a `/`
+            // is the cheapest signature — so identifiers like
+            // `C#program_with_long_name` don't get split after `#`.
+            let soft_breaks: Vec<usize> = if word.text.contains('/') {
+                word.text
+                    .char_indices()
+                    .filter_map(|(i, c)| {
+                        if matches!(c, '/' | '?' | '&' | '#') {
+                            let next = i + c.len_utf8();
+                            if next < word.text.len() { Some(next) } else { None }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let hyphen_width = self.measure_text(word.flags, "-", size_pt);
             let chars: Vec<(usize, char)> = word.text.char_indices().collect();
             let mut chunk_start_byte = 0usize;
