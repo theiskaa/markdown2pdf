@@ -206,6 +206,43 @@ pub fn find_system_font(name: &str) -> Option<PathBuf> {
     find_system_font_in(name, &system_font_dirs())
 }
 
+/// Probe a per-OS list of likely-installed Unicode body fonts and
+/// return the first one that resolves. The built-in Type 1 Helvetica
+/// the renderer otherwise falls back to is ASCII-only (lopdf's
+/// WinAnsi encoder passes UTF-8 bytes through unchanged, so anything
+/// outside ASCII becomes `?`), which means an unconfigured user
+/// renders accented Latin, em-dashes, smart quotes, arrows, and math
+/// symbols as `?`. Auto-picking a system Unicode font preserves
+/// fidelity for the default-config path without bundling any font.
+///
+/// Scripts the picked font doesn't cover (CJK, Arabic, Devanagari,
+/// emoji, …) still need an explicit `[defaults].fallback_fonts` or
+/// `FontConfig::with_fallback_fonts` — the auto-pick aims at the
+/// common-case Latin+punctuation degradation, not full multi-script
+/// coverage.
+///
+/// `.ttc` collection files are silently skipped by [`find_system_font`],
+/// so candidates like `Helvetica Neue` or `Lucida Grande` won't
+/// resolve on current macOS even though they're listed; the list
+/// keeps them so the same probe stays correct once a `.ttc`-capable
+/// loader lands. Until then, `Geneva` (always present in
+/// `/System/Library/Fonts`) is the macOS winner.
+pub fn default_body_source() -> Option<FontSource> {
+    #[cfg(target_os = "macos")]
+    const CANDIDATES: &[&str] =
+        &["Helvetica Neue", "Geneva", "Lucida Grande", "Arial Unicode MS"];
+    #[cfg(target_os = "windows")]
+    const CANDIDATES: &[&str] = &["Segoe UI", "Arial", "Tahoma"];
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    const CANDIDATES: &[&str] = &["DejaVu Sans", "Liberation Sans", "Noto Sans"];
+    for name in CANDIDATES {
+        if find_system_font(name).is_some() {
+            return Some(FontSource::System((*name).to_string()));
+        }
+    }
+    None
+}
+
 /// `find_system_font` with the search directories injected, so the
 /// matching logic can be exercised against a controlled directory.
 fn find_system_font_in(name: &str, dirs: &[&str]) -> Option<PathBuf> {
