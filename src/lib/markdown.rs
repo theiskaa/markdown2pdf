@@ -426,12 +426,14 @@ pub enum Token {
     Unknown(String),
 }
 
-/// One entry in a [`Token::DefinitionList`]: a single term followed by
-/// one or more definitions. Each definition is its own inline-token
-/// sequence so the renderer can stack them on separate lines.
+/// One entry in a [`Token::DefinitionList`]: one or more terms that
+/// share one or more definitions. Multi-term syntax (`Alpha\nBeta\n:
+/// shared`) puts both terms in `terms`. Each definition's tokens are
+/// block-level so a single definition can hold a code block, table,
+/// blockquote, nested list, or multiple paragraphs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DefinitionListEntry {
-    pub term: Vec<Token>,
+    pub terms: Vec<Vec<Token>>,
     pub definitions: Vec<Vec<Token>>,
 }
 
@@ -544,8 +546,10 @@ impl Token {
             }
             Token::DefinitionList { entries } => {
                 for entry in entries {
-                    for token in &entry.term {
-                        token.collect_text_recursive(result);
+                    for term in &entry.terms {
+                        for token in term {
+                            token.collect_text_recursive(result);
+                        }
                     }
                     for def in &entry.definitions {
                         for token in def {
@@ -1192,6 +1196,25 @@ fn is_definition_marker_line(chars: &[char], pos: usize) -> bool {
         return false;
     }
     matches!(chars[p], ' ' | '\t' | '\n')
+}
+
+fn count_leading_spaces(chars: &[char], pos: usize) -> usize {
+    let mut n = 0;
+    while pos + n < chars.len() && chars[pos + n] == ' ' {
+        n += 1;
+    }
+    n
+}
+
+fn is_blank_at(chars: &[char], pos: usize) -> bool {
+    let mut p = pos;
+    while p < chars.len() && chars[p] != '\n' {
+        if !chars[p].is_whitespace() {
+            return false;
+        }
+        p += 1;
+    }
+    true
 }
 
 /// True if the given single line begins a block-level construct that
@@ -3758,136 +3781,107 @@ impl Lexer {
         }))
     }
 
-    /// Try to consume one or more `Term\n: Definition` blocks as a
-    /// `Token::DefinitionList`. Returns `Ok(None)` (with position
-    /// preserved) unless the very next two lines satisfy the
-    /// term + colon-definition pattern.
-    ///
-    /// v1 captures term + definitions as raw text; inline markdown
-    /// inside (emphasis, code spans) is a follow-up.
+    /// Try to consume one or more PHP Markdown Extra-style definition
+    /// list entries. Each entry pairs one or more terms with one or
+    /// more definitions. A definition body extends through any
+    /// 4-space-indented continuation lines (with blank-line-separated
+    /// paragraphs) and is re-lexed in a block context, so a single
+    /// definition can hold a code block, table, blockquote, nested
+    /// list, or multiple paragraphs.
     #[inline(never)]
     fn try_parse_definition_list(&mut self) -> Result<Option<Token>, LexerError> {
         let start = self.position;
 
-        // Peek the first term line (no leading `:`).
-        let term_line_start = start;
+        // Detection: the next 1+ non-blank non-block-construct lines
+        // followed by a definition marker line.
         let mut probe = start;
-        while probe < self.input.len() && self.input[probe] != '\n' {
+        let mut term_count = 0;
+        loop {
+            let line_start = probe;
+            while probe < self.input.len() && self.input[probe] != '\n' {
+                probe += 1;
+            }
+            if probe == line_start {
+                return Ok(None);
+            }
+            let line = &self.input[line_start..probe];
+            if !line.iter().any(|c| !c.is_whitespace()) {
+                return Ok(None);
+            }
+            if is_definition_marker_line(&self.input, line_start) {
+                if term_count == 0 {
+                    return Ok(None);
+                }
+                break;
+            }
+            if line_starts_block_construct(line) {
+                return Ok(None);
+            }
+            term_count += 1;
+            if probe >= self.input.len() || self.input[probe] != '\n' {
+                return Ok(None);
+            }
             probe += 1;
         }
-        let term_line_end = probe;
-        if term_line_end == term_line_start {
-            return Ok(None);
-        }
-        let term_slice = &self.input[term_line_start..term_line_end];
-        if !term_slice.iter().any(|c| !c.is_whitespace()) {
-            return Ok(None);
-        }
-        // Don't pull list-marker / blockquote / fenced-code / ATX lines
-        // into a definition term — a stray `: text` on the next line
-        // shouldn't reinterpret them.
-        if line_starts_block_construct(term_slice) {
-            return Ok(None);
-        }
-        if probe >= self.input.len() || self.input[probe] != '\n' {
-            return Ok(None);
-        }
-        // The next line must be a definition marker line.
-        if !is_definition_marker_line(&self.input, probe + 1) {
-            return Ok(None);
-        }
 
-        // Detection confirmed; consume entries from `start`.
         self.position = start;
         let mut entries: Vec<DefinitionListEntry> = Vec::new();
         loop {
-            let t_start = self.position;
-            while self.position < self.input.len() && self.current_char() != '\n' {
-                self.advance();
+            let before_terms = self.position;
+            let terms = self.consume_definition_terms()?;
+            if terms.is_empty() {
+                break;
             }
-            let term_text: String = self.input[t_start..self.position].iter().collect();
-            if self.position < self.input.len() {
-                self.advance(); // consume newline
+            if !is_definition_marker_line(&self.input, self.position) {
+                // Terms without a following `:` aren't a deflist entry —
+                // roll the position back so the main lexer can handle
+                // them as a normal paragraph.
+                self.position = before_terms;
+                break;
             }
-            let term_trimmed = term_text.trim();
-            let term_tokens = if term_trimmed.is_empty() {
-                Vec::new()
-            } else {
-                let mut sub = self.sub_lexer(term_trimmed.to_string());
-                sub.parse_with_context(ParseContext::Inline)?
-            };
-
             let mut definitions: Vec<Vec<Token>> = Vec::new();
             loop {
-                if !is_definition_marker_line(&self.input, self.position) {
+                let Some(body) = self.consume_definition_body() else {
                     break;
-                }
-                let mut q = self.position;
-                let mut lead = 0;
-                while q < self.input.len() && self.input[q] == ' ' && lead < 3 {
-                    q += 1;
-                    lead += 1;
-                }
-                // Skip the `:` and the single mandatory space/tab.
-                q += 1;
-                if q < self.input.len() && (self.input[q] == ' ' || self.input[q] == '\t') {
-                    q += 1;
-                }
-                let d_start = q;
-                let mut d_end = q;
-                while d_end < self.input.len() && self.input[d_end] != '\n' {
-                    d_end += 1;
-                }
-                let def_text: String = self.input[d_start..d_end].iter().collect();
-                let def_trimmed = def_text.trim();
-                let def_tokens = if def_trimmed.is_empty() {
+                };
+                let trimmed = body.trim_end_matches('\n');
+                let def_tokens = if trimmed.is_empty() {
                     Vec::new()
                 } else {
-                    let mut sub = self.sub_lexer(def_trimmed.to_string());
-                    sub.parse_with_context(ParseContext::Inline)?
+                    let mut sub = self.sub_lexer(trimmed.to_string());
+                    sub.parse_with_context(ParseContext::Root)?
                 };
                 definitions.push(def_tokens);
-                self.position = d_end;
-                if self.position < self.input.len() {
-                    self.advance(); // consume newline
+                // Allow a single blank line between sibling definitions.
+                let save = self.position;
+                if save < self.input.len() && self.input[save] == '\n' {
+                    let next = save + 1;
+                    if is_definition_marker_line(&self.input, next) {
+                        self.position = next;
+                    }
                 }
             }
+            entries.push(DefinitionListEntry { terms, definitions });
 
-            entries.push(DefinitionListEntry {
-                term: term_tokens,
-                definitions,
-            });
-
-            // Optionally allow a single blank line, then look for
-            // another term + `:` pair.
+            // Allow one optional blank line before a new term group.
             let save = self.position;
-            let mut p = save;
-            if p < self.input.len() && self.input[p] == '\n' {
-                p += 1;
-            }
-            let next_term_start = p;
-            while p < self.input.len() && self.input[p] != '\n' {
-                p += 1;
-            }
-            if next_term_start == p {
-                break;
-            }
-            let candidate = &self.input[next_term_start..p];
-            if !candidate.iter().any(|c| !c.is_whitespace()) {
-                break;
-            }
-            if line_starts_block_construct(candidate) {
-                break;
-            }
-            if p >= self.input.len() || self.input[p] != '\n' {
-                break;
-            }
-            if !is_definition_marker_line(&self.input, p + 1) {
-                break;
-            }
-            self.position = save;
-            if self.position < self.input.len() && self.input[self.position] == '\n' {
-                self.advance();
+            if save < self.input.len() && self.input[save] == '\n' {
+                let next = save + 1;
+                if next < self.input.len() && self.input[next] != '\n' {
+                    let mut p = next;
+                    while p < self.input.len() && self.input[p] != '\n' {
+                        p += 1;
+                    }
+                    let line = &self.input[next..p];
+                    if !line.iter().any(|c| !c.is_whitespace())
+                        || line_starts_block_construct(line)
+                        || is_definition_marker_line(&self.input, next)
+                    {
+                        // Not a new term line; leave position unchanged.
+                    } else {
+                        self.position = next;
+                    }
+                }
             }
         }
 
@@ -3897,6 +3891,126 @@ impl Lexer {
         }
 
         Ok(Some(Token::DefinitionList { entries }))
+    }
+
+    /// Consume 1+ consecutive non-blank non-block-construct lines as
+    /// terms, stopping when a `:` definition-marker line is reached.
+    /// Each term is sub-lexed in inline context.
+    fn consume_definition_terms(&mut self) -> Result<Vec<Vec<Token>>, LexerError> {
+        let mut terms: Vec<Vec<Token>> = Vec::new();
+        loop {
+            if is_definition_marker_line(&self.input, self.position) {
+                break;
+            }
+            let line_start = self.position;
+            let mut end = line_start;
+            while end < self.input.len() && self.input[end] != '\n' {
+                end += 1;
+            }
+            if end == line_start {
+                break;
+            }
+            let line = &self.input[line_start..end];
+            if !line.iter().any(|c| !c.is_whitespace()) {
+                break;
+            }
+            if line_starts_block_construct(line) {
+                break;
+            }
+            let text: String = line.iter().collect();
+            let trimmed = text.trim();
+            let tokens = if trimmed.is_empty() {
+                Vec::new()
+            } else {
+                let mut sub = self.sub_lexer(trimmed.to_string());
+                sub.parse_with_context(ParseContext::Inline)?
+            };
+            terms.push(tokens);
+            self.position = end;
+            if self.position < self.input.len() && self.input[self.position] == '\n' {
+                self.advance();
+            }
+        }
+        Ok(terms)
+    }
+
+    /// Consume one definition body — the first `:` marker line plus
+    /// every 4-space-indented continuation line (paragraph breaks
+    /// allowed). Returns the body string with the leading indent
+    /// stripped, ready to be re-lexed in block context. Returns
+    /// `None` when the next line isn't a definition marker.
+    fn consume_definition_body(&mut self) -> Option<String> {
+        if !is_definition_marker_line(&self.input, self.position) {
+            return None;
+        }
+        let mut q = self.position;
+        let mut lead = 0;
+        while q < self.input.len() && self.input[q] == ' ' && lead < 3 {
+            q += 1;
+            lead += 1;
+        }
+        q += 1; // skip ':'
+        if q < self.input.len() && (self.input[q] == ' ' || self.input[q] == '\t') {
+            q += 1;
+        }
+        let mut body = String::new();
+        let mut end = q;
+        while end < self.input.len() && self.input[end] != '\n' {
+            end += 1;
+        }
+        body.push_str(&self.input[q..end].iter().collect::<String>());
+        self.position = end;
+        if self.position < self.input.len() {
+            self.advance();
+        }
+        loop {
+            let line_start = self.position;
+            if line_start >= self.input.len() {
+                break;
+            }
+            // Blank line: peek past consecutive blanks. If a
+            // 4-space-indented continuation follows, keep the body
+            // open with a paragraph break; otherwise stop.
+            if self.input[line_start] == '\n' {
+                let mut p = line_start;
+                while p < self.input.len() && self.input[p] == '\n' {
+                    p += 1;
+                }
+                let indent = count_leading_spaces(&self.input, p);
+                if indent >= 4 && !is_blank_at(&self.input, p) {
+                    body.push('\n');
+                    body.push('\n');
+                    self.position = p + 4;
+                    let mut le = self.position;
+                    while le < self.input.len() && self.input[le] != '\n' {
+                        le += 1;
+                    }
+                    body.push_str(&self.input[self.position..le].iter().collect::<String>());
+                    self.position = le;
+                    if self.position < self.input.len() {
+                        self.advance();
+                    }
+                    continue;
+                }
+                break;
+            }
+            let indent = count_leading_spaces(&self.input, line_start);
+            if indent < 4 {
+                break;
+            }
+            body.push('\n');
+            self.position = line_start + 4;
+            let mut le = self.position;
+            while le < self.input.len() && self.input[le] != '\n' {
+                le += 1;
+            }
+            body.push_str(&self.input[self.position..le].iter().collect::<String>());
+            self.position = le;
+            if self.position < self.input.len() {
+                self.advance();
+            }
+        }
+        Some(body)
     }
 
     fn parse_link(&mut self) -> Result<Token, LexerError> {
