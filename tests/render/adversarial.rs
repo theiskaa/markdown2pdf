@@ -14,13 +14,20 @@ use super::common::*;
 fn render_must_not_panic(md: &str) -> Vec<u8> {
     // Wrap in catch_unwind so a future regression that panics here
     // surfaces as a failed assertion rather than killing the whole
-    // test binary.
+    // test binary. Force the built-in font path with an explicit
+    // `FontSource::Builtin` opt-out so the WinAnsi `(text) Tj`
+    // emission the body assertions search for is what the renderer
+    // produces (the auto-detected external Unicode default emits
+    // Identity-H glyph IDs instead).
     let md = md.to_string();
     let bytes = std::panic::catch_unwind(move || {
+        let cfg = markdown2pdf::fonts::FontConfig::new().with_default_font_source(
+            markdown2pdf::fonts::FontSource::Builtin("Helvetica"),
+        );
         markdown2pdf::parse_into_bytes(
             md,
             markdown2pdf::config::ConfigSource::Default,
-            None,
+            Some(&cfg),
         )
     });
     let bytes = bytes
