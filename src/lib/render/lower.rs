@@ -195,11 +195,15 @@ fn lower_blocks(
                 let ir_entries: Vec<DefinitionEntry> = entries
                     .iter()
                     .map(|e| DefinitionEntry {
-                        term: flatten_inline(&e.term, RunFlags::default(), None, &footnote_numbers),
+                        terms: e
+                            .terms
+                            .iter()
+                            .map(|t| flatten_inline(t, RunFlags::default(), None, &footnote_numbers))
+                            .collect(),
                         definitions: e
                             .definitions
                             .iter()
-                            .map(|d| flatten_inline(d, RunFlags::default(), None, &footnote_numbers))
+                            .map(|d| lower_blocks(d, footnote_numbers, footnote_definitions))
                             .collect(),
                     })
                     .collect();
@@ -646,8 +650,10 @@ fn collect_footnote_numbering(tokens: &[Token]) -> HashMap<String, usize> {
             }
             Token::DefinitionList { entries } => {
                 for entry in entries {
-                    for c in &entry.term {
-                        walk(c, map);
+                    for term in &entry.terms {
+                        for c in term {
+                            walk(c, map);
+                        }
                     }
                     for def in &entry.definitions {
                         for c in def {
@@ -732,8 +738,10 @@ fn collect_inline_footnote_defs(
             }
             Token::DefinitionList { entries } => {
                 for entry in entries {
-                    for c in &entry.term {
-                        walk(c, footnotes, out);
+                    for term in &entry.terms {
+                        for c in term {
+                            walk(c, footnotes, out);
+                        }
                     }
                     for def in &entry.definitions {
                         for c in def {

@@ -12,7 +12,7 @@ fn first_definition_list(tokens: &[Token]) -> Option<&Vec<DefinitionListEntry>> 
 }
 
 fn term_text(entry: &DefinitionListEntry) -> String {
-    Token::collect_all_text(&entry.term)
+    Token::collect_all_text(&entry.terms[0])
 }
 
 fn definition_text(entry: &DefinitionListEntry, idx: usize) -> String {
@@ -182,4 +182,46 @@ fn collect_all_text_includes_definition_list_content() {
     let collected = Token::collect_all_text(&toks);
     assert!(collected.contains("Term"));
     assert!(collected.contains("A definition."));
+}
+
+#[test]
+fn multi_term_shares_definitions() {
+    let toks = parse("Alpha\nBeta\n: Shared definition.\n");
+    let entries = first_definition_list(&toks).expect("expected DefinitionList");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].terms.len(), 2);
+    assert_eq!(Token::collect_all_text(&entries[0].terms[0]), "Alpha");
+    assert_eq!(Token::collect_all_text(&entries[0].terms[1]), "Beta");
+    assert_eq!(entries[0].definitions.len(), 1);
+}
+
+#[test]
+fn second_colon_block_after_blank_line_is_another_definition() {
+    let toks = parse("Epsilon\n: First.\n\n: Second.\n");
+    let entries = first_definition_list(&toks).expect("expected DefinitionList");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].definitions.len(), 2);
+    assert_eq!(definition_text(&entries[0], 0), "First.");
+    assert_eq!(definition_text(&entries[0], 1), "Second.");
+}
+
+#[test]
+fn definition_body_with_indented_code_block() {
+    let toks = parse("Term\n:   First paragraph.\n\n    ```rust\n    let x = 42;\n    ```\n");
+    let entries = first_definition_list(&toks).expect("expected DefinitionList");
+    let def = &entries[0].definitions[0];
+    assert!(
+        def.iter().any(|t| matches!(t, Token::Code { block: true, .. })),
+        "expected a fenced Code block inside definition body, got {def:?}"
+    );
+}
+
+#[test]
+fn definition_body_with_multiple_paragraphs() {
+    let toks = parse("Term\n:   First paragraph.\n\n    Second paragraph still part of definition.\n");
+    let entries = first_definition_list(&toks).expect("expected DefinitionList");
+    let def = &entries[0].definitions[0];
+    let text = Token::collect_all_text(def);
+    assert!(text.contains("First paragraph"));
+    assert!(text.contains("Second paragraph still part of definition"));
 }

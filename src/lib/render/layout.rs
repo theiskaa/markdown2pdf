@@ -1948,40 +1948,41 @@ impl<'a> Engine<'a> {
         let def_indent_pt = mm_to_pt(6.0);
 
         for (idx, entry) in entries.iter().enumerate() {
-            let mut term_runs: Vec<InlineRun> = Vec::with_capacity(entry.term.len());
-            for r in &entry.term {
-                let mut bolded = r.clone();
-                bolded.flags = bolded.flags.with_bold();
-                term_runs.push(bolded);
-            }
             if idx == 0 {
                 self.advance_y(body_style.margin_before_pt);
             } else {
                 self.advance_y(body_style.margin_before_pt * 0.5);
             }
-            let (outer_left, outer_right) =
-                self.rebase_indents(saved_left, saved_right, saved_column);
-            self.indent_left_pt = outer_left;
-            self.indent_right_pt = outer_right;
-            self.write_wrapped_runs(
-                &term_runs,
-                body_style.font_size_pt,
-                body_style.line_height,
-                RunFlags::default().with_bold(),
-                color.clone(),
-            );
+            for term in &entry.terms {
+                let bolded: Vec<InlineRun> = term
+                    .iter()
+                    .map(|r| {
+                        let mut b = r.clone();
+                        b.flags = b.flags.with_bold();
+                        b
+                    })
+                    .collect();
+                let (outer_left, outer_right) =
+                    self.rebase_indents(saved_left, saved_right, saved_column);
+                self.indent_left_pt = outer_left;
+                self.indent_right_pt = outer_right;
+                self.write_wrapped_runs(
+                    &bolded,
+                    body_style.font_size_pt,
+                    body_style.line_height,
+                    RunFlags::default().with_bold(),
+                    color.clone(),
+                );
+            }
             let (outer_left, outer_right) =
                 self.rebase_indents(saved_left, saved_right, saved_column);
             self.indent_left_pt = (outer_left + def_indent_pt).min(outer_right - 10.0);
             self.indent_right_pt = outer_right;
             for def in &entry.definitions {
-                self.write_wrapped_runs(
-                    def,
-                    body_style.font_size_pt,
-                    body_style.line_height,
-                    RunFlags::default(),
-                    color.clone(),
-                );
+                for (i, block) in def.iter().enumerate() {
+                    let next = def.get(i + 1);
+                    self.render_block(block, next);
+                }
             }
             let (outer_left, outer_right) =
                 self.rebase_indents(saved_left, saved_right, saved_column);
