@@ -501,6 +501,37 @@ Second: <a name=\"bookmark\">not a link</a> here.
 }
 
 #[test]
+fn div_with_attribute_and_inline_content_unwraps() {
+    let md = "# t\n\n<div class=\"container\">\nThis content is inside a div with a class attribute. Should still unwrap.\n</div>\n\nafter\n";
+    let bytes = render(md, "");
+    assert!(pdf_well_formed(&bytes));
+    assert!(
+        contains_text(&bytes, "is inside a div with a class attribute"),
+        "div-with-attribute inner content was dropped"
+    );
+    assert!(!contains_text(&bytes, "<div"));
+    assert!(!contains_text(&bytes, "class=\"container\""));
+    assert!(contains_text(&bytes, "after"));
+}
+
+#[test]
+fn inline_tags_with_attributes_classify_by_name() {
+    let bytes = render(
+        "<span class=\"foo\">span body</span> and <strong class=\"warn\">bold body</strong>\n",
+        "",
+    );
+    assert!(pdf_well_formed(&bytes));
+    assert!(!contains_text(&bytes, "<span"));
+    assert!(!contains_text(&bytes, "</span>"));
+    assert!(!contains_text(&bytes, "<strong"));
+    assert!(!contains_text(&bytes, "</strong>"));
+    assert!(!contains_text(&bytes, "class=\"foo\""));
+    assert!(!contains_text(&bytes, "class=\"warn\""));
+    assert!(contains_text(&bytes, "span body"));
+    assert!(contains_text(&bytes, "bold body"));
+}
+
+#[test]
 fn empty_anchor_body_still_emits_annotation() {
     let bytes = render(
         "Trailing <a href=\"https://example.com\"></a> link.\n",

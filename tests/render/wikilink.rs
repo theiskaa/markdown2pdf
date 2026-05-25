@@ -85,6 +85,28 @@ Go [[Target]] once and [[Target]] twice.
 }
 
 #[test]
+fn explicit_crossref_to_duplicate_heading_suffix_resolves() {
+    let md = "\
+# Dup
+
+First.
+
+# Dup
+
+Second.
+
+Jump to [the second one](#dup-2).
+";
+    let bytes = render(md, "");
+    assert!(pdf_well_formed(&bytes));
+    assert_eq!(
+        goto_count(&bytes),
+        1,
+        "link to the -2 suffix slug of a duplicate heading must resolve"
+    );
+}
+
+#[test]
 fn wikilink_and_explicit_crossref_coexist() {
     let md = "\
 # Section One

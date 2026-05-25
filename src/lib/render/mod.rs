@@ -179,7 +179,8 @@ pub fn render_to_bytes(
         usage,
         &mut doc,
     );
-    let pages = layout::lay_out_pages(&blocks, &style, &font_set, &mut doc);
+    let known_heading_slugs = collect_heading_slugs(&blocks);
+    let pages = layout::lay_out_pages(&blocks, &style, &font_set, &known_heading_slugs, &mut doc);
 
     let (fallback_w, fallback_h) = layout::page_dimensions_mm(&style.page);
     let pages = if pages.is_empty() {
@@ -220,6 +221,47 @@ pub fn render_to_bytes(
     let bytes = postprocess::compress(bytes);
 
     Ok(bytes)
+}
+
+/// Collect every heading's slug from the lowered IR so the layout
+/// pass can distinguish resolved internal links from unresolved
+/// ones. Walks in document order and mirrors `render_heading`'s
+/// `-2`, `-3`, … suffix policy so a link like `#dup-2` to the
+/// second of two same-text headings still resolves.
+fn collect_heading_slugs(blocks: &[ir::Block]) -> std::collections::HashSet<String> {
+    use crate::markdown::slugify;
+    let mut out = std::collections::HashSet::new();
+    fn walk(blocks: &[ir::Block], out: &mut std::collections::HashSet<String>) {
+        for b in blocks {
+            match b {
+                ir::Block::Heading { runs, .. } => {
+                    let text: String = runs.iter().map(|r| r.text.as_str()).collect();
+                    let base = {
+                        let s = slugify(&text);
+                        if s.is_empty() { "section".to_string() } else { s }
+                    };
+                    let mut slug = base.clone();
+                    let mut n = 2usize;
+                    while out.contains(&slug) {
+                        slug = format!("{}-{}", base, n);
+                        n += 1;
+                    }
+                    out.insert(slug);
+                }
+                ir::Block::BlockQuote { body } | ir::Block::Admonition { body, .. } => {
+                    walk(body, out);
+                }
+                ir::Block::List { entries } => {
+                    for e in entries {
+                        walk(&e.children, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(blocks, &mut out);
+    out
 }
 
 /// Append every character that flows from `style` straight into the
