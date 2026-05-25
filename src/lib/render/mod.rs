@@ -224,12 +224,10 @@ pub fn render_to_bytes(
 }
 
 /// Collect every heading's slug from the lowered IR so the layout
-/// pass can distinguish resolved internal links (style as live link)
-/// from unresolved ones (style as a dead link — different colour,
-/// no underline). Heading slugs match the slug rule the heading
-/// renderer uses; per-heading dedup-with-numeric-suffix isn't
-/// modelled here (a `#my-heading` link targeting the first of two
-/// duplicate headings still resolves).
+/// pass can distinguish resolved internal links from unresolved
+/// ones. Walks in document order and mirrors `render_heading`'s
+/// `-2`, `-3`, … suffix policy so a link like `#dup-2` to the
+/// second of two same-text headings still resolves.
 fn collect_heading_slugs(blocks: &[ir::Block]) -> std::collections::HashSet<String> {
     use crate::markdown::slugify;
     let mut out = std::collections::HashSet::new();
@@ -238,10 +236,17 @@ fn collect_heading_slugs(blocks: &[ir::Block]) -> std::collections::HashSet<Stri
             match b {
                 ir::Block::Heading { runs, .. } => {
                     let text: String = runs.iter().map(|r| r.text.as_str()).collect();
-                    let slug = slugify(&text);
-                    if !slug.is_empty() {
-                        out.insert(slug);
+                    let base = {
+                        let s = slugify(&text);
+                        if s.is_empty() { "section".to_string() } else { s }
+                    };
+                    let mut slug = base.clone();
+                    let mut n = 2usize;
+                    while out.contains(&slug) {
+                        slug = format!("{}-{}", base, n);
+                        n += 1;
                     }
+                    out.insert(slug);
                 }
                 ir::Block::BlockQuote { body } | ir::Block::Admonition { body, .. } => {
                     walk(body, out);
