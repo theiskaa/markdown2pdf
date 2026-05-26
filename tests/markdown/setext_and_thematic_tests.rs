@@ -115,3 +115,20 @@ fn regression_list_item_after_paragraph() {
     let has_li = tokens.iter().any(|t| matches!(t, Token::ListItem { .. }));
     assert!(has_li, "expected list item, got {:?}", tokens);
 }
+
+
+#[test]
+fn display_math_opener_skips_setext_walker() {
+    // `$$` starts a display-math block — setext detection must not
+    // fold the math body into an H1 just because an `=` line appears
+    // inside it (common in matrix-multiplication equations).
+    let tokens = parse("$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n\\begin{pmatrix} x \\\\ y \\end{pmatrix}\n=\n\\begin{pmatrix} ax+by \\\\ cx+dy \\end{pmatrix}\n$$\n");
+    assert!(
+        tokens.iter().any(|t| matches!(t, Token::Math { inline: false, .. })),
+        "expected display math token, got {tokens:?}"
+    );
+    assert!(
+        !tokens.iter().any(|t| matches!(t, Token::Heading(_, _))),
+        "must not produce a heading for `$$ … = … $$`"
+    );
+}

@@ -287,3 +287,68 @@ fn colspan_in_a_data_row() {
     assert!(rows[0][1].covered);
     assert_eq!(Token::collect_all_text(&rows[0][2].content), "end");
 }
+
+/// CommonMark §4: block constructs may begin after 0-3 leading
+/// spaces. Tables previously used a strict column-0 check and were
+/// rejected at 1-3 spaces, dumping them back into paragraph text.
+#[test]
+fn table_with_three_leading_spaces_is_a_table() {
+    let tokens = parse("   | a | b |\n   | --- | --- |\n   | 1 | 2 |\n");
+    assert!(
+        tokens.iter().any(|t| matches!(t, Token::Table { .. })),
+        "table with 3-space leading indent should tokenize as Table"
+    );
+}
+
+#[test]
+fn table_with_four_leading_spaces_is_not_a_table() {
+    // 4 cols crosses into indented-code territory; not a table per
+    // the same 0-3 rule used by every other block marker.
+    let tokens = parse("    | a | b |\n    | --- | --- |\n    | 1 | 2 |\n");
+    assert!(!tokens.iter().any(|t| matches!(t, Token::Table { .. })));
+}
+
+/// A GFM table inside a list-item body's blank-line continuation
+/// must be tokenized as `Token::Table`, not consumed as literal pipe
+/// text. The sub-lexer strips `content_offset` cols and the residual
+/// 1-col indent must not block table dispatch.
+#[test]
+fn table_inside_list_item_body() {
+    let md = "1. First item with a table:\n\n    | a | b |\n    | --- | --- |\n    | 1 | 2 |\n";
+    let tokens = parse(md);
+    let item = tokens
+        .iter()
+        .find(|t| matches!(t, Token::ListItem { .. }))
+        .expect("list item not produced");
+    let Token::ListItem { content, .. } = item else {
+        unreachable!()
+    };
+    let table = content
+        .iter()
+        .find(|t| matches!(t, Token::Table { .. }))
+        .expect("table not produced inside list item — fell back to literal pipes");
+    let Token::Table { headers, rows, .. } = table else {
+        unreachable!()
+    };
+    assert_eq!(headers.len(), 2);
+    assert_eq!(rows.len(), 1);
+}
+
+/// Same for an unordered marker with the typical 2-col content
+/// offset, where the residual indent after stripping is 2 cols.
+#[test]
+fn table_inside_unordered_list_item_body() {
+    let md = "- bullet with table:\n\n  | a | b |\n  | --- | --- |\n  | x | y |\n";
+    let tokens = parse(md);
+    let item = tokens
+        .iter()
+        .find(|t| matches!(t, Token::ListItem { .. }))
+        .expect("list item not produced");
+    let Token::ListItem { content, .. } = item else {
+        unreachable!()
+    };
+    assert!(
+        content.iter().any(|t| matches!(t, Token::Table { .. })),
+        "table inside unordered list item must tokenize as Table"
+    );
+}

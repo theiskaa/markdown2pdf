@@ -474,10 +474,18 @@ impl Token {
                 result.push_str(&format!("{}\"entries\": [\n", inner_indent));
                 for (i, entry) in entries.iter().enumerate() {
                     result.push_str(&format!("{}  {{\n", inner_indent));
-                    result.push_str(&format!("{}    \"term\": [\n", inner_indent));
-                    for (j, token) in entry.term.iter().enumerate() {
-                        result.push_str(&token.to_readable_json(indent_level + 3));
-                        if j < entry.term.len() - 1 {
+                    result.push_str(&format!("{}    \"terms\": [\n", inner_indent));
+                    for (j, term) in entry.terms.iter().enumerate() {
+                        result.push_str(&format!("{}      [\n", inner_indent));
+                        for (k, token) in term.iter().enumerate() {
+                            result.push_str(&token.to_readable_json(indent_level + 4));
+                            if k < term.len() - 1 {
+                                result.push(',');
+                            }
+                            result.push('\n');
+                        }
+                        result.push_str(&format!("{}      ]", inner_indent));
+                        if j < entry.terms.len() - 1 {
                             result.push(',');
                         }
                         result.push('\n');
@@ -692,7 +700,8 @@ impl Token {
                     .iter()
                     .map(|e| {
                         let defs: Vec<String> = e.definitions.iter().map(|d| list(d)).collect();
-                        format!("({} -> [{}])", list(&e.term), defs.join(", "))
+                        let terms: Vec<String> = e.terms.iter().map(|t| list(t)).collect();
+                        format!("([{}] -> [{}])", terms.join(", "), defs.join(", "))
                     })
                     .collect();
                 format!("DefinitionList([{}])", es.join(", "))

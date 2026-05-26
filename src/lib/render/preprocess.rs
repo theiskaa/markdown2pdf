@@ -54,7 +54,9 @@ fn descend(tok: &mut Token) {
         }
         Token::DefinitionList { entries } => {
             for e in entries {
-                rewrite_html_anchors(&mut e.term);
+                for t in &mut e.terms {
+                    rewrite_html_anchors(t);
+                }
                 for d in &mut e.definitions {
                     rewrite_html_anchors(d);
                 }

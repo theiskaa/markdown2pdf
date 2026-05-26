@@ -80,8 +80,8 @@ pub enum Block {
 
 #[derive(Debug, Clone)]
 pub struct DefinitionEntry {
-    pub term: Vec<InlineRun>,
-    pub definitions: Vec<Vec<InlineRun>>,
+    pub terms: Vec<Vec<InlineRun>>,
+    pub definitions: Vec<Vec<Block>>,
 }
 
 #[derive(Debug, Clone)]
@@ -267,12 +267,14 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
                 u.body_bold = true;
             }
             for entry in entries {
-                for r in &entry.term {
-                    walk_run(r, u);
+                for term in &entry.terms {
+                    for r in term {
+                        walk_run(r, u);
+                    }
                 }
                 for def in &entry.definitions {
-                    for r in def {
-                        walk_run(r, u);
+                    for b in def {
+                        walk_block(b, u);
                     }
                 }
             }

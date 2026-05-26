@@ -25,6 +25,12 @@ use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
 
 type Color = printpdf::Color;
 
+/// Colour for a link whose `#slug` target doesn't match any heading
+/// in the document — a dead wikilink. A muted red that reads as
+/// "broken" against any theme. Underline is also suppressed for
+/// these links so they don't visually claim to be live.
+const UNRESOLVED_LINK_COLOR: (u8, u8, u8) = (192, 57, 43);
+
 /// Resolve a `ResolvedPage` to (width_mm, height_mm). Landscape
 /// swaps the named-size dimensions; `PageSize::Custom` is taken
 /// verbatim.
@@ -70,11 +76,15 @@ pub fn lay_out_pages(
     blocks: &[Block],
     style: &ResolvedStyle,
     font_set: &FontSet,
+    known_heading_slugs: &HashSet<String>,
     doc: &mut PdfDocument,
 ) -> Vec<PdfPage> {
     let mut engine = Engine::new(style, font_set, doc);
-    for block in blocks {
-        engine.render_block(block);
+    engine.known_heading_slugs = known_heading_slugs.clone();
+    let mut it = blocks.iter().peekable();
+    while let Some(block) = it.next() {
+        let next = it.peek().copied();
+        engine.render_block(block, next);
     }
     engine.finish()
 }
@@ -119,6 +129,11 @@ struct Engine<'a> {
     /// Slugs already used in this document; new headings with the
     /// same base slug get `-2`, `-3`, ... suffixes.
     used_slugs: HashSet<String>,
+    /// Document-wide set of heading slugs, populated before layout
+    /// starts. Used to style internal `#slug` links: a target in the
+    /// set is a resolvable link (live styling); not in the set is a
+    /// dead link (red, no underline).
+    known_heading_slugs: HashSet<String>,
     /// Alignment used by the next call to [`write_wrapped_runs`]. Set
     /// by `render_paragraph` / `render_heading` / etc. before the
     /// call and reset back to `Left` afterwards (so other code paths
@@ -179,10 +194,37 @@ struct Engine<'a> {
     /// occurrence, instead of re-inlining its (flattened-Bézier)
     /// polygon — the dominant cost in math-heavy PDFs.
     math_glyph_xobjects: HashMap<u16, printpdf::XObjectId>,
+    /// Number of body-text columns per page. Clamped to 1..=4 from
+    /// `style.page.columns`. The TOC and title-page passes force this
+    /// to 1 temporarily so their full-page layout is preserved.
+    num_columns: u8,
+    /// Horizontal gap (points) between two adjacent body columns,
+    /// resolved from `style.page.column_gap_mm` and clamped so a
+    /// positive column width is always derivable. Zero when
+    /// `num_columns <= 1`.
+    column_gap_pt: f32,
+    /// Width (points) of a single body column. Equal to the page's
+    /// content width when `num_columns == 1`.
+    column_width_pt: f32,
+    /// Which body column the cursor is currently in (`0 .. num_columns`).
+    /// Advanced by [`advance_column`]; reset to 0 by [`start_new_page`].
+    current_column: u8,
 }
 
 struct MathState {
     font: super::math::font::MathFont,
+}
+
+/// Captured column state, returned by
+/// [`Engine::snapshot_columns_single`] and consumed by
+/// [`Engine::restore_columns`]. Used by the TOC and title-page
+/// passes to render full-page-width without permanently changing
+/// the engine's column geometry.
+struct SavedColumns {
+    num_columns: u8,
+    column_gap_pt: f32,
+    column_width_pt: f32,
+    current_column: u8,
 }
 
 /// One background-bearing block that is currently open. Tracks the
@@ -205,6 +247,34 @@ impl<'a> Engine<'a> {
         let left = mm_to_pt(style.page.margins_mm.left.max(1.0));
         let right = page_width_mm * MM_TO_PT - mm_to_pt(style.page.margins_mm.right.max(1.0));
         let top = mm_to_pt(style.page.margins_mm.top.max(1.0));
+        let body_width = (right - left).max(10.0);
+        let num_columns = style.page.columns.clamp(1, 4);
+        // A 0mm gap (the default) keeps single-column renders byte-identical.
+        // Hostile values (NaN, inf, negative, absurdly huge) get clamped so
+        // (body_width - (n-1)*gap) / n stays positive and at least the
+        // single-column minimum content width survives.
+        let raw_gap_pt = mm_to_pt(if style.page.column_gap_mm.is_finite() {
+            style.page.column_gap_mm.max(0.0)
+        } else {
+            0.0
+        });
+        let (column_gap_pt, column_width_pt) = if num_columns <= 1 {
+            (0.0, body_width)
+        } else {
+            // Reserve at least 10pt per column so wrap math stays sane
+            // even with a hostile gap. Floor the gap above 0 — narrower
+            // than the user asked, but never collapses geometry.
+            let n_f = num_columns as f32;
+            let max_gap = ((body_width - 10.0 * n_f) / (n_f - 1.0)).max(0.0);
+            let gap = raw_gap_pt.min(max_gap);
+            let col_w = (body_width - gap * (n_f - 1.0)) / n_f;
+            (gap, col_w)
+        };
+        // Initial cursor sits in column 0; its left/right edges collapse
+        // to the page's content edges when num_columns == 1, so existing
+        // single-column renders are byte-identical to the pre-column code.
+        let col0_left = left;
+        let col0_right = left + column_width_pt;
         Self {
             style,
             font_set,
@@ -212,14 +282,15 @@ impl<'a> Engine<'a> {
             page_width_mm,
             page_height_mm,
             y_from_top_pt: top,
-            indent_left_pt: left,
-            indent_right_pt: right,
+            indent_left_pt: col0_left,
+            indent_right_pt: col0_right,
             page_ops: Vec::new(),
             pending_decorations: Vec::new(),
             raw_pages: Vec::new(),
             heading_anchors: Vec::new(),
             pending_internal_links: Vec::new(),
             used_slugs: HashSet::new(),
+            known_heading_slugs: HashSet::new(),
             current_text_align: TextAlignment::Left,
             url_image_cache: HashMap::new(),
             in_text_section: false,
@@ -233,6 +304,10 @@ impl<'a> Engine<'a> {
             math: None,
             math_inline_cache: HashMap::new(),
             math_glyph_xobjects: HashMap::new(),
+            num_columns,
+            column_gap_pt,
+            column_width_pt,
+            current_column: 0,
         }
     }
 
@@ -411,11 +486,15 @@ impl<'a> Engine<'a> {
             .expect("title_page must be Some when this is called");
 
         // Snapshot geometric state. raw_pages is empty here (caller
-        // drained body into content_pages already).
+        // drained body into content_pages already). The title page
+        // renders full-page-width regardless of the body's column
+        // count, so num_columns is forced to 1 for the pass and
+        // restored on the way out.
         let saved_y = self.y_from_top_pt;
         let saved_left = self.indent_left_pt;
         let saved_right = self.indent_right_pt;
         let saved_in_text = self.in_text_section;
+        let saved_columns = self.snapshot_columns_single();
 
         let page_width_pt = self.page_width_pt();
         self.indent_left_pt = mm_to_pt(self.style.page.margins_mm.left.max(1.0));
@@ -522,6 +601,7 @@ impl<'a> Engine<'a> {
         self.indent_left_pt = saved_left;
         self.indent_right_pt = saved_right;
         self.in_text_section = saved_in_text;
+        self.restore_columns(saved_columns);
         pages
     }
 
@@ -583,12 +663,15 @@ impl<'a> Engine<'a> {
 
         // Snapshot the engine's geometric state. raw_pages was already
         // drained by finish() before this call; page_ops is empty too
-        // after `push_current_page` was called.
+        // after `push_current_page` was called. The TOC always renders
+        // full-page-width regardless of the body's column count, so
+        // num_columns is forced to 1 for the pass.
         let saved_y = self.y_from_top_pt;
         let saved_left = self.indent_left_pt;
         let saved_right = self.indent_right_pt;
         let saved_in_text = self.in_text_section;
         let saved_link_count = self.pending_internal_links.len();
+        let saved_columns = self.snapshot_columns_single();
         // Reset to first-page top.
         self.y_from_top_pt = mm_to_pt(self.style.page.margins_mm.top.max(1.0));
         let page_width_pt = self.page_width_pt();
@@ -621,6 +704,7 @@ impl<'a> Engine<'a> {
         self.indent_left_pt = saved_left;
         self.indent_right_pt = saved_right;
         self.in_text_section = saved_in_text;
+        self.restore_columns(saved_columns);
         let _ = saved_link_count;
 
         pages
@@ -738,16 +822,120 @@ impl<'a> Engine<'a> {
         mm_to_pt(self.style.page.margins_mm.top.max(1.0))
     }
 
+    /// Advance to the next column/page if `header_h + follow_h` won't
+    /// fit in the remaining space. No-op at column top (already maximum
+    /// room — advancing would just add a blank page). Callers supply
+    /// the actual measured heights so the heuristic can adapt to
+    /// multi-line headings and non-paragraph follow blocks.
+    fn keep_with_next_break(&mut self, header_h: f32, follow_h: f32) {
+        if (self.y_from_top_pt - self.top_margin_pt()).abs() < 0.01 {
+            return;
+        }
+        let needed = header_h + follow_h;
+        if self.y_from_top_pt + needed + self.bottom_margin_pt() > self.page_height_pt() {
+            self.advance_column();
+        }
+    }
+
+    /// Conservative wrap-count estimate: total word ink at `font_size`
+    /// divided by current content width, rounded up. Used by
+    /// keep-with-next to reserve enough vertical space for a heading
+    /// that wraps. Biased to over-count by a fraction of a line in
+    /// pathological cases, which is the desired direction — pushing a
+    /// heading to a fresh page is cheaper than orphaning it.
+    fn estimate_wrapped_lines(
+        &self,
+        runs: &[InlineRun],
+        font_size: f32,
+        base_flags: RunFlags,
+    ) -> usize {
+        if runs.is_empty() {
+            return 0;
+        }
+        let max_width = self.content_width_pt();
+        if max_width <= 0.0 {
+            return 1;
+        }
+        let mut total = 0.0f32;
+        for run in runs {
+            if run.math.is_some() {
+                continue;
+            }
+            let flags = run.flags.or(base_flags);
+            total += self.measure_text(flags, &run.text, font_size);
+        }
+        ((total / max_width).ceil() as usize).max(1)
+    }
+
+    /// Vertical reservation for the *first visible chunk* of `next` —
+    /// the space its `margin_before + padding.top + one line height`
+    /// would occupy at the current cursor. `None` falls back to the
+    /// paragraph style (conservative; preserves the pre-lookahead
+    /// behavior when callers can't see what follows).
+    fn next_block_lead_pt(&self, next: Option<&Block>) -> f32 {
+        // Admonitions reserve their own label + gap + first body line
+        // via render_admonition's own keep_with_next_break — so the
+        // caller (e.g. a heading right before this admonition) must
+        // reserve the admonition's full label-plus-body chunk, not
+        // just one line, or the admonition will push to the next
+        // page and orphan the heading.
+        if let Some(Block::Admonition { kind, .. }) = next {
+            let s = &self.style.admonition.for_kind(kind).block;
+            return s.margin_before_pt
+                + s.padding.top
+                + s.font_size_pt * s.line_height.max(0.5)
+                + s.font_size_pt * 0.35
+                + s.font_size_pt * s.line_height.max(0.5);
+        }
+        let s: &ResolvedBlock = match next {
+            None => &self.style.paragraph,
+            Some(Block::Paragraph { .. }) => &self.style.paragraph,
+            Some(Block::Heading { level, .. }) => {
+                let idx = (*level).clamp(1, 6) as usize - 1;
+                &self.style.headings[idx]
+            }
+            Some(Block::CodeBlock { .. }) => &self.style.code_block,
+            Some(Block::BlockQuote { .. }) => &self.style.blockquote,
+            Some(Block::List { entries }) => {
+                if let Some(first) = entries.first() {
+                    let list = match first.bullet {
+                        ListBullet::Ordered(_) => &self.style.list_ordered,
+                        ListBullet::Unordered(_) => &self.style.list_unordered,
+                        ListBullet::TaskChecked | ListBullet::TaskUnchecked => {
+                            &self.style.list_task
+                        }
+                    };
+                    &list.block
+                } else {
+                    &self.style.paragraph
+                }
+            }
+            Some(Block::Table { .. }) => &self.style.table.header,
+            // Image / HR / HtmlBlock / Math / FootnoteDefinitions /
+            // DefinitionList / PageBreak: paragraph is the conservative
+            // default (these all have some leading margin and at least
+            // one line-height worth of content).
+            Some(_) => &self.style.paragraph,
+        };
+        s.margin_before_pt + s.padding.top + s.font_size_pt * s.line_height.max(0.5)
+    }
+
+    /// True if `link` is an internal `#slug` reference whose slug
+    /// isn't among the document's heading anchors — i.e. a dead
+    /// wikilink. External links (`http://`, etc.) are never
+    /// "unresolved" by this check.
+    fn is_unresolved_internal_link(&self, link: &Option<String>) -> bool {
+        let Some(url) = link else { return false };
+        let Some(slug) = url.strip_prefix('#') else { return false };
+        !self.known_heading_slugs.contains(slug)
+    }
+
     fn bottom_margin_pt(&self) -> f32 {
         mm_to_pt(self.style.page.margins_mm.bottom.max(1.0))
     }
 
     fn left_margin_pt(&self) -> f32 {
         mm_to_pt(self.style.page.margins_mm.left.max(1.0))
-    }
-
-    fn right_margin_pt(&self) -> f32 {
-        mm_to_pt(self.style.page.margins_mm.right.max(1.0))
     }
 
     fn page_height_pt(&self) -> f32 {
@@ -841,12 +1029,60 @@ impl<'a> Engine<'a> {
                 continue;
             }
             let breaks = super::hyphenate::break_points(&word.text);
+            // URL / path segment break candidates (positions after `/`,
+            // `?`, `&`, `#`). Only collected for URL-like words — a `/`
+            // is the cheapest signature — so identifiers like
+            // `C#program_with_long_name` don't get split after `#`.
+            let soft_breaks: Vec<usize> = if word.text.contains('/') {
+                word.text
+                    .char_indices()
+                    .filter_map(|(i, c)| {
+                        if matches!(c, '/' | '?' | '&' | '#') {
+                            let next = i + c.len_utf8();
+                            if next < word.text.len() { Some(next) } else { None }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let hyphen_width = self.measure_text(word.flags, "-", size_pt);
             let chars: Vec<(usize, char)> = word.text.char_indices().collect();
             let mut chunk_start_byte = 0usize;
             let mut chunk_start_char = 0usize;
             while chunk_start_char < chars.len() {
-                // Try hyphenation first: pick the largest break offset
+                // Try soft (URL/path) break first — cleanest split for
+                // long URLs. No trailing hyphen is added.
+                let mut soft_break: Option<usize> = None;
+                for &b in &soft_breaks {
+                    if b <= chunk_start_byte {
+                        continue;
+                    }
+                    let prefix = &word.text[chunk_start_byte..b];
+                    let w = self.measure_text(word.flags, prefix, size_pt);
+                    if w <= max_width {
+                        soft_break = Some(b);
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(b) = soft_break {
+                    let chunk_text = word.text[chunk_start_byte..b].to_string();
+                    out.push(InlineRun { math: None,
+                        text: chunk_text,
+                        flags: word.flags,
+                        link: word.link.clone(),
+                    });
+                    chunk_start_byte = b;
+                    chunk_start_char = chars
+                        .iter()
+                        .position(|(off, _)| *off == b)
+                        .unwrap_or(chars.len());
+                    continue;
+                }
+                // Try hyphenation: pick the largest break offset
                 // that's strictly past chunk_start AND produces a
                 // prefix (plus "-") that fits in max_width.
                 let mut hyphen_break: Option<usize> = None;
@@ -917,27 +1153,151 @@ impl<'a> Engine<'a> {
         out
     }
 
-    /// Advance the y cursor by `dy` points. If the cursor crosses the
-    /// bottom margin, finalize the current page and start a new one.
+    /// Advance the y cursor by `dy` points. When the cursor crosses
+    /// the bottom margin, move on to the next column on the same page
+    /// (or, if this was the last column, finalize the page and start a
+    /// new one). For single-column layouts the behavior is identical
+    /// to the original "page break on overflow".
     fn advance_y(&mut self, dy: f32) {
         self.y_from_top_pt += dy;
         if self.y_from_top_pt + self.bottom_margin_pt() > self.page_height_pt() {
-            self.start_new_page();
+            self.advance_column();
         }
     }
 
+    /// Left edge (points) of column `col`'s body area, measured from
+    /// the page's left edge. Column 0 sits at `left_margin_pt()`;
+    /// each subsequent column shifts right by `column_width_pt +
+    /// column_gap_pt`. Identical to `left_margin_pt()` for col 0 with
+    /// `num_columns == 1`.
+    fn column_body_left_pt(&self, col: u8) -> f32 {
+        self.left_margin_pt() + col as f32 * (self.column_width_pt + self.column_gap_pt)
+    }
+
+    /// Right edge (points) of column `col`'s body area: column-body-left
+    /// plus the full column width.
+    fn column_body_right_pt(&self, col: u8) -> f32 {
+        self.column_body_left_pt(col) + self.column_width_pt
+    }
+
+    /// Translate a `(left, right)` indent pair captured in `saved_column`
+    /// to the equivalent pair in `self.current_column`, preserving the
+    /// relative offset from each column-body edge. Used by callers that
+    /// snapshot indents around content that might trigger
+    /// `advance_column` mid-call.
+    fn rebase_indents(&self, saved_left: f32, saved_right: f32, saved_column: u8) -> (f32, f32) {
+        if saved_column == self.current_column {
+            return (saved_left, saved_right);
+        }
+        let prev_l = self.column_body_left_pt(saved_column);
+        let prev_r = self.column_body_right_pt(saved_column);
+        let dl = saved_left - prev_l;
+        let dr = prev_r - saved_right;
+        let cur_l = self.column_body_left_pt(self.current_column);
+        let cur_r = self.column_body_right_pt(self.current_column);
+        (cur_l + dl, cur_r - dr)
+    }
+
+    /// Page-break: finalize the current page, reset to column 0 on a
+    /// fresh page. Used by `Block::PageBreak` and by `advance_column`
+    /// once the last column has filled. Preserves the *relative*
+    /// indent inside any open block (a blockquote that page-broke
+    /// keeps its left/right padding on the new page).
     fn start_new_page(&mut self) {
         self.close_text_section();
         self.paint_open_bg_fragments();
         self.push_current_page();
+        let prev_col_left = self.column_body_left_pt(self.current_column);
+        let prev_col_right = self.column_body_right_pt(self.current_column);
+        let delta_l = self.indent_left_pt - prev_col_left;
+        let delta_r = prev_col_right - self.indent_right_pt;
+        self.current_column = 0;
         self.y_from_top_pt = self.top_margin_pt();
+        let new_col_left = self.column_body_left_pt(0);
+        let new_col_right = self.column_body_right_pt(0);
+        self.indent_left_pt = new_col_left + delta_l;
+        self.indent_right_pt = new_col_right - delta_r;
         // Each still-open background continues at the top of the new
-        // page; its fill on this page starts at the top content edge
+        // column; its fill on this page starts at the top content edge
         // and its splice marker resets to the (now empty) op buffer.
+        // X-edges follow the new column (preserving the bg's relative
+        // offset from the column body edges).
         let new_top = self.top_margin_pt();
         for ob in self.open_bg.iter_mut() {
             ob.top_y = new_top;
             ob.marker = 0;
+            let bg_dl = ob.x_left - prev_col_left;
+            let bg_dr = prev_col_right - ob.x_right;
+            ob.x_left = new_col_left + bg_dl;
+            ob.x_right = new_col_right - bg_dr;
+        }
+    }
+
+    /// Snapshot the column state and force the engine into a
+    /// transient single-column mode. Used by the TOC and title-page
+    /// passes so their full-page layout doesn't get sliced into
+    /// columns. Restore with [`restore_columns`].
+    fn snapshot_columns_single(&mut self) -> SavedColumns {
+        let saved = SavedColumns {
+            num_columns: self.num_columns,
+            column_gap_pt: self.column_gap_pt,
+            column_width_pt: self.column_width_pt,
+            current_column: self.current_column,
+        };
+        let page_width_pt = self.page_width_pt();
+        let body_w = (page_width_pt
+            - mm_to_pt(self.style.page.margins_mm.left.max(1.0))
+            - mm_to_pt(self.style.page.margins_mm.right.max(1.0)))
+        .max(10.0);
+        self.num_columns = 1;
+        self.column_gap_pt = 0.0;
+        self.column_width_pt = body_w;
+        self.current_column = 0;
+        saved
+    }
+
+    /// Restore column state previously captured by
+    /// [`snapshot_columns_single`]. The caller is responsible for
+    /// re-establishing the indents it took out as well — the column
+    /// state alone is the column index, gap, width, and count.
+    fn restore_columns(&mut self, saved: SavedColumns) {
+        self.num_columns = saved.num_columns;
+        self.column_gap_pt = saved.column_gap_pt;
+        self.column_width_pt = saved.column_width_pt;
+        self.current_column = saved.current_column;
+    }
+
+    /// Move to the next column on the same page; if the current column
+    /// was the last, fall through to `start_new_page`. Any open block
+    /// background paints the fragment that fit in the now-leaving
+    /// column before its top-y / x-edges are reset to the new column.
+    /// For single-column layouts this is exactly `start_new_page` —
+    /// the geometry collapses to the original code path.
+    fn advance_column(&mut self) {
+        if self.current_column + 1 >= self.num_columns {
+            self.start_new_page();
+            return;
+        }
+        self.close_text_section();
+        self.paint_open_bg_fragments();
+        let prev_col_left = self.column_body_left_pt(self.current_column);
+        let prev_col_right = self.column_body_right_pt(self.current_column);
+        let delta_l = self.indent_left_pt - prev_col_left;
+        let delta_r = prev_col_right - self.indent_right_pt;
+        self.current_column += 1;
+        self.y_from_top_pt = self.top_margin_pt();
+        let new_col_left = self.column_body_left_pt(self.current_column);
+        let new_col_right = self.column_body_right_pt(self.current_column);
+        self.indent_left_pt = new_col_left + delta_l;
+        self.indent_right_pt = new_col_right - delta_r;
+        let new_top = self.top_margin_pt();
+        for ob in self.open_bg.iter_mut() {
+            ob.top_y = new_top;
+            ob.marker = 0;
+            let bg_dl = ob.x_left - prev_col_left;
+            let bg_dr = prev_col_right - ob.x_right;
+            ob.x_left = new_col_left + bg_dl;
+            ob.x_right = new_col_right - bg_dr;
         }
     }
 
@@ -1038,7 +1398,14 @@ impl<'a> Engine<'a> {
     /// Caller must hold the returned ctx unmodified and pass it to
     /// `end_block` after the block's content has been emitted.
     fn begin_block(&mut self, style: &ResolvedBlock) -> BlockPaintCtx {
-        self.advance_y(style.margin_before_pt);
+        // Match CSS multi-column: collapse the first block's top
+        // margin at the top of each column so col 0 (H1) and col 1+
+        // (paragraph) align. Single-column layouts keep the original
+        // breathing room.
+        let at_column_top = (self.y_from_top_pt - self.top_margin_pt()).abs() < 0.01;
+        if !(self.num_columns > 1 && at_column_top) {
+            self.advance_y(style.margin_before_pt);
+        }
         let outer_y_top = self.y_from_top_pt;
         let outer_x_left = self.indent_left_pt;
         let outer_x_right = self.indent_right_pt;
@@ -1069,6 +1436,7 @@ impl<'a> Engine<'a> {
         BlockPaintCtx {
             saved_left: outer_x_left,
             saved_right: outer_x_right,
+            saved_column: self.current_column,
             outer_x_left,
             outer_x_right,
             outer_y_top,
@@ -1128,8 +1496,24 @@ impl<'a> Engine<'a> {
             );
         }
 
-        self.indent_left_pt = ctx.saved_left;
-        self.indent_right_pt = ctx.saved_right;
+        // If the block crossed a column- or page-break, the absolute
+        // indents captured at begin time refer to the *old* column and
+        // would snap subsequent blocks back into it. Translate them to
+        // the current column by preserving the delta from the column
+        // body edges.
+        if ctx.saved_column == self.current_column {
+            self.indent_left_pt = ctx.saved_left;
+            self.indent_right_pt = ctx.saved_right;
+        } else {
+            let prev_col_left = self.column_body_left_pt(ctx.saved_column);
+            let prev_col_right = self.column_body_right_pt(ctx.saved_column);
+            let delta_l = ctx.saved_left - prev_col_left;
+            let delta_r = prev_col_right - ctx.saved_right;
+            let cur_col_left = self.column_body_left_pt(self.current_column);
+            let cur_col_right = self.column_body_right_pt(self.current_column);
+            self.indent_left_pt = cur_col_left + delta_l;
+            self.indent_right_pt = cur_col_right - delta_r;
+        }
         self.letter_spacing_pt = ctx.saved_letter_spacing;
         self.advance_y(ctx.margin_after_pt);
     }
@@ -1235,9 +1619,9 @@ impl<'a> Engine<'a> {
         ops.push(Op::RestoreGraphicsState);
     }
 
-    fn render_block(&mut self, block: &Block) {
+    fn render_block(&mut self, block: &Block, next: Option<&Block>) {
         match block {
-            Block::Heading { level, runs } => self.render_heading(*level, runs),
+            Block::Heading { level, runs } => self.render_heading(*level, runs, next),
             Block::Paragraph { runs } => self.render_paragraph(runs),
             Block::CodeBlock { lines } => self.render_code_block(lines),
             Block::HorizontalRule => self.render_horizontal_rule(),
@@ -1469,7 +1853,7 @@ impl<'a> Engine<'a> {
         let color = rgb_color((m.color.r, m.color.g, m.color.b));
         let base_pt = self.style.paragraph.font_size_pt * m.scale;
 
-        let frag = {
+        let mut frag = {
             let ms = self.math.as_ref().unwrap().as_ref().unwrap();
             match super::math::typeset(&ms.font, content, true, base_pt) {
                 Some(f) => f,
@@ -1484,14 +1868,28 @@ impl<'a> Engine<'a> {
         s.margin_before_pt = m.margin_before_pt;
         s.margin_after_pt = m.margin_after_pt;
         let ctx = self.begin_block(&s);
+        // Scale-to-fit if the equation is wider than the current
+        // column. Re-typeset at a smaller base point size rather than
+        // overflowing into the adjacent column.
+        let avail_w = self.content_width_pt();
+        if frag.w > avail_w && avail_w > 0.0 {
+            let scaled_pt = (base_pt * (avail_w / frag.w)).max(4.0);
+            let ms = self.math.as_ref().unwrap().as_ref().unwrap();
+            if let Some(f) = super::math::typeset(&ms.font, content, true, scaled_pt) {
+                frag = f;
+            }
+        }
         let total_h = frag.asc + frag.desc;
-        // Keep the whole equation on one page when it fits.
+        // Keep the whole equation on one page when it fits. In a
+        // multi-column layout this means "in the same column" — push
+        // to the next column (or page) rather than splitting the
+        // equation across columns.
         if self.y_from_top_pt + total_h + self.bottom_margin_pt()
             > self.page_height_pt()
             && total_h + self.top_margin_pt() + self.bottom_margin_pt()
                 < self.page_height_pt()
         {
-            self.start_new_page();
+            self.advance_column();
         }
         let avail = self.content_width_pt();
         let slack = (avail - frag.w).max(0.0);
@@ -1545,38 +1943,51 @@ impl<'a> Engine<'a> {
         let body_style = self.style.paragraph.clone();
         let color = Some(rgb_color(body_style.text_color_rgb()));
         let saved_left = self.indent_left_pt;
+        let saved_right = self.indent_right_pt;
+        let saved_column = self.current_column;
         let def_indent_pt = mm_to_pt(6.0);
 
         for (idx, entry) in entries.iter().enumerate() {
-            let mut term_runs: Vec<InlineRun> = Vec::with_capacity(entry.term.len());
-            for r in &entry.term {
-                let mut bolded = r.clone();
-                bolded.flags = bolded.flags.with_bold();
-                term_runs.push(bolded);
-            }
             if idx == 0 {
                 self.advance_y(body_style.margin_before_pt);
             } else {
                 self.advance_y(body_style.margin_before_pt * 0.5);
             }
-            self.write_wrapped_runs(
-                &term_runs,
-                body_style.font_size_pt,
-                body_style.line_height,
-                RunFlags::default().with_bold(),
-                color.clone(),
-            );
-            self.indent_left_pt = (saved_left + def_indent_pt).min(self.indent_right_pt - 10.0);
-            for def in &entry.definitions {
+            for term in &entry.terms {
+                let bolded: Vec<InlineRun> = term
+                    .iter()
+                    .map(|r| {
+                        let mut b = r.clone();
+                        b.flags = b.flags.with_bold();
+                        b
+                    })
+                    .collect();
+                let (outer_left, outer_right) =
+                    self.rebase_indents(saved_left, saved_right, saved_column);
+                self.indent_left_pt = outer_left;
+                self.indent_right_pt = outer_right;
                 self.write_wrapped_runs(
-                    def,
+                    &bolded,
                     body_style.font_size_pt,
                     body_style.line_height,
-                    RunFlags::default(),
+                    RunFlags::default().with_bold(),
                     color.clone(),
                 );
             }
-            self.indent_left_pt = saved_left;
+            let (outer_left, outer_right) =
+                self.rebase_indents(saved_left, saved_right, saved_column);
+            self.indent_left_pt = (outer_left + def_indent_pt).min(outer_right - 10.0);
+            self.indent_right_pt = outer_right;
+            for def in &entry.definitions {
+                for (i, block) in def.iter().enumerate() {
+                    let next = def.get(i + 1);
+                    self.render_block(block, next);
+                }
+            }
+            let (outer_left, outer_right) =
+                self.rebase_indents(saved_left, saved_right, saved_column);
+            self.indent_left_pt = outer_left;
+            self.indent_right_pt = outer_right;
         }
         self.advance_y(body_style.margin_after_pt);
     }
@@ -1585,13 +1996,24 @@ impl<'a> Engine<'a> {
         if entries.is_empty() {
             return;
         }
-        // Render the "Footnotes" section heading using h2 typography.
         let h2 = self.style.headings[1].clone();
         let title_runs = vec![InlineRun { math: None,
             text: "Footnotes".to_string(),
             flags: RunFlags::default(),
             link: None,
         }];
+        let header_h = {
+            let lines = self
+                .estimate_wrapped_lines(&title_runs, h2.font_size_pt, base_flags_from_block(&h2));
+            h2.margin_before_pt
+                + h2.padding.top
+                + lines as f32 * h2.font_size_pt * h2.line_height.max(0.5)
+                + h2.padding.bottom
+                + h2.margin_after_pt
+        };
+        let p = &self.style.paragraph;
+        let follow_h = p.margin_before_pt + p.padding.top + p.font_size_pt * p.line_height.max(0.5);
+        self.keep_with_next_break(header_h, follow_h);
         let color = Some(rgb_color(h2.text_color_rgb()));
         let flags = RunFlags {
             bold: h2.is_bold(),
@@ -1822,7 +2244,7 @@ impl<'a> Engine<'a> {
 
         self.advance_y(self.style.image.margin_before_pt);
         if self.y_from_top_pt + rendered_h_pt + self.bottom_margin_pt() > self.page_height_pt() {
-            self.start_new_page();
+            self.advance_column();
         }
 
         let xobject_id: XObjectId = self.doc.add_image(&raw);
@@ -1862,6 +2284,7 @@ impl<'a> Engine<'a> {
             let base_flags = base_flags_from_block(&cap);
             let saved_left = self.indent_left_pt;
             let saved_right = self.indent_right_pt;
+            let saved_column = self.current_column;
             if rendered_w_pt < self.content_width_pt() {
                 self.indent_left_pt = x_pt;
                 self.indent_right_pt = x_pt + rendered_w_pt;
@@ -1883,8 +2306,9 @@ impl<'a> Engine<'a> {
                 color,
             );
             self.current_text_align = saved_align;
-            self.indent_left_pt = saved_left;
-            self.indent_right_pt = saved_right;
+            let (l, r) = self.rebase_indents(saved_left, saved_right, saved_column);
+            self.indent_left_pt = l;
+            self.indent_right_pt = r;
         }
 
         self.advance_y(self.style.image.margin_after_pt);
@@ -1917,14 +2341,11 @@ impl<'a> Engine<'a> {
 
         let col_count = headers.len();
         let total_width = self.content_width_pt();
-        // A very wide table (hundreds of columns) drives the even split
-        // below the cell padding, making `col_width - pad` negative:
-        // every word then "overflows" and row height explodes, and the
-        // cell box (left+pad .. right-pad) inverts. Floor the column so
-        // geometry stays positive — the table overflows the right
-        // margin (ugly) instead of degenerating.
-        const MIN_COL_WIDTH_PT: f32 = 24.0;
-        let col_width = (total_width / col_count as f32).max(MIN_COL_WIDTH_PT);
+        // Floor the column wide enough that the inner cell box
+        // (left+pad .. right-pad) can't invert.
+        let pad = self.style.table.cell_padding;
+        let min_col_width_pt = pad.left + pad.right + 1.0;
+        let col_width = (total_width / col_count as f32).max(min_col_width_pt);
 
         // Header row.
         let header_height = self.measure_row_height(
@@ -1935,7 +2356,7 @@ impl<'a> Engine<'a> {
             true,
         );
         if self.y_from_top_pt + header_height + self.bottom_margin_pt() > self.page_height_pt() {
-            self.start_new_page();
+            self.advance_column();
         }
         let header_top = self.y_from_top_pt;
         self.draw_row(
@@ -1971,8 +2392,8 @@ impl<'a> Engine<'a> {
             let group_end = rowspan_group_end(&table_rows, row_idx);
             let group_height: f32 = row_heights[row_idx..group_end].iter().sum();
             if self.y_from_top_pt + group_height + self.bottom_margin_pt() > self.page_height_pt() {
-                self.start_new_page();
-                // Reprint headers on the new page.
+                self.advance_column();
+                // Reprint headers on the new column (or page).
                 let header_top = self.y_from_top_pt;
                 self.draw_row(
                     headers,
@@ -2139,6 +2560,7 @@ impl<'a> Engine<'a> {
         let pad = self.style.table.cell_padding;
         let saved_left = self.indent_left_pt;
         let saved_right = self.indent_right_pt;
+        let saved_column = self.current_column;
         let row_top = self.y_from_top_pt;
         let col_count = cells.len();
         for (i, cell) in cells.iter().enumerate() {
@@ -2205,8 +2627,9 @@ impl<'a> Engine<'a> {
             self.indent_left_pt = saved_left;
             self.draw_cell_border(row_top, row_top + region_height, i, i + colspan, col_width);
         }
-        self.indent_left_pt = saved_left;
-        self.indent_right_pt = saved_right;
+        let (l, r) = self.rebase_indents(saved_left, saved_right, saved_column);
+        self.indent_left_pt = l;
+        self.indent_right_pt = r;
         self.y_from_top_pt = row_top;
     }
 
@@ -2299,6 +2722,21 @@ impl<'a> Engine<'a> {
                 self.advance_y(s.margin_before_pt.max(0.5));
             } else {
                 self.advance_y(inter_item_gap.max(0.0));
+            }
+            // Bullet-orphan guard: if the cursor + one line of entry
+            // text wouldn't fit, advance now so the bullet glyph and
+            // its first text line land together on the next column /
+            // page. Without this, the bullet renders at the old y, the
+            // text wraps onto the next page, and the glyph is left
+            // alone at the bottom of the previous page. Skip at column
+            // top (already maximum room).
+            if (self.y_from_top_pt - self.top_margin_pt()).abs() >= 0.01 {
+                let line_h = size_pt * line_height.max(0.5);
+                if self.y_from_top_pt + line_h + self.bottom_margin_pt()
+                    > self.page_height_pt()
+                {
+                    self.advance_column();
+                }
             }
             let bullet_x = saved_left;
             let bullet_y = self.y_from_top_pt + size_pt;
@@ -2398,13 +2836,14 @@ impl<'a> Engine<'a> {
             // continuation paragraphs) stay aligned with the item text.
             let nested_indent = (saved_left + list_style.indent_per_level_pt)
                 .min(self.indent_right_pt - 10.0);
-            for child in &entry.children {
+            let mut child_it = entry.children.iter().peekable();
+            while let Some(child) = child_it.next() {
                 self.indent_left_pt = if matches!(child, Block::List { .. }) {
                     nested_indent
                 } else {
                     text_indent
                 };
-                self.render_block(child);
+                self.render_block(child, child_it.peek().copied());
             }
 
             self.indent_left_pt = saved_left;
@@ -2429,8 +2868,9 @@ impl<'a> Engine<'a> {
         let ctx = self.begin_block(&s);
         let saved_override = self.text_style_override.take();
         self.text_style_override = Some(s.clone());
-        for child in body {
-            self.render_block(child);
+        let mut it = body.iter().peekable();
+        while let Some(child) = it.next() {
+            self.render_block(child, it.peek().copied());
         }
         self.text_style_override = saved_override;
         self.end_block(ctx);
@@ -2464,6 +2904,18 @@ impl<'a> Engine<'a> {
             style: BorderStyle::Solid,
         });
 
+        // Keep-with-next: the kind-label strip and the first body
+        // chunk must land together. Reserve margin_before + padding.top
+        // + one label line + the post-label gap + one first-body-line
+        // worth of space; if that won't fit before the page bottom,
+        // push the whole admonition to the next column/page.
+        let header_h = block_style.margin_before_pt
+            + block_style.padding.top
+            + block_style.font_size_pt * block_style.line_height.max(0.5)
+            + block_style.font_size_pt * 0.35;
+        let follow_h = self.next_block_lead_pt(body.first());
+        self.keep_with_next_break(header_h, follow_h);
+
         let ctx = self.begin_block(&block_style);
 
         // Header line: title runs (already inline-flattened by lower)
@@ -2483,7 +2935,13 @@ impl<'a> Engine<'a> {
                     .collect()
             }
             _ => {
-                let label_text = if kind == "generic" && !raw_label.is_empty() {
+                // Use the author's typed label (uppercased) instead of
+                // the canonical kind's preset label, so aliases like
+                // `caution`/`important` keep their own word even when
+                // their canonical kind (danger / info) supplies the
+                // styling. Falls back to the canonical preset only
+                // when raw_label is somehow empty.
+                let label_text = if !raw_label.is_empty() {
                     raw_label.to_ascii_uppercase()
                 } else {
                     resolved.label.clone()
@@ -2543,18 +3001,27 @@ impl<'a> Engine<'a> {
 
         let saved_override = self.text_style_override.take();
         self.text_style_override = Some(block_style.clone());
-        for child in body {
-            self.render_block(child);
+        let mut it = body.iter().peekable();
+        while let Some(child) = it.next() {
+            self.render_block(child, it.peek().copied());
         }
         self.text_style_override = saved_override;
         self.end_block(ctx);
     }
 
-    fn render_heading(&mut self, level: u8, runs: &[InlineRun]) {
+    fn render_heading(&mut self, level: u8, runs: &[InlineRun], next: Option<&Block>) {
         let idx = level.clamp(1, 6) as usize - 1;
         let s = self.style.headings[idx].clone();
-        let color = Some(rgb_color(s.text_color_rgb()));
         let base_flags = base_flags_from_block(&s);
+        let line_count = self.estimate_wrapped_lines(runs, s.font_size_pt, base_flags);
+        let header_h = s.margin_before_pt
+            + s.padding.top
+            + line_count as f32 * s.font_size_pt * s.line_height.max(0.5)
+            + s.padding.bottom
+            + s.margin_after_pt;
+        let follow_h = self.next_block_lead_pt(next);
+        self.keep_with_next_break(header_h, follow_h);
+        let color = Some(rgb_color(s.text_color_rgb()));
 
         let text = collect_heading_text(runs);
         let base_slug = {
@@ -2666,8 +3133,14 @@ impl<'a> Engine<'a> {
 
         self.advance_y(s.margin_before_pt + thickness * 0.5);
 
-        let mut x_left_pt = self.left_margin_pt();
-        let mut x_right_pt = self.page_width_pt() - self.right_margin_pt();
+        // The rule spans the current column / block region — using the
+        // active indents instead of the page margins keeps it inside a
+        // column (and inside a blockquote's padding). For a default
+        // single-column document with no enclosing block, these are
+        // exactly the page margins, so the line is identical to the
+        // pre-column rendering.
+        let mut x_left_pt = self.indent_left_pt;
+        let mut x_right_pt = self.indent_right_pt;
         let pct = (s.width_pct / 100.0).clamp(0.05, 1.0);
         if pct < 1.0 {
             let full = x_right_pt - x_left_pt;
@@ -3075,9 +3548,12 @@ impl<'a> Engine<'a> {
                     // link, `[mark]` colour for a highlight, `[code_inline]`
                     // colour for inline code, otherwise the block colour.
                     if seg.link.is_some() {
-                        if let Some(lc) = link_color.clone() {
-                            self.page_ops.push(Op::SetFillColor { col: lc });
-                        }
+                        let lc = if self.is_unresolved_internal_link(&seg.link) {
+                            rgb_color(UNRESOLVED_LINK_COLOR)
+                        } else {
+                            link_color.clone().unwrap_or_else(|| rgb_color((0, 0, 0)))
+                        };
+                        self.page_ops.push(Op::SetFillColor { col: lc });
                     } else if seg.flags.highlight {
                         self.page_ops.push(Op::SetFillColor {
                             col: mark_color.clone(),
@@ -3120,7 +3596,12 @@ impl<'a> Engine<'a> {
                 // run flags (`<u>`, `~~`), from `[link]` for links, and
                 // from `[code_inline]` / `[mark]` for inline code and
                 // highlighted spans.
-                let link_underline = seg.link.is_some() && self.style.link.underline;
+                // Unresolved internal links read as broken via the
+                // red colour above and skip the underline so they
+                // don't visually claim to be live destinations.
+                let link_underline = seg.link.is_some()
+                    && self.style.link.underline
+                    && !self.is_unresolved_internal_link(&seg.link);
                 let is_inline_code = seg.flags.monospace && !self.in_code_block;
                 let dec_underline = seg.flags.underline
                     || link_underline
@@ -3309,6 +3790,7 @@ struct PendingInternalLink {
 struct BlockPaintCtx {
     saved_left: f32,
     saved_right: f32,
+    saved_column: u8,
     outer_x_left: f32,
     outer_x_right: f32,
     outer_y_top: f32,
@@ -4280,7 +4762,7 @@ mod tests {
     fn empty_block_list_produces_no_pages() {
         let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
         let style = ResolvedStyle::default();
-        let pages = lay_out_pages(&[], &style, &font_set, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&[], &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
         assert!(pages.is_empty());
     }
 
@@ -4291,7 +4773,7 @@ mod tests {
         let blocks = vec![Block::Paragraph {
             runs: vec![InlineRun::new("hello world")],
         }];
-        let pages = lay_out_pages(&blocks, &style, &font_set, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&blocks, &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
         assert_eq!(pages.len(), 1);
     }
 
@@ -4304,7 +4786,7 @@ mod tests {
                 runs: vec![InlineRun::new(format!("paragraph {}", i))],
             })
             .collect();
-        let pages = lay_out_pages(&blocks, &style, &font_set, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&blocks, &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
         assert!(pages.len() >= 2, "expected page split, got {}", pages.len());
     }
 
@@ -4320,7 +4802,7 @@ mod tests {
         let blocks = vec![Block::Paragraph {
             runs: vec![InlineRun::new(long_text)],
         }];
-        let pages = lay_out_pages(&blocks, &style, &font_set, &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(&blocks, &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
         assert!(!pages.is_empty());
     }
 }

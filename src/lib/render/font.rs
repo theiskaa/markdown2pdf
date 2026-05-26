@@ -29,7 +29,7 @@ use printpdf::{BuiltinFont, FontId, PdfDocument, PdfFontHandle};
 use ttf_parser::Face;
 
 use super::ir::{RunFlags, VariantUsage};
-use crate::fonts::{FontConfig, FontSource, find_system_font};
+use crate::fonts::{FontConfig, FontSource, default_body_source, find_system_font};
 
 /// The set of built-in PDF fonts the renderer can fall back to when
 /// no external Unicode font is loaded. Body / emphasis runs map to a
@@ -400,8 +400,39 @@ impl FontSet {
                 || usage.inline_code_bold_italic,
             bold_italic: usage.mono_bold_italic || usage.inline_code_bold_italic,
         };
-        let external_body = font_config
-            .and_then(|c| load_external_family(default_source(c), used_codepoints, body_variants, doc))
+        // Try the user-picked body font first. If that resolves
+        // (System name finds a .ttf/.otf, an explicit File path exists,
+        // or raw Bytes parse), use it. Otherwise probe a per-OS list
+        // of likely-installed system Unicode fonts. This covers two
+        // cases that would otherwise fall through to the built-in
+        // Type 1 Helvetica — whose WinAnsi-only encoder turns every
+        // non-ASCII codepoint into `?`:
+        //   1. Nothing is configured at all (programmatic caller
+        //      passed `None`, default theme's `font_family` not
+        //      propagated).
+        //   2. The configured name is a built-in alias like
+        //      `Helvetica` whose only on-disk copy on macOS lives in
+        //      a `.ttc` collection the loader skips.
+        //
+        // An explicit `FontSource::Builtin(...)` opt-out skips the
+        // auto-detect — callers (notably the test render helper) use
+        // it to assert on the deterministic WinAnsi text emission of
+        // the built-in path, which the Identity-H external path
+        // doesn't produce.
+        let user_src = font_config.and_then(default_source);
+        let opted_into_builtin = matches!(&user_src, Some(FontSource::Builtin(_)));
+        let external_body = load_external_family(user_src, used_codepoints, body_variants, doc)
+            .or_else(|| {
+                if opted_into_builtin {
+                    return None;
+                }
+                load_external_family(
+                    default_body_source(),
+                    used_codepoints,
+                    body_variants,
+                    doc,
+                )
+            })
             .unwrap_or_default();
         // If the user picked an external body font but didn't specify
         // a code font, try a sensible system monospace fallback. Mixing
@@ -1139,16 +1170,19 @@ mod tests {
 
     #[test]
     fn split_with_no_fallbacks_returns_single_chunk() {
-        // No font_config + no fallbacks = built-in Helvetica path. The
-        // whole input becomes a single chunk with the transliteration
-        // policy of the built-in path — matching the pre-fallback
-        // behavior.
+        // No font_config + no fallbacks means everything routes through
+        // a single primary (either the auto-detected external body font
+        // on hosts that have one, or built-in Helvetica when the probe
+        // returns None). Either way the input must collapse to a single
+        // chunk; only the transliteration flag differs by path (built-in
+        // sets it true so `to_win1252` runs; external leaves it false).
         let mut doc = PdfDocument::new("test");
         let set = FontSet::load(None, &[], VariantUsage::default(), &mut doc);
         let chunks = set.split_for_emit(RunFlags::default(), "Hello", 12.0);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].text, "Hello");
-        assert!(chunks[0].needs_transliteration);
+        let on_external_path = set.external_body.is_loaded();
+        assert_eq!(chunks[0].needs_transliteration, !on_external_path);
         assert!(chunks[0].width_pt > 0.0);
     }
 
@@ -1256,11 +1290,15 @@ mod tests {
         let mut doc = PdfDocument::new("test");
         let set = FontSet::load(Some(&cfg), &['日' as char], VariantUsage::default(), &mut doc);
         assert!(set.fallbacks.is_empty());
-        // Uncovered codepoint must not panic; it routes through the
-        // primary's degraded path (`?` for built-in).
+        // Uncovered codepoint must not panic — it routes through the
+        // primary's degraded path. With the auto-detected body font
+        // on macOS/Windows that's a `.notdef` glyph (external path,
+        // no transliteration); on a host without a probe candidate
+        // it's the built-in path that transliterates to `?`.
         let chunks = set.split_for_emit(RunFlags::default(), "日", 12.0);
         assert_eq!(chunks.len(), 1);
-        assert!(chunks[0].needs_transliteration);
+        let on_external_path = set.external_body.is_loaded();
+        assert_eq!(chunks[0].needs_transliteration, !on_external_path);
     }
 
     #[test]

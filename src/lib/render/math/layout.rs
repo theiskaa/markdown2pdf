@@ -733,7 +733,11 @@ impl<'f> Ctx<'f> {
         };
         let mut y = bottom_y;
         let mut adv_w = 0.0f32;
-        for p in parts.iter().rev() {
+        // MATH spec lists assembly parts bottom-to-top, so iterate in
+        // natural order — reversing places asymmetric paren corners
+        // upside-down (top glyph at bottom, bottom glyph at top),
+        // which made tall `(` / `)` look like `\` / `/`.
+        for p in parts.iter() {
             let count = if p.extender { reps } else { 1 };
             for _ in 0..count {
                 let m = self.font.glyph(p.gid);

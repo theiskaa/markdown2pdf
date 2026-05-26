@@ -16,26 +16,74 @@ use std::collections::HashMap;
 
 /// Lower a slice of top-level tokens into the block IR.
 pub fn lower(tokens: &[Token]) -> Vec<Block> {
+    // First-reference-order numbering for footnotes — built once over
+    // the entire token tree, then threaded into every recursive
+    // sub-lowering so nested contexts (blockquote, admonition, list
+    // item children) resolve refs against the document-wide map
+    // instead of re-numbering local labels from 1.
+    let footnote_numbers = collect_footnote_numbering(tokens);
+    let mut footnote_definitions: HashMap<String, Vec<InlineRun>> = HashMap::new();
+    collect_inline_footnote_defs(tokens, &footnote_numbers, &mut footnote_definitions);
+
+    let mut out = lower_blocks(tokens, &footnote_numbers, &mut footnote_definitions);
+
+    // Tail Footnotes section, ordered by first-reference number.
+    // Definitions defined but never referenced trail in label-sort
+    // order so they don't disappear.
+    if !footnote_definitions.is_empty() {
+        let mut entries: Vec<FootnoteEntry> = Vec::with_capacity(footnote_definitions.len());
+        for (label, number) in {
+            let mut v: Vec<(String, usize)> = footnote_numbers
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+            v.sort_by_key(|(_, n)| *n);
+            v
+        } {
+            if let Some(runs) = footnote_definitions.remove(&label) {
+                entries.push(FootnoteEntry {
+                    label,
+                    number,
+                    runs,
+                });
+            }
+        }
+        let mut next = entries.len() + 1;
+        let mut unused: Vec<(String, Vec<InlineRun>)> = footnote_definitions.into_iter().collect();
+        unused.sort_by(|a, b| a.0.cmp(&b.0));
+        for (label, runs) in unused {
+            entries.push(FootnoteEntry {
+                label,
+                number: next,
+                runs,
+            });
+            next += 1;
+        }
+        out.push(Block::FootnoteDefinitions { entries });
+    }
+
+    out
+}
+
+fn lower_blocks(
+    tokens: &[Token],
+    footnote_numbers: &HashMap<String, usize>,
+    footnote_definitions: &mut HashMap<String, Vec<InlineRun>>,
+) -> Vec<Block> {
     let mut out = Vec::new();
     let mut buffered_inline: Vec<InlineRun> = Vec::new();
 
-    // First-reference-order numbering for footnotes. The map is built
-    // once over the entire token tree; flatten_one consults it to
-    // render references with the right superscript number, and the
-    // post-pass walks definitions in numeric order.
-    let footnote_numbers = collect_footnote_numbering(tokens);
-    let mut footnote_definitions: HashMap<String, Vec<InlineRun>> = HashMap::new();
-    // Inline footnotes (`text^[body]`) carry their definition with
-    // them; pull every body out up-front so it lands in the tail
-    // "Footnotes" section without disturbing the inline stream.
-    collect_inline_footnote_defs(tokens, &footnote_numbers, &mut footnote_definitions);
-
-    // Inline-HTML scope tracking at the top level (sup/sub/u/s/del/
-    // small/kbd). Mirrors `flatten_inline`'s nested-context handling.
     let mut root_html_depth = InlineHtmlDepth::default();
 
     fn flush_paragraph(out: &mut Vec<Block>, buffered: &mut Vec<InlineRun>) {
-        if !buffered.iter().all(|r| r.text.trim().is_empty()) {
+        // Drop the buffer only if every run is *both* empty text and has
+        // no inline math. Math runs carry their content in `math`, not
+        // `text` — without checking it, a paragraph that contains only
+        // an inline `$…$` would be silently dropped.
+        let all_empty = buffered
+            .iter()
+            .all(|r| r.text.trim().is_empty() && r.math.is_none());
+        if !all_empty {
             out.push(Block::Paragraph {
                 runs: std::mem::take(buffered),
             });
@@ -96,6 +144,22 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                         alt: img.alt,
                         caption: img.title,
                     });
+                } else if let Some(inner) = strip_framing_wrapper(content) {
+                    // Runs before is_framing_only_html so wrappers with
+                    // attributes (`<div class="…">body</div>`) get
+                    // unwrapped instead of dropped as a standalone tag.
+                    if let Ok(inner_tokens) = crate::markdown::Lexer::new(inner).parse() {
+                        let inner_blocks = lower_blocks(
+                            &inner_tokens,
+                            footnote_numbers,
+                            footnote_definitions,
+                        );
+                        out.extend(inner_blocks);
+                    } else if !is_only_html_comments(content) {
+                        out.push(Block::HtmlBlock {
+                            content: content.clone(),
+                        });
+                    }
                 } else if is_framing_only_html(content) {
                     // Standalone <p>, </p>, <div>, </div>, <center>,
                     // </center>: pure GFM wrappers around real
@@ -110,7 +174,7 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             }
             Token::BlockQuote(body) => {
                 flush_paragraph(&mut out, &mut buffered_inline);
-                let nested = lower(body);
+                let nested = lower_blocks(body, footnote_numbers, footnote_definitions);
                 out.push(Block::BlockQuote { body: nested });
                 i += 1;
             }
@@ -122,9 +186,9 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 let title_runs = title.as_ref().map(|t| {
-                    flatten_inline(t, RunFlags::default(), None, &footnote_numbers)
+                    flatten_inline(t, RunFlags::default(), None, footnote_numbers)
                 });
-                let nested = lower(body);
+                let nested = lower_blocks(body, footnote_numbers, footnote_definitions);
                 out.push(Block::Admonition {
                     kind: kind.clone(),
                     raw_label: raw_label.clone(),
@@ -138,11 +202,15 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 let ir_entries: Vec<DefinitionEntry> = entries
                     .iter()
                     .map(|e| DefinitionEntry {
-                        term: flatten_inline(&e.term, RunFlags::default(), None, &footnote_numbers),
+                        terms: e
+                            .terms
+                            .iter()
+                            .map(|t| flatten_inline(t, RunFlags::default(), None, &footnote_numbers))
+                            .collect(),
                         definitions: e
                             .definitions
                             .iter()
-                            .map(|d| flatten_inline(d, RunFlags::default(), None, &footnote_numbers))
+                            .map(|d| lower_blocks(d, footnote_numbers, footnote_definitions))
                             .collect(),
                     })
                     .collect();
@@ -199,7 +267,8 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                         *checked,
                         *loose,
                         content,
-                        &footnote_numbers,
+                        footnote_numbers,
+                        footnote_definitions,
                     ));
                     i += 1;
                     // Skip blank lines between list items so we don't
@@ -239,25 +308,23 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
             // by other inline content) gets promoted to a block-level
             // image. We require the buffered paragraph to be empty
             // and the next non-newline token to be either EOF or
-            // another block boundary.
+            // another block boundary. Both successful loads (URL or
+            // existing local file) and failures (missing local file,
+            // unreachable URL) route through `Block::Image`; the
+            // layout pass decodes and falls back to
+            // `render_image_fallback` on failure so every "image not
+            // shown" path produces the same italic `[image: ALT]`
+            // placeholder.
             Token::Image { alt, url, title }
                 if buffered_inline.is_empty() && image_is_standalone(tokens, i) =>
             {
-                let is_url = url.starts_with("http://") || url.starts_with("https://");
                 let path = std::path::PathBuf::from(url);
-                if is_url || path.exists() {
-                    let alt_text = crate::markdown::Token::collect_all_text(alt);
-                    out.push(Block::Image {
-                        path,
-                        alt: alt_text,
-                        caption: title.clone(),
-                    });
-                    i += 1;
-                    continue;
-                }
-                // Fall through to inline rendering if the file isn't
-                // there — we'd rather show the alt text than nothing.
-                flatten_one(&tokens[i], RunFlags::default(), None, &mut buffered_inline, &footnote_numbers);
+                let alt_text = crate::markdown::Token::collect_all_text(alt);
+                out.push(Block::Image {
+                    path,
+                    alt: alt_text,
+                    caption: title.clone(),
+                });
                 i += 1;
             }
             // Inline-level tokens at the root accumulate into the
@@ -269,54 +336,29 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                         i += 1;
                         continue;
                     }
+                    // `<br/>` at paragraph level: flush the buffer and
+                    // start a new paragraph so the break is visible.
+                    if is_void_br(tag) {
+                        flush_paragraph(&mut out, &mut buffered_inline);
+                        i += 1;
+                        continue;
+                    }
+                    // `<hr/>` at paragraph level: flush + emit HR.
+                    if is_void_hr(tag) {
+                        flush_paragraph(&mut out, &mut buffered_inline);
+                        out.push(Block::HorizontalRule);
+                        i += 1;
+                        continue;
+                    }
                 }
                 let effective = root_html_depth.apply(RunFlags::default());
-                flatten_one(&tokens[i], effective, None, &mut buffered_inline, &footnote_numbers);
+                flatten_one(&tokens[i], effective, None, &mut buffered_inline, footnote_numbers);
                 i += 1;
             }
         }
     }
 
     flush_paragraph(&mut out, &mut buffered_inline);
-
-    // Collect all footnote definitions captured during lowering into
-    // a single tail-of-document block, ordered by the number assigned
-    // when each label was first referenced in the body. Labels that
-    // were defined but never referenced are appended at the end in
-    // label-sort order so they don't disappear.
-    if !footnote_definitions.is_empty() {
-        let mut entries: Vec<FootnoteEntry> = Vec::with_capacity(footnote_definitions.len());
-        for (label, number) in {
-            let mut v: Vec<(String, usize)> = footnote_numbers
-                .iter()
-                .map(|(k, v)| (k.clone(), *v))
-                .collect();
-            v.sort_by_key(|(_, n)| *n);
-            v
-        } {
-            if let Some(runs) = footnote_definitions.remove(&label) {
-                entries.push(FootnoteEntry {
-                    label,
-                    number,
-                    runs,
-                });
-            }
-        }
-        // Unused definitions (never referenced) — assign trailing numbers.
-        let mut next = entries.len() + 1;
-        let mut unused: Vec<(String, Vec<InlineRun>)> = footnote_definitions.into_iter().collect();
-        unused.sort_by(|a, b| a.0.cmp(&b.0));
-        for (label, runs) in unused {
-            entries.push(FootnoteEntry {
-                label,
-                number: next,
-                runs,
-            });
-            next += 1;
-        }
-        out.push(Block::FootnoteDefinitions { entries });
-    }
-
     out
 }
 
@@ -468,6 +510,53 @@ fn strip_html_comments(s: &str) -> String {
     out
 }
 
+/// True for any spelling of `<br>` / `<br/>` / `<br />` / `</br>`.
+fn is_void_br(raw: &str) -> bool {
+    let s = raw.trim().to_ascii_lowercase();
+    matches!(s.as_str(), "<br>" | "<br/>" | "<br />" | "</br>")
+}
+
+/// True for any spelling of `<hr>` / `<hr/>` / `<hr />` / `</hr>`.
+fn is_void_hr(raw: &str) -> bool {
+    let s = raw.trim().to_ascii_lowercase();
+    matches!(s.as_str(), "<hr>" | "<hr/>" | "<hr />" | "</hr>")
+}
+
+/// If the HTML block is a framing wrapper around real content (e.g.
+/// `<div>…markdown…</div>`, `<section>…</section>`,
+/// `<p>text</p>`), return the inner with the outer open + close tags
+/// removed so it can be re-lexed as markdown. Returns `None` if the
+/// content isn't a single matching wrapper pair, so the caller can
+/// fall back to rendering it as a verbatim HTML block.
+fn strip_framing_wrapper(s: &str) -> Option<String> {
+    const WRAPPERS: &[&str] = &["div", "section", "figure", "figcaption", "center", "p"];
+    let trimmed = s.trim();
+    if !trimmed.starts_with('<') {
+        return None;
+    }
+    let open_end = trimmed.find('>')?;
+    let open_inner = &trimmed[1..open_end];
+    let open_tag_end = open_inner
+        .find(|c: char| c.is_ascii_whitespace())
+        .unwrap_or(open_inner.len());
+    let open_tag = open_inner[..open_tag_end].to_ascii_lowercase();
+    if !WRAPPERS.contains(&open_tag.as_str()) {
+        return None;
+    }
+    // Must end with the matching closing tag.
+    let close_lower = format!("</{}>", open_tag);
+    let trimmed_lower = trimmed.to_ascii_lowercase();
+    if !trimmed_lower.ends_with(&close_lower) {
+        return None;
+    }
+    let close_start = trimmed.len() - close_lower.len();
+    let inner = trimmed[open_end + 1..close_start].trim().to_string();
+    if inner.is_empty() {
+        return None;
+    }
+    Some(inner)
+}
+
 /// True if the HTML block is just a structural wrapper tag with no
 /// real content — `<p>`, `<div>`, `<section>`, `<figure>`,
 /// `<figcaption>`, `<center>` (plus their close tags), optionally
@@ -551,6 +640,16 @@ fn collect_footnote_numbering(tokens: &[Token]) -> HashMap<String, usize> {
                     walk(c, map);
                 }
             }
+            Token::Admonition { title, body, .. } => {
+                if let Some(t) = title {
+                    for c in t {
+                        walk(c, map);
+                    }
+                }
+                for c in body {
+                    walk(c, map);
+                }
+            }
             Token::FootnoteDefinition { content, .. } => {
                 for c in content {
                     walk(c, map);
@@ -558,8 +657,10 @@ fn collect_footnote_numbering(tokens: &[Token]) -> HashMap<String, usize> {
             }
             Token::DefinitionList { entries } => {
                 for entry in entries {
-                    for c in &entry.term {
-                        walk(c, map);
+                    for term in &entry.terms {
+                        for c in term {
+                            walk(c, map);
+                        }
                     }
                     for def in &entry.definitions {
                         for c in def {
@@ -632,10 +733,22 @@ fn collect_inline_footnote_defs(
                     walk(c, footnotes, out);
                 }
             }
+            Token::Admonition { title, body, .. } => {
+                if let Some(t) = title {
+                    for c in t {
+                        walk(c, footnotes, out);
+                    }
+                }
+                for c in body {
+                    walk(c, footnotes, out);
+                }
+            }
             Token::DefinitionList { entries } => {
                 for entry in entries {
-                    for c in &entry.term {
-                        walk(c, footnotes, out);
+                    for term in &entry.terms {
+                        for c in term {
+                            walk(c, footnotes, out);
+                        }
                     }
                     for def in &entry.definitions {
                         for c in def {
@@ -686,6 +799,7 @@ fn make_list_entry(
     loose: bool,
     content: &[Token],
     footnotes: &HashMap<String, usize>,
+    footnote_definitions: &mut HashMap<String, Vec<InlineRun>>,
 ) -> ListEntry {
     let bullet = match checked {
         Some(true) => ListBullet::TaskChecked,
@@ -723,7 +837,7 @@ fn make_list_entry(
     let children = if tail.is_empty() {
         Vec::new()
     } else {
-        lower(tail)
+        lower_blocks(tail, footnotes, footnote_definitions)
     };
 
     ListEntry {
@@ -774,25 +888,58 @@ enum InlineHtmlTag {
     SmallClose,
     KbdOpen,
     KbdClose,
+    BoldOpen,
+    BoldClose,
+    ItalicOpen,
+    ItalicClose,
+    CodeOpen,
+    CodeClose,
+    SpanOpen,
+    SpanClose,
 }
 
 fn classify_inline_html_tag(raw: &str) -> Option<InlineHtmlTag> {
-    let s = raw.trim().to_ascii_lowercase();
-    match s.as_str() {
-        "<sup>" => Some(InlineHtmlTag::SupOpen),
-        "</sup>" => Some(InlineHtmlTag::SupClose),
-        "<sub>" => Some(InlineHtmlTag::SubOpen),
-        "</sub>" => Some(InlineHtmlTag::SubClose),
-        "<u>" => Some(InlineHtmlTag::UnderlineOpen),
-        "</u>" => Some(InlineHtmlTag::UnderlineClose),
-        "<s>" | "<del>" | "<strike>" => Some(InlineHtmlTag::StrikeOpen),
-        "</s>" | "</del>" | "</strike>" => Some(InlineHtmlTag::StrikeClose),
-        "<small>" => Some(InlineHtmlTag::SmallOpen),
-        "</small>" => Some(InlineHtmlTag::SmallClose),
-        "<kbd>" => Some(InlineHtmlTag::KbdOpen),
-        "</kbd>" => Some(InlineHtmlTag::KbdClose),
-        _ => None,
-    }
+    let s = raw.trim();
+    let rest = s.strip_prefix('<')?.strip_suffix('>')?;
+    let (rest, is_close) = match rest.strip_prefix('/') {
+        Some(r) => (r, true),
+        None => (rest, false),
+    };
+    let rest = rest.trim_start();
+    let name_end = rest
+        .find(|c: char| c.is_ascii_whitespace() || c == '/')
+        .unwrap_or(rest.len());
+    let name = rest[..name_end].to_ascii_lowercase();
+    let opener = match name.as_str() {
+        "sup" => InlineHtmlTag::SupOpen,
+        "sub" => InlineHtmlTag::SubOpen,
+        "u" => InlineHtmlTag::UnderlineOpen,
+        "s" | "del" | "strike" => InlineHtmlTag::StrikeOpen,
+        "small" => InlineHtmlTag::SmallOpen,
+        "kbd" => InlineHtmlTag::KbdOpen,
+        "strong" | "b" => InlineHtmlTag::BoldOpen,
+        "em" | "i" => InlineHtmlTag::ItalicOpen,
+        "code" => InlineHtmlTag::CodeOpen,
+        "span" => InlineHtmlTag::SpanOpen,
+        _ => return None,
+    };
+    Some(if is_close {
+        match opener {
+            InlineHtmlTag::SupOpen => InlineHtmlTag::SupClose,
+            InlineHtmlTag::SubOpen => InlineHtmlTag::SubClose,
+            InlineHtmlTag::UnderlineOpen => InlineHtmlTag::UnderlineClose,
+            InlineHtmlTag::StrikeOpen => InlineHtmlTag::StrikeClose,
+            InlineHtmlTag::SmallOpen => InlineHtmlTag::SmallClose,
+            InlineHtmlTag::KbdOpen => InlineHtmlTag::KbdClose,
+            InlineHtmlTag::BoldOpen => InlineHtmlTag::BoldClose,
+            InlineHtmlTag::ItalicOpen => InlineHtmlTag::ItalicClose,
+            InlineHtmlTag::CodeOpen => InlineHtmlTag::CodeClose,
+            InlineHtmlTag::SpanOpen => InlineHtmlTag::SpanClose,
+            _ => unreachable!(),
+        }
+    } else {
+        opener
+    })
 }
 
 #[derive(Default, Clone, Copy)]
@@ -803,6 +950,9 @@ struct InlineHtmlDepth {
     strike: u32,
     small: u32,
     kbd: u32,
+    bold: u32,
+    italic: u32,
+    code: u32,
 }
 
 impl InlineHtmlDepth {
@@ -822,6 +972,15 @@ impl InlineHtmlDepth {
             InlineHtmlTag::SmallClose => self.small = self.small.saturating_sub(1),
             InlineHtmlTag::KbdOpen => self.kbd += 1,
             InlineHtmlTag::KbdClose => self.kbd = self.kbd.saturating_sub(1),
+            InlineHtmlTag::BoldOpen => self.bold += 1,
+            InlineHtmlTag::BoldClose => self.bold = self.bold.saturating_sub(1),
+            InlineHtmlTag::ItalicOpen => self.italic += 1,
+            InlineHtmlTag::ItalicClose => self.italic = self.italic.saturating_sub(1),
+            InlineHtmlTag::CodeOpen => self.code += 1,
+            InlineHtmlTag::CodeClose => self.code = self.code.saturating_sub(1),
+            // <span> is a transparent wrapper: tracked so a stray
+            // </span> is also consumed, but contributes no flag.
+            InlineHtmlTag::SpanOpen | InlineHtmlTag::SpanClose => {}
         }
     }
 
@@ -842,6 +1001,15 @@ impl InlineHtmlDepth {
             flags = flags.with_small();
         }
         if self.kbd > 0 {
+            flags = flags.with_inline_code();
+        }
+        if self.bold > 0 {
+            flags = flags.with_bold();
+        }
+        if self.italic > 0 {
+            flags = flags.with_italic();
+        }
+        if self.code > 0 {
             flags = flags.with_inline_code();
         }
         flags
@@ -952,12 +1120,32 @@ fn flatten_one(
             // arm is unreachable in practice but kept exhaustive.
         }
         Token::Image { alt, .. } => {
-            // Inline images render only their alt text. Block-level
-            // standalone images are promoted to `Block::Image` in the
-            // top-level lower loop and get the full embedded image.
-            for t in alt {
-                flatten_one(t, flags, link, out, footnotes);
+            // Inline images render their alt text wrapped in an
+            // italic `[image: …]` placeholder so readers can tell at
+            // a glance which inline glyphs stood in for an image,
+            // regardless of context (paragraph, list item, table
+            // cell, admonition, blockquote). Block-level standalone
+            // images that successfully load are promoted to
+            // `Block::Image` in the top-level lower loop and get the
+            // full embedded image; a failed Block::Image goes through
+            // `render_image_fallback`, which produces the same italic
+            // wrapper as a paragraph — so every "image not shown"
+            // path renders identically.
+            //
+            // Empty-alt images stay invisible: `[image: ]` is uglier
+            // than skipping, and the author signaled the image was
+            // decorative (or didn't bother with alt) so dropping it
+            // matches `render_image_fallback`'s same-case behavior.
+            let alt_text = crate::markdown::Token::collect_all_text(alt);
+            if alt_text.trim().is_empty() {
+                return;
             }
+            let italic = flags.with_italic();
+            push_text(out, "[image: ", italic, link);
+            for t in alt {
+                flatten_one(t, italic, link, out, footnotes);
+            }
+            push_text(out, "]", italic, link);
         }
         Token::HtmlInline(tag) => {
             // Tags we semantically handle (sup/sub/u/s/del/small/kbd)
@@ -1140,6 +1328,23 @@ mod tests {
     }
 
     #[test]
+    fn inline_math_only_paragraph_survives_flush() {
+        // A paragraph that contains *only* an inline `$…$` was getting
+        // silently dropped because flush_paragraph treated empty-text
+        // runs as whitespace-only. Math content lives in `run.math`,
+        // not `run.text`, so the buffer is non-empty.
+        let blocks = lower(&[Token::Math {
+            inline: true,
+            content: "x+y=z".into(),
+        }]);
+        assert_eq!(blocks.len(), 1, "expected one paragraph, got {blocks:?}");
+        let Block::Paragraph { runs } = &blocks[0] else {
+            panic!("expected paragraph, got {:?}", blocks[0]);
+        };
+        assert!(runs.iter().any(|r| r.math.as_deref() == Some("x+y=z")));
+    }
+
+    #[test]
     fn display_math_becomes_centered_block_and_flushes_paragraphs() {
         let blocks = lower(&[
             Token::Text("intro".into()),
@@ -1247,5 +1452,108 @@ mod tests {
             entries[1].runs.iter().map(|r| r.text.as_str()).collect();
         assert!(first.contains("inline note"), "got {first:?}");
         assert!(second.contains("ref def"), "got {second:?}");
+    }
+
+    fn walk_superscript_markers(blocks: &[Block], out: &mut Vec<String>) {
+        for b in blocks {
+            match b {
+                Block::Paragraph { runs }
+                | Block::Heading { runs, .. } => {
+                    for r in runs {
+                        if r.flags.superscript {
+                            out.push(r.text.clone());
+                        }
+                    }
+                }
+                Block::BlockQuote { body } | Block::Admonition { body, .. } => {
+                    walk_superscript_markers(body, out);
+                }
+                Block::List { entries } => {
+                    for e in entries {
+                        for r in &e.runs {
+                            if r.flags.superscript {
+                                out.push(r.text.clone());
+                            }
+                        }
+                        walk_superscript_markers(&e.children, out);
+                    }
+                }
+                Block::Table { headers, rows, .. } => {
+                    for h in headers {
+                        for r in &h.content {
+                            if r.flags.superscript {
+                                out.push(r.text.clone());
+                            }
+                        }
+                    }
+                    for row in rows {
+                        for cell in row {
+                            for r in &cell.content {
+                                if r.flags.superscript {
+                                    out.push(r.text.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Footnote refs nested inside blockquote / admonition / list-item
+    /// bodies must resolve against the document-wide first-reference
+    /// numbering, not a fresh per-body 1.
+    #[test]
+    fn nested_contexts_share_document_wide_footnote_numbering() {
+        let src = "Top[^a].\n\n\
+> Quote[^b].\n\n\
+> [!NOTE]\n\
+> Admo[^c].\n\n\
+- list[^d]\n\n\
+[^a]: A.\n[^b]: B.\n[^c]: C.\n[^d]: D.\n";
+        let blocks = lower(&lex(src));
+        let mut markers = Vec::new();
+        walk_superscript_markers(&blocks, &mut markers);
+        // First-reference order is a, b, c, d -> 1, 2, 3, 4. Each
+        // ref must show its assigned number, NOT 1.
+        assert_eq!(
+            markers,
+            vec!["1".to_string(), "2".to_string(), "3".to_string(), "4".to_string()],
+            "footnote markers in nested contexts must use document-wide numbering"
+        );
+    }
+
+    /// Footnote definitions remain emitted as a single tail block, in
+    /// first-reference order, even when refs are scattered across
+    /// blockquote / admonition / list-item bodies.
+    #[test]
+    fn nested_footnote_refs_keep_single_tail_section() {
+        let src = "Top[^a].\n\n\
+> Quote[^b].\n\n\
+> [!NOTE]\n\
+> Admo[^c].\n\n\
+[^a]: A.\n[^b]: B.\n[^c]: C.\n";
+        let blocks = lower(&lex(src));
+        let tail_blocks: Vec<&FootnoteEntry> = blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::FootnoteDefinitions { entries } => Some(entries.iter()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        // Three definitions, one tail block, ordered a,b,c by first ref.
+        assert_eq!(tail_blocks.len(), 3);
+        assert_eq!(tail_blocks[0].number, 1);
+        assert_eq!(tail_blocks[1].number, 2);
+        assert_eq!(tail_blocks[2].number, 3);
+        // And only one tail block — no per-body duplicates leaking into
+        // the document body.
+        let tail_count = blocks
+            .iter()
+            .filter(|b| matches!(b, Block::FootnoteDefinitions { .. }))
+            .count();
+        assert_eq!(tail_count, 1);
     }
 }

@@ -246,3 +246,97 @@ mod html_img_paths {
         let _ = std::fs::remove_file(&p);
     }
 }
+
+/// Every "image not shown" path must emit the same italic
+/// `[image: ALT]` placeholder so readers can spot at-a-glance which
+/// inline glyphs stood in for an image — regardless of whether the
+/// failure was a missing local file, an unreachable URL, or an inline
+/// image inside a list / admonition / blockquote / table cell.
+///
+/// The italic-ness itself is verified by the before/after visual
+/// diff committed alongside the fix; the text-level assertion here
+/// pins the wrapper-and-format invariant for the long haul.
+mod fallback_consistency {
+    use super::*;
+
+    /// `<context-description>, <markdown source containing the
+    /// failing image>` pairs. Each source must contain exactly one
+    /// `[image: NEEDLE]` after the fix.
+    fn cases() -> &'static [(&'static str, &'static str, &'static str)] {
+        &[
+            (
+                "top-level standalone missing local",
+                "![NEEDLE_TOP_LOCAL](does-not-exist-tl.png)\n",
+                "NEEDLE_TOP_LOCAL",
+            ),
+            (
+                "top-level standalone unreachable URL",
+                "![NEEDLE_TOP_URL](https://example.invalid/missing.png)\n",
+                "NEEDLE_TOP_URL",
+            ),
+            (
+                "top-level inline (mixed with text)",
+                "Prose with ![NEEDLE_INLINE](does-not-exist-i.png) inline.\n",
+                "NEEDLE_INLINE",
+            ),
+            (
+                "inside a list item",
+                "- bullet with ![NEEDLE_LIST](does-not-exist-l.png) inline.\n",
+                "NEEDLE_LIST",
+            ),
+            (
+                "inside an admonition body",
+                "> [!NOTE]\n> note with ![NEEDLE_ADMO](does-not-exist-a.png) inline.\n",
+                "NEEDLE_ADMO",
+            ),
+            (
+                "inside a blockquote",
+                "> quote with ![NEEDLE_BQUOTE](does-not-exist-b.png) inline.\n",
+                "NEEDLE_BQUOTE",
+            ),
+            (
+                "inside a table cell",
+                "| L | R |\n| - | - |\n| ![NEEDLE_TABLE](does-not-exist-t.png) | plain |\n",
+                "NEEDLE_TABLE",
+            ),
+        ]
+    }
+
+    #[test]
+    fn every_fallback_context_emits_italic_wrapper() {
+        for (label, md, needle) in cases() {
+            let bytes = render_md(md);
+            assert!(pdf_well_formed(&bytes), "{label}: PDF malformed");
+            let wrapped = format!("[image: {needle}]");
+            assert!(
+                contains_text(&bytes, &wrapped),
+                "{label}: missing `{wrapped}` wrapper — fallback is inconsistent across contexts"
+            );
+            // Negative: the bare alt must NOT appear *unwrapped*
+            // anywhere outside the wrapper. The wrapper contains the
+            // needle, so we strip every wrapped occurrence and assert
+            // no naked needle remains.
+            let scanned = String::from_utf8_lossy(&scan(&bytes)).to_string();
+            let stripped = scanned.replace(&wrapped, "");
+            assert!(
+                !stripped.contains(needle),
+                "{label}: bare `{needle}` appears outside the `[image: …]` wrapper — fallback isn't using the shared format"
+            );
+        }
+    }
+
+    /// Image with empty alt text emits nothing visible — `[image: ]`
+    /// would be uglier than skipping. Mirrors `render_image_fallback`'s
+    /// same-case behavior so block and inline paths agree.
+    #[test]
+    fn empty_alt_image_renders_no_wrapper() {
+        let md = "Prose with ![](does-not-exist-empty.png) here.\n";
+        let bytes = render_md(md);
+        assert!(pdf_well_formed(&bytes));
+        let scanned = String::from_utf8_lossy(&scan(&bytes)).to_string();
+        assert!(
+            !scanned.contains("[image: "),
+            "empty-alt image must not emit an `[image: ]` placeholder"
+        );
+    }
+}

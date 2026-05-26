@@ -223,6 +223,7 @@ pub fn command(name: &str) -> Option<(char, Class)> {
         "mu" => v('\u{1D707}', Ord),
         "nu" => v('\u{1D708}', Ord),
         "xi" => v('\u{1D709}', Ord),
+        "omicron" => v('\u{1D70A}', Ord),
         "pi" => v('\u{1D70B}', Ord),
         "varpi" => v('\u{1D71B}', Ord),
         "rho" => v('\u{1D70C}', Ord),
@@ -405,7 +406,11 @@ pub fn command(name: &str) -> Option<(char, Class)> {
         "lbrack" => v('[', Open),
         "rbrack" => v(']', Close),
         "vert" => v('\u{007C}', Ord),
+        "lvert" => v('\u{007C}', Open),
+        "rvert" => v('\u{007C}', Close),
         "Vert" => v('\u{2016}', Ord),
+        "lVert" => v('\u{2016}', Open),
+        "rVert" => v('\u{2016}', Close),
         "|" => v('\u{2016}', Ord),
         "backslash" => v('\u{005C}', Ord),
         // Backslash-escaped literals (`\{`, `\%`, `\#`, …) — common in
@@ -541,6 +546,15 @@ mod tests {
         // Structural commands are not symbols.
         assert_eq!(command("frac"), None);
         assert_eq!(command("totallybogus"), None);
+        // `\lvert` / `\rvert` resolve to `|` with paired open/close
+        // classes (so spacing rules treat them as fences).
+        assert_eq!(command("lvert"), Some(('\u{007C}', Class::Open)));
+        assert_eq!(command("rvert"), Some(('\u{007C}', Class::Close)));
+        assert_eq!(command("lVert"), Some(('\u{2016}', Class::Open)));
+        assert_eq!(command("rVert"), Some(('\u{2016}', Class::Close)));
+        // `\omicron` is a Greek lowercase letter; was missing from the
+        // table and rendered as literal `\omicron` text.
+        assert_eq!(command("omicron"), Some(('\u{1D70A}', Class::Ord)));
     }
 
     #[test]
