@@ -10,7 +10,7 @@ use lopdf::Document;
 fn page_streams(bytes: &[u8]) -> Vec<Vec<u8>> {
     let doc = Document::load_mem(bytes).expect("rendered PDF must parse");
     doc.page_iter()
-        .map(|pid| doc.get_page_content(pid).expect("page content stream"))
+        .map(|pid| doc.get_page_content(pid))
         .collect()
 }
 

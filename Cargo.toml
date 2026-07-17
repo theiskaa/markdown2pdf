@@ -46,7 +46,7 @@ unicode-linebreak = "0.1"
 subsetter = { version = "0.2", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 hyphenation = { version = "0.8", default-features = false, features = ["embed_en-us"] }
-lopdf = { version = "0.39", default-features = false }
+lopdf = { version = "0.44", default-features = false }
 resvg = { version = "0.47", default-features = false, optional = true }
 
 [build-dependencies]
@@ -54,7 +54,7 @@ phf_codegen = "0.13"
 serde_json = "1"
 
 [dev-dependencies]
-lopdf = { version = "0.39", default-features = false }
+lopdf = { version = "0.44", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [profile.release]
