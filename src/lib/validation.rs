@@ -75,7 +75,8 @@ impl ValidationWarning {
         Self {
             kind: WarningKind::SyntaxWarning,
             message: format!("Potential syntax issue: {}", issue),
-            suggestion: "PDF will be generated, but check the output for formatting issues".to_string(),
+            suggestion: "PDF will be generated, but check the output for formatting issues"
+                .to_string(),
         }
     }
 }
@@ -101,19 +102,16 @@ pub fn validate_conversion(
 ) -> Vec<ValidationWarning> {
     let mut warnings = Vec::new();
 
-    // Check document size
     if markdown.len() > 100_000 {
         warnings.push(ValidationWarning::large_document(markdown.len()));
     }
 
-    // Check for Unicode characters without appropriate font
     if let Some(unicode_chars) = detect_unicode_chars(markdown) {
         if !has_unicode_font(font_config, style_fallback_fonts) {
             warnings.push(ValidationWarning::unicode_without_font(unicode_chars));
         }
     }
 
-    // Check output path
     if let Some(path) = output_path {
         if let Some(parent) = Path::new(path).parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
@@ -126,10 +124,7 @@ pub fn validate_conversion(
         }
     }
 
-    // Check for common markdown syntax issues
     warnings.extend(check_syntax_issues(markdown));
-
-    // Check for image references
     warnings.extend(check_image_references(markdown));
 
     warnings
@@ -184,7 +179,6 @@ fn has_unicode_font(font_config: Option<&FontConfig>, style_fallback_fonts: &[St
 fn check_syntax_issues(markdown: &str) -> Vec<ValidationWarning> {
     let mut warnings = Vec::new();
 
-    // Check for unclosed code blocks
     let code_fence_count = markdown.matches("```").count();
     if code_fence_count % 2 != 0 {
         warnings.push(ValidationWarning::syntax_warning(
@@ -192,11 +186,12 @@ fn check_syntax_issues(markdown: &str) -> Vec<ValidationWarning> {
         ));
     }
 
-    // Check for unclosed inline code
     let total_backticks = markdown.matches('`').count();
     let double_backticks = markdown.matches("``").count() * 2;
     let triple_backticks = markdown.matches("```").count() * 3;
-    let inline_code_count = total_backticks.saturating_sub(double_backticks).saturating_sub(triple_backticks);
+    let inline_code_count = total_backticks
+        .saturating_sub(double_backticks)
+        .saturating_sub(triple_backticks);
     if inline_code_count % 2 != 0 {
         warnings.push(ValidationWarning::syntax_warning(
             "Possible unclosed inline code (odd number of ` markers)",
@@ -242,9 +237,7 @@ fn neutralize_footnote_brackets(md: &str) -> String {
         if chars[i] == '[' && chars.get(i + 1) == Some(&'^') {
             let mut j = i + 2;
             while j < chars.len()
-                && (chars[j].is_ascii_alphanumeric()
-                    || chars[j] == '_'
-                    || chars[j] == '-')
+                && (chars[j].is_ascii_alphanumeric() || chars[j] == '_' || chars[j] == '-')
             {
                 j += 1;
             }
@@ -289,7 +282,6 @@ fn neutralize_footnote_brackets(md: &str) -> String {
 fn check_image_references(markdown: &str) -> Vec<ValidationWarning> {
     let mut warnings = Vec::new();
 
-    // Simple regex-like pattern matching for ![alt](path)
     let mut chars = markdown.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '!' {
@@ -398,9 +390,11 @@ mod tests {
     fn test_large_document_warning() {
         let large_text = "a".repeat(200_000);
         let warnings = validate_conversion(&large_text, None, &[], None);
-        assert!(warnings
-            .iter()
-            .any(|w| w.kind == WarningKind::LargeDocument));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.kind == WarningKind::LargeDocument)
+        );
     }
 
     #[test]

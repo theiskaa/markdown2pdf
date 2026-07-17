@@ -279,7 +279,6 @@ impl Token {
                 let mut result = format!("{}{{\n", indent);
                 result.push_str(&format!("{}\"type\": \"Table\",\n", inner_indent));
 
-                // Headers
                 result.push_str(&format!("{}\"headers\": [\n", inner_indent));
                 for (i, header_cell) in headers.iter().enumerate() {
                     result.push_str(&format!("{}[\n", "  ".repeat(indent_level + 2)));
@@ -298,7 +297,6 @@ impl Token {
                 }
                 result.push_str(&format!("{}],\n", inner_indent));
 
-                // Alignments
                 result.push_str(&format!("{}\"aligns\": [\n", inner_indent));
                 for (i, align) in aligns.iter().enumerate() {
                     let align_str = match align {
@@ -318,7 +316,6 @@ impl Token {
                 }
                 result.push_str(&format!("{}],\n", inner_indent));
 
-                // Rows
                 result.push_str(&format!("{}\"rows\": [\n", inner_indent));
                 for (i, row) in rows.iter().enumerate() {
                     result.push_str(&format!("{}[\n", "  ".repeat(indent_level + 2)));

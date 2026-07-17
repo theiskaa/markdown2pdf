@@ -226,7 +226,6 @@ fn user_config_file() -> Option<PathBuf> {
 }
 
 fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
-    // Determine verbosity level
     let verbosity = if matches.get_flag("quiet") {
         Verbosity::Quiet
     } else if matches.get_flag("verbose") {
@@ -235,7 +234,6 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         Verbosity::Normal
     };
 
-    // Check for dry-run mode
     let dry_run = matches.get_flag("dry-run");
 
     // Per-parameter CLI overrides (highest priority in the cascade).
@@ -279,7 +277,6 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         .to_str()
         .ok_or_else(|| AppError::PathError("Invalid output path".to_string()))?;
 
-    // Extract font configuration from CLI arguments
     let font_config = if matches.contains_id("default-font") || matches.contains_id("code-font") {
         let default_font = matches
             .get_one::<String>("default-font")
@@ -335,7 +332,6 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         })
     });
 
-    // Run validation checks
     if verbosity != Verbosity::Quiet {
         let warnings = validation::validate_conversion(
             &markdown,
@@ -356,7 +352,6 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             eprintln!("✓ Pre-flight validation passed\n");
         }
 
-        // If dry-run, stop here
         if dry_run {
             println!("✓ Dry-run validation complete. No PDF generated.");
             if warnings.is_empty() {
@@ -383,7 +378,6 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         }
     }
 
-    // Generate PDF
     if verbosity == Verbosity::Verbose {
         eprintln!("📄 Generating PDF...");
         if let Some(path) = &config_path {
@@ -407,7 +401,6 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
     if verbosity != Verbosity::Quiet {
         println!("✅ Successfully saved PDF to {}", output_path_str);
 
-        // Show file size in verbose mode
         if verbosity == Verbosity::Verbose {
             if let Ok(metadata) = fs::metadata(output_path_str) {
                 let size_kb = metadata.len() as f64 / 1024.0;

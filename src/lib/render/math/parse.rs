@@ -205,7 +205,6 @@ impl Parser {
                     *limits = over;
                 }
             }
-            // Attach trailing scripts / primes.
             let node = self.scripts(node, var);
             out.push(node);
         }
@@ -324,7 +323,6 @@ impl Parser {
     }
 
     fn command(&mut self, name: &str, var: Variant) -> Option<Node> {
-        // Spacing.
         let em = match name {
             "," => Some(3.0 / 18.0),
             ":" | ">" => Some(4.0 / 18.0),
@@ -371,7 +369,6 @@ impl Parser {
                 self.depth += 1;
                 let body = self.list(StopAt::Right, var);
                 self.depth -= 1;
-                // consume \right
                 let mut right = None;
                 if self.lx.peek() == Some(Tok::Cmd("right".into())) {
                     self.lx.next();

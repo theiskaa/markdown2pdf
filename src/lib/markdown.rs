@@ -964,7 +964,6 @@ fn try_parse_definition(
         _ => unreachable!(),
     };
 
-    // Try to read title from position q.
     let mut t = q + 1;
     let title_start = t;
     loop {
@@ -3655,7 +3654,6 @@ impl Lexer {
         if content_start < self.input.len() && self.input[content_start] == ' ' {
             content_start += 1;
         }
-        // Find the end of the first line (or input).
         let mut content_end = content_start;
         while content_end < self.input.len() && self.input[content_end] != '\n' {
             content_end += 1;
@@ -6749,7 +6747,6 @@ impl Lexer {
     /// pipe-heavy input.
     fn is_table_start(&self) -> bool {
         let n = self.input.len();
-        // End of the current line.
         let mut i = self.position;
         while i < n && self.input[i] != '\n' {
             i += 1;
@@ -6757,7 +6754,6 @@ impl Lexer {
         if i >= n {
             return false; // no newline ⇒ no delimiter row
         }
-        // Scan the next line for a `-`.
         let mut j = i + 1;
         while j < n && self.input[j] != '\n' {
             if self.input[j] == '-' {
@@ -6770,7 +6766,6 @@ impl Lexer {
 
     /// Parses a table, handling column alignment
     fn parse_table(&mut self) -> Result<Token, LexerError> {
-        // Parse header row
         let header_line = self.read_until_newline();
         let header_cells = Self::split_table_line(&header_line);
 
@@ -6778,7 +6773,6 @@ impl Lexer {
             self.advance();
         }
 
-        // Parse alignment row
         let align_line = self.read_until_newline();
         let aligns: Vec<TableAlignment> = Self::split_table_line(&align_line)
             .into_iter()
@@ -6972,7 +6966,6 @@ impl Lexer {
         if self.input.get(p - 1) != Some(&'\n') {
             return false;
         }
-        // Find the start of the line BEFORE this one.
         let mut prev_line_start = p - 1; // points at the \n
         while prev_line_start > 0 && self.input[prev_line_start - 1] != '\n' {
             prev_line_start -= 1;
@@ -7009,7 +7002,6 @@ impl Lexer {
                 break;
             }
             let line_start = self.position;
-            // Measure indent.
             let mut col = 0usize;
             let mut q = line_start;
             while q < self.input.len()
@@ -7166,7 +7158,6 @@ impl Lexer {
                 }
             }
 
-            // Read the rest of the line.
             while self.position < self.input.len() && self.current_char() != '\n' {
                 content.push(self.current_char());
                 self.advance();

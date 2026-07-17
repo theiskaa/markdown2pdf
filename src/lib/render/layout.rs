@@ -572,7 +572,6 @@ impl<'a> Engine<'a> {
             self.y_from_top_pt += cover_h + line_gap;
         }
 
-        // Title (bold)
         self.render_title_page_text(
             &tp.title,
             title_size,
@@ -680,10 +679,8 @@ impl<'a> Engine<'a> {
             page_width_pt - mm_to_pt(self.style.page.margins_mm.right.max(1.0));
         self.in_text_section = false;
 
-        // Title
         self.render_toc_title(&toc);
 
-        // Entries
         let anchors = self.heading_anchors.clone();
         for anchor in anchors.iter() {
             if anchor.level > toc.max_depth {
@@ -2347,7 +2344,6 @@ impl<'a> Engine<'a> {
         let min_col_width_pt = pad.left + pad.right + 1.0;
         let col_width = (total_width / col_count as f32).max(min_col_width_pt);
 
-        // Header row.
         let header_height = self.measure_row_height(
             headers,
             s_header.font_size_pt,
@@ -2374,7 +2370,6 @@ impl<'a> Engine<'a> {
         self.y_from_top_pt = header_bottom;
         self.advance_y(row_gap_pt);
 
-        // Data rows.
         self.letter_spacing_pt = s_cell.letter_spacing_pt;
         let mut table_rows: Vec<Vec<TableCell<InlineRun>>> = rows.to_vec();
         for row in &mut table_rows {
