@@ -211,26 +211,7 @@ impl MathFont {
     }
 
     pub fn glyph(&self, gid: u16) -> Glyph {
-        let g = GlyphId(gid);
-        let advance = self.face.glyph_hor_advance(g).unwrap_or(0) as f32;
-        let bb = self.face.glyph_bounding_box(g);
-        let (x_min, y_min, x_max, y_max) = match bb {
-            Some(r) => (
-                r.x_min as f32,
-                r.y_min as f32,
-                r.x_max as f32,
-                r.y_max as f32,
-            ),
-            None => (0.0, 0.0, advance, 0.0),
-        };
-        Glyph {
-            advance,
-            italic: self.italic_correction(gid),
-            x_min,
-            y_min,
-            x_max,
-            y_max,
-        }
+        face_glyph(&self.face, gid, self.italic_correction(gid))
     }
 
     pub fn italic_correction(&self, gid: u16) -> f32 {
@@ -266,12 +247,7 @@ impl MathFont {
     /// never as selectable text, so it behaves like a figure in every
     /// viewer.
     pub fn outline(&self, gid: u16) -> Vec<PathSeg> {
-        let mut b = Outliner {
-            segs: Vec::new(),
-            last: (0.0, 0.0),
-        };
-        self.face.outline_glyph(GlyphId(gid), &mut b);
-        b.segs
+        face_outline(&self.face, gid)
     }
 
     /// Choose a vertical realisation of `base` at least `target` font
@@ -330,6 +306,79 @@ impl MathFont {
         }
         con.variants.last().map(|v| v.variant_glyph.0).unwrap_or(base)
     }
+}
+
+/// A body / fallback text face consulted by `\text{…}` (and bare
+/// symbols) for characters STIX Two Math lacks. Borrows the font
+/// bytes retained by the `FontSet`, and reads the *original* full
+/// cmap — coverage here is independent of the PDF subset keep-set.
+/// Glyphs are outlined and drawn exactly like math glyphs (vector
+/// paths, nothing embedded), just sourced from a different face.
+pub struct MathTextFont<'a> {
+    face: Face<'a>,
+    pub upem: f32,
+}
+
+impl<'a> MathTextFont<'a> {
+    pub fn from_bytes(bytes: &'a [u8]) -> Option<Self> {
+        let face = Face::parse(bytes, 0).ok()?;
+        Some(MathTextFont {
+            upem: face.units_per_em() as f32,
+            face,
+        })
+    }
+
+    /// Font units → points at `size_pt`.
+    pub fn scale(&self, units: f32, size_pt: f32) -> f32 {
+        units * size_pt / self.upem
+    }
+
+    pub fn glyph_id(&self, ch: char) -> Option<u16> {
+        self.face.glyph_index(ch).map(|g| g.0)
+    }
+
+    pub fn glyph(&self, gid: u16) -> Glyph {
+        // Text faces carry no MATH table, so no italic correction.
+        face_glyph(&self.face, gid, 0.0)
+    }
+
+    pub fn outline(&self, gid: u16) -> Vec<PathSeg> {
+        face_outline(&self.face, gid)
+    }
+}
+
+/// Design-space metrics for `gid` on any face; shared by [`MathFont`]
+/// and [`MathTextFont`] so metric handling can't diverge.
+fn face_glyph(face: &Face, gid: u16, italic: f32) -> Glyph {
+    let g = GlyphId(gid);
+    let advance = face.glyph_hor_advance(g).unwrap_or(0) as f32;
+    let (x_min, y_min, x_max, y_max) = match face.glyph_bounding_box(g) {
+        Some(r) => (
+            r.x_min as f32,
+            r.y_min as f32,
+            r.x_max as f32,
+            r.y_max as f32,
+        ),
+        None => (0.0, 0.0, advance, 0.0),
+    };
+    Glyph {
+        advance,
+        italic,
+        x_min,
+        y_min,
+        x_max,
+        y_max,
+    }
+}
+
+/// Glyph outline extraction shared by both face types.
+fn face_outline(face: &Face, gid: u16) -> Vec<PathSeg> {
+    let mut b = Outliner {
+        segs: Vec::new(),
+        last: (0.0, 0.0),
+    };
+    face.outline_glyph(GlyphId(gid), &mut b);
+    b.segs
 }
 
 /// Collects a glyph outline as exact path segments. CFF cubics
@@ -407,6 +456,20 @@ mod tests {
             .glyph_id(' ')
             .map(|sp| f.outline(sp).is_empty())
             .unwrap_or(true));
+    }
+
+    #[test]
+    fn math_text_font_outlines_from_bytes() {
+        // Any parseable face works as a text fallback; the bundled
+        // STIX bytes keep this deterministic (no system fonts).
+        let tf = MathTextFont::from_bytes(MATH_FONT_BYTES).expect("must parse");
+        assert_eq!(tf.upem, 1000.0);
+        let g = tf.glyph_id('e').expect("'e' in cmap");
+        assert!(!tf.outline(g).is_empty());
+        let m = tf.glyph(g);
+        assert!(m.advance > 0.0 && m.height() > 0.0);
+        assert_eq!(m.italic, 0.0, "text faces carry no italic correction");
+        assert!(tf.scale(500.0, 10.0) == 5.0);
     }
 
     #[test]
