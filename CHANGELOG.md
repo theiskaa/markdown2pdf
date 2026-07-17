@@ -2,6 +2,15 @@
 
 All notable changes to **markdown2pdf** are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release section below is what ships as the GitHub Release notes.
 
+## [1.5.1] - 2026-07-17
+
+Two rendering fixes: math `\text{…}` now renders non-Latin scripts, and documents with many headings no longer produce corrupt PDFs.
+
+- **Math `\text{…}` renders non-Latin scripts** — characters STIX Two Math lacks (CJK, Arabic, Devanagari, Cyrillic, …) inside `\text{}`/`\operatorname{}` and as bare symbols are now outlined from the document's body font and `[defaults].fallback_fonts` faces instead of silently vanishing. RTL runs reorder to visual order (ordering only — no joining/shaping); zero-width format characters (ZWNJ / ZWJ / bidi marks) stay invisible; a character no configured font covers renders as a placeholder box with a warning instead of disappearing. Covered-Latin math output is byte-identical.
+- **Corrupt PDFs with many headings** — bumped `lopdf` to 0.44, fixing an object-stream defect that could corrupt PDFs containing many headings.
+
+Resolves [#115](https://github.com/theiskaa/markdown2pdf/issues/115) and [#119](https://github.com/theiskaa/markdown2pdf/issues/119).
+
 ## [1.5.0] - 2026-05-26
 
 Layout polish — multi-column flow, plus targeted fixes to tables, defs, admonitions, HTML, math, page breaks, and Unicode rendering.
