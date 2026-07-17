@@ -22,6 +22,7 @@ use crate::markdown::{slugify, TableCell};
 
 use super::font::FontSet;
 use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
+use super::math::layout::GlyphFont;
 
 type Color = printpdf::Color;
 
@@ -182,18 +183,21 @@ struct Engine<'a> {
     /// the next page. Empty when no background-bearing block is open.
     open_bg: Vec<OpenBlockBg>,
     /// Lazily-initialised TeX math state: the parsed STIX Two Math
-    /// face. `None` until the first math is rendered; `Some(None)` if
-    /// the font failed to load (we then fall back to plain-text math).
-    math: Option<Option<MathState>>,
+    /// face plus the body / fallback text faces consulted for
+    /// characters STIX lacks. `None` until the first math is
+    /// rendered; `Some(None)` if the font failed to load (we then
+    /// fall back to plain-text math).
+    math: Option<Option<MathState<'a>>>,
     /// Memoised inline-math layouts, keyed by (raw TeX, size×100).
     /// Inline math is measured several times per line (wrap, natural
     /// width, emit) — typesetting once and cloning keeps that O(1).
     math_inline_cache: HashMap<(String, u32), super::math::layout::Frag>,
-    /// One Form XObject per distinct glyph id. A glyph outline is
-    /// emitted once here and invoked with a tiny `cm`/`Do` at every
-    /// occurrence, instead of re-inlining its (flattened-Bézier)
-    /// polygon — the dominant cost in math-heavy PDFs.
-    math_glyph_xobjects: HashMap<u16, printpdf::XObjectId>,
+    /// One Form XObject per distinct (source font, glyph id). A glyph
+    /// outline is emitted once here and invoked with a tiny `cm`/`Do`
+    /// at every occurrence, instead of re-inlining its
+    /// (flattened-Bézier) polygon — the dominant cost in math-heavy
+    /// PDFs.
+    math_glyph_xobjects: HashMap<(GlyphFont, u16), printpdf::XObjectId>,
     /// Number of body-text columns per page. Clamped to 1..=4 from
     /// `style.page.columns`. The TOC and title-page passes force this
     /// to 1 temporarily so their full-page layout is preserved.
@@ -211,8 +215,15 @@ struct Engine<'a> {
     current_column: u8,
 }
 
-struct MathState {
+struct MathState<'a> {
     font: super::math::font::MathFont,
+    /// Body-then-fallback faces (parsed from the FontSet's retained
+    /// bytes) for `\text{…}` / symbol characters STIX lacks.
+    text_fonts: Vec<super::math::font::MathTextFont<'a>>,
+    /// Characters no font covers that have already been warned about
+    /// — shared across every typeset so a render warns once per
+    /// distinct char, not once per formula.
+    warned: std::cell::RefCell<HashSet<char>>,
 }
 
 /// Captured column state, returned by
@@ -1648,13 +1659,36 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// Lazily parse STIX Two Math. Returns `true` once available;
-    /// `false` if it failed to load (callers then fall back to
-    /// plain-text math so nothing is lost). The font is *never*
-    /// embedded — math is drawn as vector outlines.
+    /// Lazily parse STIX Two Math plus the body / fallback text faces
+    /// consulted for characters STIX lacks (`\text{…}`, bare CJK,
+    /// etc.). Returns `true` once available; `false` if the math font
+    /// failed to load (callers then fall back to plain-text math so
+    /// nothing is lost). No font is *ever* embedded from this path —
+    /// math is drawn as vector outlines.
     fn ensure_math(&mut self) -> bool {
         if self.math.is_none() {
-            self.math = Some(super::math::font::MathFont::new().map(|font| MathState { font }));
+            let font_set = self.font_set;
+            self.math = Some(super::math::font::MathFont::new().map(|font| {
+                let mut text_fonts = Vec::new();
+                let chain = font_set
+                    .external_body
+                    .regular
+                    .iter()
+                    .chain(font_set.fallbacks.iter())
+                    .filter(|f| !f.source_bytes().is_empty());
+                for f in chain.take(super::math::layout::MAX_TEXT_FONTS) {
+                    if let Some(tf) =
+                        super::math::font::MathTextFont::from_bytes(f.source_bytes())
+                    {
+                        text_fonts.push(tf);
+                    }
+                }
+                MathState {
+                    font,
+                    text_fonts,
+                    warned: std::cell::RefCell::new(HashSet::new()),
+                }
+            }));
         }
         matches!(self.math, Some(Some(_)))
     }
@@ -1675,7 +1709,7 @@ impl<'a> Engine<'a> {
         }
         let frag = {
             let ms = self.math.as_ref().unwrap().as_ref().unwrap();
-            super::math::typeset(&ms.font, content, false, size_pt)
+            super::math::typeset(&ms.font, &ms.text_fonts, &ms.warned, content, false, size_pt)
         };
         if let Some(f) = &frag {
             self.math_inline_cache.insert(key, f.clone());
@@ -1683,21 +1717,28 @@ impl<'a> Engine<'a> {
         frag
     }
 
-    /// The Form XObject for glyph `gid`, building + registering it on
-    /// first use. Content is the filled outline in raw font units;
-    /// the form's `/Matrix` scales font units → em (1/upem) so a
-    /// single object serves every size, positioned by the per-use
-    /// CTM. `None` only if the math font or this glyph's outline is
-    /// unavailable. (printpdf's `FormXObject` serializer omits the
-    /// required `/BBox` and writes `/FormType` as a name — both are
-    /// patched in `postprocess::compress`.)
-    fn math_glyph_xobject(&mut self, gid: u16) -> Option<printpdf::XObjectId> {
-        if let Some(id) = self.math_glyph_xobjects.get(&gid) {
+    /// The Form XObject for glyph `gid` of source face `sel` (the
+    /// math font or one of the text fallback faces), building +
+    /// registering it on first use. Content is the filled outline in
+    /// raw font units; the form's `/Matrix` scales font units → em
+    /// (1/upem of the *source* face) so a single object serves every
+    /// size, positioned by the per-use CTM. `None` only if the font
+    /// or this glyph's outline is unavailable. (printpdf's
+    /// `FormXObject` serializer omits the required `/BBox` and writes
+    /// `/FormType` as a name — both are patched in
+    /// `postprocess::compress`.)
+    fn math_glyph_xobject(&mut self, sel: GlyphFont, gid: u16) -> Option<printpdf::XObjectId> {
+        if let Some(id) = self.math_glyph_xobjects.get(&(sel, gid)) {
             return Some(id.clone());
         }
-        let font = self.math.as_ref()?.as_ref()?;
-        let upem = font.font.upem;
-        let segs = font.font.outline(gid);
+        let ms = self.math.as_ref()?.as_ref()?;
+        let (upem, segs) = match sel {
+            GlyphFont::Math => (ms.font.upem, ms.font.outline(gid)),
+            GlyphFont::Text(i) => {
+                let tf = ms.text_fonts.get(i as usize)?;
+                (tf.upem, tf.outline(gid))
+            }
+        };
         if segs.is_empty() {
             return None;
         }
@@ -1762,7 +1803,7 @@ impl<'a> Engine<'a> {
             .xobjects
             .map
             .insert(id.clone(), printpdf::XObject::Form(form));
-        self.math_glyph_xobjects.insert(gid, id.clone());
+        self.math_glyph_xobjects.insert((sel, gid), id.clone());
         Some(id)
     }
 
@@ -1792,10 +1833,10 @@ impl<'a> Engine<'a> {
         }
         // Snapshot placements so the per-glyph XObject lookup (which
         // borrows `self` mutably) doesn't clash with `frag`.
-        let glyphs: Vec<(u16, f32, f32, f32)> = frag
+        let glyphs: Vec<(GlyphFont, u16, f32, f32, f32)> = frag
             .glyphs
             .iter()
-            .map(|g| (g.gid, x0 + g.x, base_pdf_y + g.y, g.size))
+            .map(|g| (g.font, g.gid, x0 + g.x, base_pdf_y + g.y, g.size))
             .collect();
         // The fill colour is the same for every glyph in the
         // fragment, so set it once outside the per-glyph save/restore
@@ -1805,8 +1846,8 @@ impl<'a> Engine<'a> {
             self.page_ops
                 .push(Op::SetFillColor { col: color.clone() });
         }
-        for (gid, ox, oy, size) in glyphs {
-            let Some(id) = self.math_glyph_xobject(gid) else {
+        for (sel, gid, ox, oy, size) in glyphs {
+            let Some(id) = self.math_glyph_xobject(sel, gid) else {
                 continue;
             };
             // Invoke the shared glyph form with an exact CTM:
@@ -1852,7 +1893,8 @@ impl<'a> Engine<'a> {
 
         let mut frag = {
             let ms = self.math.as_ref().unwrap().as_ref().unwrap();
-            match super::math::typeset(&ms.font, content, true, base_pt) {
+            match super::math::typeset(&ms.font, &ms.text_fonts, &ms.warned, content, true, base_pt)
+            {
                 Some(f) => f,
                 None => return,
             }
@@ -1872,7 +1914,9 @@ impl<'a> Engine<'a> {
         if frag.w > avail_w && avail_w > 0.0 {
             let scaled_pt = (base_pt * (avail_w / frag.w)).max(4.0);
             let ms = self.math.as_ref().unwrap().as_ref().unwrap();
-            if let Some(f) = super::math::typeset(&ms.font, content, true, scaled_pt) {
+            if let Some(f) =
+                super::math::typeset(&ms.font, &ms.text_fonts, &ms.warned, content, true, scaled_pt)
+            {
                 frag = f;
             }
         }

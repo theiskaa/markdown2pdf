@@ -228,6 +228,10 @@ pub struct ExternalFont {
     advance_by_codepoint: BTreeMap<u32, u16>,
     /// Average glyph width, used as fallback for unmapped codepoints.
     fallback_advance: u16,
+    /// The original (pre-subset) font file. Kept so math `\text{…}`
+    /// can outline glyphs the math font lacks from the full face —
+    /// coverage there must not depend on the subset keep-set.
+    source_bytes: Vec<u8>,
 }
 
 impl ExternalFont {
@@ -252,6 +256,11 @@ impl ExternalFont {
     /// given codepoint.
     pub fn covers(&self, c: char) -> bool {
         self.advance_by_codepoint.contains_key(&(c as u32))
+    }
+
+    /// The original (pre-subset) font file bytes.
+    pub(crate) fn source_bytes(&self) -> &[u8] {
+        &self.source_bytes
     }
 }
 
@@ -421,19 +430,21 @@ impl FontSet {
         // doesn't produce.
         let user_src = font_config.and_then(default_source);
         let opted_into_builtin = matches!(&user_src, Some(FontSource::Builtin(_)));
-        let external_body = load_external_family(user_src, used_codepoints, body_variants, doc)
-            .or_else(|| {
-                if opted_into_builtin {
-                    return None;
-                }
-                load_external_family(
-                    default_body_source(),
-                    used_codepoints,
-                    body_variants,
-                    doc,
-                )
-            })
-            .unwrap_or_default();
+        let external_body =
+            load_external_family(user_src, used_codepoints, body_variants, doc, true)
+                .or_else(|| {
+                    if opted_into_builtin {
+                        return None;
+                    }
+                    load_external_family(
+                        default_body_source(),
+                        used_codepoints,
+                        body_variants,
+                        doc,
+                        true,
+                    )
+                })
+                .unwrap_or_default();
         // If the user picked an external body font but didn't specify
         // a code font, try a sensible system monospace fallback. Mixing
         // an external Unicode body font with the built-in Type 1 Courier
@@ -447,8 +458,9 @@ impl FontSet {
             None if external_body.is_loaded() => default_monospace_source(),
             None => None,
         };
-        let external_code = load_external_family(code_src, used_codepoints, code_variants, doc)
-            .unwrap_or_default();
+        let external_code =
+            load_external_family(code_src, used_codepoints, code_variants, doc, false)
+                .unwrap_or_default();
         let fallbacks = load_fallbacks(font_config, used_codepoints, doc);
         Self {
             builtin,
@@ -487,6 +499,7 @@ impl FontSet {
                 used_codepoints,
                 inline_variants,
                 doc,
+                false,
             )
             .unwrap_or_default();
         }
@@ -495,7 +508,7 @@ impl FontSet {
             let Some((_, bytes)) = resolve_regular(src) else {
                 continue;
             };
-            if let Some(font) = parse_and_register(bytes, "fallback", used_codepoints, doc) {
+            if let Some(font) = parse_and_register(bytes, "fallback", used_codepoints, doc, true) {
                 set.fallbacks.push(font);
             }
         }
@@ -707,7 +720,7 @@ fn load_fallbacks(
         let Some((_, bytes)) = resolve_regular(src) else {
             continue;
         };
-        if let Some(font) = parse_and_register(bytes, "fallback", used_codepoints, doc) {
+        if let Some(font) = parse_and_register(bytes, "fallback", used_codepoints, doc, true) {
             out.push(font);
         }
     }
@@ -809,16 +822,19 @@ pub struct BodyVariantNeed {
 
 /// Load the regular weight plus the discoverable variants that the
 /// document actually uses. Returns `None` only if even the regular
-/// weight failed to load.
+/// weight failed to load. `retain_regular` keeps the regular face's
+/// original bytes for math text fallback (body family only).
 fn load_external_family(
     source: Option<FontSource>,
     used_codepoints: &[char],
     need: BodyVariantNeed,
     doc: &mut PdfDocument,
+    retain_regular: bool,
 ) -> Option<ExternalFamily> {
     let source = source?;
     let (anchor_path, regular_bytes) = resolve_regular(source)?;
-    let regular = parse_and_register(regular_bytes, "regular", used_codepoints, doc)?;
+    let regular =
+        parse_and_register(regular_bytes, "regular", used_codepoints, doc, retain_regular)?;
 
     let mut family = ExternalFamily {
         regular: Some(regular),
@@ -842,7 +858,7 @@ fn load_external_family(
             if let Some(variant_path) = find_variant_path(&path, names) {
                 if let Some(bytes) = read_font_file(&variant_path) {
                     if let Some(parsed) =
-                        parse_and_register(bytes, kind.label(), used_codepoints, doc)
+                        parse_and_register(bytes, kind.label(), used_codepoints, doc, false)
                     {
                         match kind {
                             VariantKind::Bold => family.bold = Some(parsed),
@@ -956,6 +972,7 @@ fn parse_and_register(
     label: &str,
     used_codepoints: &[char],
     doc: &mut PdfDocument,
+    retain_source: bool,
 ) -> Option<ExternalFont> {
     let face = match Face::parse(&bytes, 0) {
         Ok(f) => f,
@@ -1063,6 +1080,10 @@ fn parse_and_register(
         units_per_em,
         advance_by_codepoint,
         fallback_advance,
+        // Retained only for the faces math's `\text{…}` fallback
+        // consults (body regular + fallbacks) — a large CJK font's
+        // bytes on every variant would be dead weight.
+        source_bytes: if retain_source { bytes } else { Vec::new() },
     })
 }
 
@@ -1166,6 +1187,24 @@ mod tests {
         // On Linux containers without any monospace font installed,
         // None is the correct answer (graceful degradation to the
         // built-in Courier path).
+    }
+
+    #[test]
+    fn external_font_retains_parseable_source_bytes() {
+        // Math `\text{…}` outlines fallback glyphs from the original
+        // (pre-subset) bytes, so `parse_and_register` must keep them
+        // intact. Uses the bundled STIX bytes — no system dependency.
+        let bytes = crate::render::math::font::MATH_FONT_BYTES;
+        let mut doc = PdfDocument::new("test");
+        let f = parse_and_register(bytes.to_vec(), "test", &['e'], &mut doc, true)
+            .expect("STIX must parse and register");
+        assert_eq!(f.source_bytes().len(), bytes.len());
+        assert!(ttf_parser::Face::parse(f.source_bytes(), 0).is_ok());
+        // Retention is opt-in: variants math never consults (bold /
+        // italic / code faces) must not hold a dead copy.
+        let f = parse_and_register(bytes.to_vec(), "test", &['e'], &mut doc, false)
+            .expect("STIX must parse and register");
+        assert!(f.source_bytes().is_empty());
     }
 
     #[test]
