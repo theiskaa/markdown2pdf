@@ -5,13 +5,33 @@
 //! ScriptScript, each with a cramped form) drive size and the
 //! OpenType MATH constants exactly as TeX does.
 
-use super::font::{MathFont, Stretch};
+use super::font::{MathFont, MathTextFont, Stretch};
 use super::parse::Node;
 use super::symbols::Class;
+use std::cell::RefCell;
+use std::collections::HashSet;
+
+/// Which face a placed glyph's `gid` belongs to. Almost everything is
+/// [`GlyphFont::Math`] (STIX Two Math); `\text{…}` characters the math
+/// font lacks are outlined from the body / fallback text chain and
+/// carry the index of the face that covered them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GlyphFont {
+    Math,
+    /// Index into the text fallback chain passed to `typeset`.
+    Text(u8),
+}
+
+/// Most text fallback faces a chain may hold — bounded by the `u8`
+/// index inside [`GlyphFont::Text`]. Both the chain builder
+/// (`ensure_math`) and the per-char lookup (`text_fallback`) cap on
+/// this same constant.
+pub const MAX_TEXT_FONTS: usize = u8::MAX as usize + 1;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PlacedGlyph {
     pub gid: u16,
+    pub font: GlyphFont,
     pub x: f32,
     /// Baseline offset, +up.
     pub y: f32,
@@ -132,12 +152,29 @@ impl Style {
 
 pub struct Ctx<'f> {
     pub font: &'f MathFont,
+    /// Body-then-fallback text faces consulted for characters the
+    /// math font lacks (`\text{…}` and bare symbols).
+    pub text_fonts: &'f [MathTextFont<'f>],
     pub base_pt: f32,
+    /// Characters already warned about (covered by no font). Owned by
+    /// the caller and shared across every typeset of a render so each
+    /// distinct char warns once per document, not once per formula.
+    warned: &'f RefCell<HashSet<char>>,
 }
 
 impl<'f> Ctx<'f> {
-    pub fn new(font: &'f MathFont, base_pt: f32) -> Self {
-        Ctx { font, base_pt }
+    pub fn new(
+        font: &'f MathFont,
+        text_fonts: &'f [MathTextFont<'f>],
+        warned: &'f RefCell<HashSet<char>>,
+        base_pt: f32,
+    ) -> Self {
+        Ctx {
+            font,
+            text_fonts,
+            base_pt,
+            warned,
+        }
     }
 
     fn size(&self, st: Style) -> f32 {
@@ -245,12 +282,107 @@ impl<'f> Ctx<'f> {
         }
     }
 
+    /// First face in the text fallback chain that covers `ch` with a
+    /// *drawable* glyph, with its glyph id. Whitespace-like chars
+    /// accept any covering face: an empty outline with a real advance
+    /// IS their correct rendering (NBSP & friends, Braille blank).
+    /// Otherwise a face whose cmap maps `ch` to an ink-less glyph is
+    /// skipped so a later face — or the visible notdef box — handles
+    /// it instead of a silent blank: the emit side drops empty
+    /// outlines (`math_glyph_xobject` bails on `segs.is_empty()`), so
+    /// this probe is the exact "will it draw" predicate.
+    fn text_fallback(&self, ch: char) -> Option<(u8, u16)> {
+        let blank_ok = ch.is_whitespace() || ch == '\u{2800}';
+        self.text_fonts
+            .iter()
+            .take(MAX_TEXT_FONTS)
+            .enumerate()
+            .find_map(|(i, tf)| {
+                let g = tf.glyph_id(ch)?;
+                (blank_ok || !tf.outline(g).is_empty()).then_some((i as u8, g))
+            })
+    }
+
+    /// Append a hollow notdef box at `x` for a character no font
+    /// covers, warn once per distinct char, and return the advance.
+    /// A visible box beats a silent blank: the reader can see that
+    /// something was there (issue #115).
+    fn push_notdef(&self, f: &mut Frag, ch: char, x: f32, size: f32) -> f32 {
+        if self.warned.borrow_mut().insert(ch) {
+            log::warn!(
+                "math: no font covers {:?} (U+{:04X}); rendering a placeholder box",
+                ch,
+                ch as u32
+            );
+        }
+        let w = 0.5 * size;
+        let h = 0.62 * size;
+        let t = 0.045 * size;
+        // Hollow rectangle built from four filled rules.
+        f.rules.push(Rule { x, y_top: h, w, thickness: t });
+        f.rules.push(Rule { x, y_top: t, w, thickness: t });
+        f.rules.push(Rule { x, y_top: h, w: t, thickness: h });
+        f.rules.push(Rule {
+            x: x + w - t,
+            y_top: h,
+            w: t,
+            thickness: h,
+        });
+        f.asc = f.asc.max(h);
+        0.6 * size
+    }
+
+    /// Place one character at `x`, resolving math font → text
+    /// fallback → notdef box, and return the advance consumed.
+    /// Default-ignorable characters (ZWNJ/ZWJ/ZWSP, variation
+    /// selectors, bidi marks, …) are dropped with zero advance —
+    /// invisible is their correct rendering. The single shared
+    /// placement path for `\text{…}` runs and bare fallback symbols.
+    fn place_char(&self, f: &mut Frag, ch: char, x: f32, size: f32) -> f32 {
+        if is_default_ignorable(ch) {
+            return 0.0;
+        }
+        if let Some(g) = self.font.glyph_id(ch) {
+            let m = self.font.glyph(g);
+            f.glyphs.push(PlacedGlyph {
+                gid: g,
+                font: GlyphFont::Math,
+                x,
+                y: 0.0,
+                size,
+            });
+            f.asc = f.asc.max(self.font.scale(m.height(), size));
+            f.desc = f.desc.max(self.font.scale(m.depth(), size));
+            self.font.scale(m.advance, size)
+        } else if let Some((i, g)) = self.text_fallback(ch) {
+            // `\text{…}` is body text; characters outside the math
+            // font's coverage (CJK, Arabic, Devanagari, …) come from
+            // the document's body / fallback faces.
+            let tf = &self.text_fonts[i as usize];
+            let m = tf.glyph(g);
+            f.glyphs.push(PlacedGlyph {
+                gid: g,
+                font: GlyphFont::Text(i),
+                x,
+                y: 0.0,
+                size,
+            });
+            f.asc = f.asc.max(tf.scale(m.height(), size));
+            f.desc = f.desc.max(tf.scale(m.depth(), size));
+            tf.scale(m.advance, size)
+        } else {
+            self.push_notdef(f, ch, x, size)
+        }
+    }
+
     fn glyph_frag(&self, ch: char, st: Style) -> Frag {
         let size = self.size(st);
         let Some(gid) = self.font.glyph_id(ch) else {
-            // Missing glyph: leave a blank the width of a digit.
+            // Not in the math font: try the body / fallback text
+            // faces, else a visible placeholder — never a silent
+            // blank.
             let mut f = Frag::empty();
-            f.w = 0.5 * size;
+            f.w = self.place_char(&mut f, ch, 0.0, size);
             return f;
         };
         let g = self.font.glyph(gid);
@@ -261,6 +393,7 @@ impl<'f> Ctx<'f> {
             desc: s(g.depth()),
             glyphs: vec![PlacedGlyph {
                 gid,
+                font: GlyphFont::Math,
                 x: 0.0,
                 y: 0.0,
                 size,
@@ -274,25 +407,17 @@ impl<'f> Ctx<'f> {
         let size = self.size(st);
         let mut f = Frag::empty();
         let mut x = 0.0;
-        for ch in t.chars() {
+        // Reorder to visual order first (RTL runs reversed); the
+        // default-ignorable skip happens later inside `place_char` so
+        // LRM/RLM can steer the reordering before being dropped.
+        let mut chars: Vec<char> = t.chars().collect();
+        visual_order(&mut chars);
+        for ch in chars {
             if ch == ' ' {
                 x += 0.28 * size;
                 continue;
             }
-            let g = match self.font.glyph_id(ch) {
-                Some(g) => g,
-                None => continue,
-            };
-            let m = self.font.glyph(g);
-            f.glyphs.push(PlacedGlyph {
-                gid: g,
-                x,
-                y: 0.0,
-                size,
-            });
-            f.asc = f.asc.max(self.font.scale(m.height(), size));
-            f.desc = f.desc.max(self.font.scale(m.depth(), size));
-            x += self.font.scale(m.advance, size);
+            x += self.place_char(&mut f, ch, x, size);
         }
         f.w = x;
         f
@@ -326,6 +451,7 @@ impl<'f> Ctx<'f> {
             desc: d - dy,
             glyphs: vec![PlacedGlyph {
                 gid,
+                font: GlyphFont::Math,
                 x: 0.0,
                 y: dy,
                 size,
@@ -438,6 +564,7 @@ impl<'f> Ctx<'f> {
                 let y = -bf.desc - gd;
                 f.glyphs.push(PlacedGlyph {
                     gid: g,
+                    font: GlyphFont::Math,
                     x: 0.0,
                     y,
                     size,
@@ -673,6 +800,7 @@ impl<'f> Ctx<'f> {
                 let dy = axis - mid;
                 f.glyphs.push(PlacedGlyph {
                     gid: g,
+                    font: GlyphFont::Math,
                     x,
                     y: dy,
                     size,
@@ -744,6 +872,7 @@ impl<'f> Ctx<'f> {
                 adv_w = adv_w.max(self.font.scale(m.advance, size));
                 f.glyphs.push(PlacedGlyph {
                     gid: p.gid,
+                    font: GlyphFont::Math,
                     x,
                     y: y - self.font.scale(m.y_min, size),
                     size,
@@ -788,6 +917,7 @@ impl<'f> Ctx<'f> {
         let acc_y = base_top - clearance + self.font.scale(am.depth(), size);
         f.glyphs.push(PlacedGlyph {
             gid: ag,
+            font: GlyphFont::Math,
             x: centre - acc_w / 2.0,
             y: acc_y,
             size,
@@ -827,6 +957,7 @@ impl<'f> Ctx<'f> {
                 let y = bf.asc + 0.12 * size;
                 f.glyphs.push(PlacedGlyph {
                     gid: g,
+                    font: GlyphFont::Math,
                     x: 0.0,
                     y,
                     size,
@@ -853,6 +984,7 @@ impl<'f> Ctx<'f> {
                 let y = -bf.desc - 0.12 * size - self.font.scale(m.height(), size);
                 f.glyphs.push(PlacedGlyph {
                     gid: g,
+                    font: GlyphFont::Math,
                     x: 0.0,
                     y,
                     size,
@@ -947,6 +1079,170 @@ impl<'f> Ctx<'f> {
 
 }
 
+/// Unicode Default_Ignorable_Code_Point (the common subset): soft
+/// hyphen, joiners/non-joiners, zero-width spaces, bidi controls,
+/// variation selectors, fillers. These format characters are meant to
+/// be invisible; drawing a notdef box for them (because no font maps
+/// them) would corrupt e.g. Persian text where ZWNJ is standard
+/// orthography. They are dropped at placement time — after
+/// [`visual_order`], so LRM/RLM can still steer bidi levels.
+fn is_default_ignorable(ch: char) -> bool {
+    matches!(ch as u32,
+        0x00AD                  // soft hyphen
+        | 0x034F                // combining grapheme joiner
+        | 0x061C                // Arabic letter mark
+        | 0x115F..=0x1160       // Hangul fillers
+        | 0x17B4..=0x17B5       // Khmer inherent vowels
+        | 0x180B..=0x180E       // Mongolian variation selectors + MVS
+        | 0x200B..=0x200F       // ZWSP, ZWNJ, ZWJ, LRM, RLM
+        | 0x202A..=0x202E       // bidi embedding controls
+        | 0x2060..=0x206F       // word joiner, invisible operators, deprecated controls
+        | 0x3164                // Hangul filler
+        | 0xFE00..=0xFE0F       // variation selectors
+        | 0xFEFF                // zero-width no-break space / BOM
+        | 0xFFA0                // halfwidth Hangul filler
+        | 0x1BCA0..=0x1BCA3     // shorthand format controls
+        | 0x1D173..=0x1D17A     // musical format controls
+        | 0xE0000..=0xE0FFF     // tags + variation selector supplement
+    )
+}
+
+/// Simplified bidi character class for [`visual_order`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BClass {
+    /// Strong right-to-left (Hebrew, Arabic, Syriac, Thaana, NKo, …).
+    R,
+    /// Digits and numeric separators — travel with an RTL run but
+    /// keep internal left-to-right order.
+    Num,
+    /// Strong left-to-right (everything else with a direction).
+    L,
+    /// Neutral: whitespace, punctuation, symbols.
+    N,
+}
+
+fn bclass(c: char) -> BClass {
+    match c as u32 {
+        // Digits first: U+0660–0669 sit inside the Arabic block and
+        // must not classify as R. U+066B/066C are the Arabic decimal
+        // and thousands separators.
+        0x30..=0x39 | 0x0660..=0x0669 | 0x06F0..=0x06F9 | 0x066B..=0x066C => BClass::Num,
+        // LRM / RLM: strong marks that steer neutral resolution, then
+        // vanish at placement as default-ignorables.
+        0x200E => BClass::L,
+        0x200F => BClass::R,
+        // Hebrew … Arabic Extended-A (one contiguous span), Hebrew /
+        // Arabic presentation forms.
+        0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF => BClass::R,
+        _ if c.is_whitespace() => BClass::N,
+        _ => {
+            if c.is_alphanumeric() {
+                BClass::L
+            } else {
+                BClass::N
+            }
+        }
+    }
+}
+
+/// Reorder `chars` from logical to visual order: UAX #9 restricted to
+/// implicit levels 0 (LTR base) / 1 (RTL) / 2 (numbers inside RTL),
+/// with bracket mirroring for reversed runs. This fixes RTL scripts
+/// rendering mirrored; it does NOT shape — Arabic renders in isolated
+/// letterforms (parity with the body-text emit path). Other
+/// limitations: base direction is always LTR, no explicit
+/// embedding/isolate controls, no bracket-pair resolution, and bare
+/// RTL symbols outside `\text{…}` stay in logical order.
+fn visual_order(chars: &mut [char]) {
+    let mut cls: Vec<BClass> = chars.iter().map(|&c| bclass(c)).collect();
+    if !cls.contains(&BClass::R) {
+        return;
+    }
+    let n = chars.len();
+    // W4-lite: a single separator between two digits joins the number
+    // so `12.5` survives the level-2 re-reversal intact.
+    for i in 1..n.saturating_sub(1) {
+        if matches!(chars[i], '.' | ',' | ':' | '/')
+            && cls[i - 1] == BClass::Num
+            && cls[i + 1] == BClass::Num
+        {
+            cls[i] = BClass::Num;
+        }
+    }
+    // Implicit levels for strong chars and numbers.
+    let mut lvl = vec![0u8; n];
+    let mut prev_strong_r = false;
+    for i in 0..n {
+        match cls[i] {
+            BClass::R => {
+                lvl[i] = 1;
+                prev_strong_r = true;
+            }
+            BClass::L => {
+                lvl[i] = 0;
+                prev_strong_r = false;
+            }
+            BClass::Num => lvl[i] = if prev_strong_r { 2 } else { 0 },
+            BClass::N => {}
+        }
+    }
+    // N1-lite: a neutral run flanked by RTL context (level >= 1) on
+    // BOTH sides takes the RTL level; boundary neutrals stay at base.
+    let mut i = 0;
+    while i < n {
+        if cls[i] == BClass::N {
+            let j = (i..n).find(|&k| cls[k] != BClass::N).unwrap_or(n);
+            if i > 0 && lvl[i - 1] >= 1 && j < n && lvl[j] >= 1 {
+                for l in lvl.iter_mut().take(j).skip(i) {
+                    *l = 1;
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    // L4-lite: mirror bracket glyphs that ended up in reversed runs.
+    for i in 0..n {
+        if lvl[i] >= 1 {
+            chars[i] = match chars[i] {
+                '(' => ')',
+                ')' => '(',
+                '[' => ']',
+                ']' => '[',
+                '{' => '}',
+                '}' => '{',
+                '<' => '>',
+                '>' => '<',
+                '«' => '»',
+                '»' => '«',
+                c => c,
+            };
+        }
+    }
+    // L2: reverse level >= 1 runs, then level == 2 runs — the double
+    // reversal keeps digits LTR while travelling with the RTL run.
+    reverse_runs(chars, &mut lvl, 1);
+    reverse_runs(chars, &mut lvl, 2);
+}
+
+/// Reverse every maximal run of `lvl[i] >= min`. The level slice is
+/// permuted in lockstep with the chars — the level-2 pass reads the
+/// levels at their post-reversal positions.
+fn reverse_runs(chars: &mut [char], lvl: &mut [u8], min: u8) {
+    let mut i = 0;
+    while i < chars.len() {
+        if lvl[i] >= min {
+            let j = (i..chars.len()).find(|&k| lvl[k] < min).unwrap_or(chars.len());
+            chars[i..j].reverse();
+            lvl[i..j].reverse();
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+}
+
 /// TeX inter-atom spacing class table → mu code (0 none, 1 thin,
 /// 2 medium, 3 thick). Medium/thick are dropped in script styles by
 /// the caller.
@@ -1026,11 +1322,13 @@ fn node_class(n: &Node) -> Class {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::math::font::MATH_FONT_BYTES;
     use crate::render::math::parse::parse;
 
     fn lay(src: &str, display: bool) -> Frag {
         let font = MathFont::new().unwrap();
-        let ctx = Ctx::new(&font, 11.0);
+        let warned = RefCell::new(HashSet::new());
+        let ctx = Ctx::new(&font, &[], &warned, 11.0);
         ctx.list(&parse(src), if display { Display } else { Text })
     }
 
@@ -1089,6 +1387,206 @@ mod tests {
         }
     }
 
+    /// Regression for issue #115: a `\text{…}` character no font
+    /// covers must still occupy width and draw a visible notdef box
+    /// instead of silently vanishing.
+    #[test]
+    fn text_missing_everywhere_renders_placeholder_not_blank() {
+        let f = lay("\\text{あ}", false);
+        assert!(f.w > 0.0, "placeholder must advance");
+        assert!(!f.rules.is_empty(), "notdef box must be drawn");
+        assert!(f.glyphs.is_empty(), "no font in the chain covers あ");
+        assert!(f.asc > 0.0);
+    }
+
+    /// Bare symbols outside `\text{}` take the same fallback path.
+    #[test]
+    fn bare_symbol_missing_everywhere_renders_placeholder() {
+        let f = lay("あ", false);
+        assert!(f.w > 0.0);
+        assert!(!f.rules.is_empty());
+    }
+
+    /// Latin `\text{}` must keep coming from the math font even when
+    /// a text fallback chain is present (zero visual regression).
+    #[test]
+    fn text_latin_stays_in_math_font() {
+        let f = lay("\\text{Hello}", false);
+        assert_eq!(f.glyphs.len(), 5);
+        assert!(f.glyphs.iter().all(|g| g.font == GlyphFont::Math));
+    }
+
+    /// End-to-end fallback hit: find a system face covering a char
+    /// STIX Two Math lacks, and check `\text{…}` routes it there.
+    /// Skips cleanly on hosts with no such font (bare CI containers).
+    #[test]
+    fn text_falls_back_to_text_font() {
+        let candidates: &[(&str, char)] = &[
+            ("Arial Unicode MS", 'あ'),
+            ("Arial Unicode", 'あ'),
+            ("AppleGothic", 'あ'),
+            ("Noto Sans CJK JP", 'あ'),
+            ("Noto Sans CJK", 'あ'),
+        ];
+        let mut found = None;
+        for &(name, probe) in candidates {
+            let Some(path) = crate::fonts::find_system_font(name) else {
+                continue;
+            };
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            if MathTextFont::from_bytes(&bytes)
+                .map(|tf| tf.glyph_id(probe).is_some())
+                .unwrap_or(false)
+            {
+                found = Some((bytes, probe));
+                break;
+            }
+        }
+        let Some((bytes, probe)) = found else {
+            eprintln!("skipping: no CJK-capable system font found");
+            return;
+        };
+        let chain = vec![MathTextFont::from_bytes(&bytes).unwrap()];
+        let font = MathFont::new().unwrap();
+        let warned = RefCell::new(HashSet::new());
+        let ctx = Ctx::new(&font, &chain, &warned, 11.0);
+        let f = ctx.list(&parse(&format!("\\text{{x{probe}}}")), Text);
+        assert_eq!(f.glyphs.len(), 2);
+        assert_eq!(f.glyphs[0].font, GlyphFont::Math, "x stays in STIX");
+        assert_eq!(
+            f.glyphs[1].font,
+            GlyphFont::Text(0),
+            "{probe} must come from the fallback face"
+        );
+        assert!(f.rules.is_empty(), "covered char must not draw a notdef box");
+        assert!(f.w > 0.0 && f.w.is_finite() && f.asc > 0.0);
+        assert!(f.glyphs[1].x > f.glyphs[0].x, "fallback glyph advances");
+    }
+
+    fn vo(s: &str) -> String {
+        let mut v: Vec<char> = s.chars().collect();
+        visual_order(&mut v);
+        v.into_iter().collect()
+    }
+
+    #[test]
+    fn visual_order_reverses_rtl_runs() {
+        // Pure-RTL word: fully reversed.
+        assert_eq!(vo("مرحبا"), "ابحرم");
+        // Mixed: boundary space stays put, only the RTL run reverses.
+        assert_eq!(vo("abc مرحبا"), "abc ابحرم");
+        // Two RTL words + internal space reverse as ONE run (visual
+        // order of "A B" in Arabic is B-then-A).
+        assert_eq!(vo("مرحبا بالعالم"), "ملاعلاب ابحرم");
+        // LTR-only input is untouched (fast path).
+        assert_eq!(vo("hello world"), "hello world");
+    }
+
+    #[test]
+    fn visual_order_keeps_digits_ltr_inside_rtl() {
+        // Digits travel with the RTL run but read left-to-right.
+        assert_eq!(vo("مرحبا 123"), "123 ابحرم");
+        // Decimal separator joins the number (W4-lite) and the level
+        // slice reversal stays in lockstep — `12.5` must not scatter.
+        assert_eq!(vo("ا 12.5 م"), "م 12.5 ا");
+    }
+
+    #[test]
+    fn visual_order_mirrors_internal_brackets_only() {
+        // Boundary parens are neutral at base level: not reversed,
+        // not mirrored.
+        assert_eq!(vo("(مرحبا)"), "(ابحرم)");
+        // Parens inside a reversed run swap so they still face their
+        // content.
+        assert_eq!(vo("اب(جد)هو"), "وه(دج)با");
+    }
+
+    /// ZWNJ (and friends) are format characters: invisible, zero
+    /// advance, no notdef box — `\text{a‌b}` must lay out exactly
+    /// like `\text{ab}`.
+    #[test]
+    fn default_ignorables_are_invisible() {
+        let with = lay("\\text{a\u{200C}b}", false);
+        let without = lay("\\text{ab}", false);
+        assert_eq!(with.glyphs.len(), 2);
+        assert!(with.rules.is_empty(), "no notdef box for ZWNJ");
+        assert!((with.w - without.w).abs() < 1e-6);
+        // Bidi marks steer ordering but also vanish.
+        let rlm = lay("\\text{a\u{200F}b}", false);
+        assert_eq!(rlm.glyphs.len(), 2);
+        assert!(rlm.rules.is_empty());
+    }
+
+    /// RTL `\text{}` places glyphs in visual order end-to-end (STIX
+    /// covers no RTL script, so this needs a system face with Arabic;
+    /// skips cleanly on hosts without one).
+    #[test]
+    fn rtl_text_places_glyphs_in_visual_order() {
+        let candidates = ["Arial Unicode MS", "Arial Unicode", "Geneva", "AppleGothic"];
+        let mut found = None;
+        for name in candidates {
+            let Some(path) = crate::fonts::find_system_font(name) else {
+                continue;
+            };
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            if MathTextFont::from_bytes(&bytes)
+                .map(|tf| tf.glyph_id('\u{0627}').is_some() && tf.glyph_id('\u{0628}').is_some())
+                .unwrap_or(false)
+            {
+                found = Some(bytes);
+                break;
+            }
+        }
+        let Some(bytes) = found else {
+            eprintln!("skipping: no Arabic-capable system font found");
+            return;
+        };
+        let chain = vec![MathTextFont::from_bytes(&bytes).unwrap()];
+        let alef = chain[0].glyph_id('\u{0627}').unwrap();
+        let beh = chain[0].glyph_id('\u{0628}').unwrap();
+        let font = MathFont::new().unwrap();
+        let warned = RefCell::new(HashSet::new());
+        let ctx = Ctx::new(&font, &chain, &warned, 11.0);
+        // Logical اب ; visually ب must land left of ا.
+        let f = ctx.list(&parse("\\text{\u{0627}\u{0628}}"), Text);
+        assert_eq!(f.glyphs.len(), 2);
+        assert_eq!(f.glyphs[0].gid, beh, "leftmost glyph is the logically-second letter");
+        assert_eq!(f.glyphs[1].gid, alef);
+        assert!(f.glyphs[0].x < f.glyphs[1].x);
+    }
+
+    /// Whitespace-like chars (NBSP) accept a covering face even with
+    /// an empty outline — advance-without-ink IS their rendering. A
+    /// char the face doesn't cover at all still returns None.
+    #[test]
+    fn text_fallback_accepts_blank_whitespace_glyphs() {
+        let chain = vec![MathTextFont::from_bytes(MATH_FONT_BYTES).unwrap()];
+        let font = MathFont::new().unwrap();
+        let warned = RefCell::new(HashSet::new());
+        let ctx = Ctx::new(&font, &chain, &warned, 11.0);
+        if chain[0].glyph_id('\u{00A0}').is_some() {
+            assert!(ctx.text_fallback('\u{00A0}').is_some(), "NBSP accepted");
+        }
+        assert!(ctx.text_fallback('あ').is_none(), "uncovered char rejected");
+    }
+
+    /// The warned set is caller-owned: two typeset calls sharing one
+    /// set warn once per distinct char across both.
+    #[test]
+    fn missing_glyph_warns_once_per_shared_set() {
+        let font = MathFont::new().unwrap();
+        let warned = RefCell::new(HashSet::new());
+        let _ = crate::render::math::typeset(&font, &[], &warned, "\\text{あ}", false, 11.0);
+        assert_eq!(warned.borrow().len(), 1);
+        assert!(warned.borrow().contains(&'あ'));
+        let _ = crate::render::math::typeset(&font, &[], &warned, "\\text{ああ}", true, 11.0);
+        assert_eq!(warned.borrow().len(), 1, "no re-warn across typeset calls");
+    }
+
     const CORPUS: &[&str] = &[
         "a + b - c",
         "x^2 + y^2 = z^2",
@@ -1114,6 +1612,8 @@ mod tests {
         "{}",
         "x",
         "\\unknownmacro \\frac{}{} \\sqrt[]{}",
+        "\\text{Hello こんにちは مرحبا}",
+        "\\operatorname{ソート}(x) + \\text{नमस्ते}",
     ];
 
     /// Pathologically deep nesting — size bottoms out at scriptscript,
@@ -1138,7 +1638,8 @@ mod tests {
         inputs.extend(deep_inputs());
         for src in &inputs {
             for display in [true, false] {
-                let ctx = Ctx::new(&font, 11.0);
+                let warned = RefCell::new(HashSet::new());
+        let ctx = Ctx::new(&font, &[], &warned, 11.0);
                 let f = ctx.list(&parse(src), if display { Display } else { Text });
                 let tag = format!("{src:?} display={display}");
                 assert!(
@@ -1192,7 +1693,8 @@ mod tests {
     #[test]
     fn style_sizes_are_monotonic() {
         let font = MathFont::new().unwrap();
-        let c = Ctx::new(&font, 12.0);
+        let warned = RefCell::new(HashSet::new());
+        let c = Ctx::new(&font, &[], &warned, 12.0);
         let d = c.size(Display);
         let t = c.size(Text);
         let s = c.size(Script);
@@ -1228,7 +1730,8 @@ mod tests {
     fn script_styles_suppress_medium_thick_spacing() {
         use super::super::symbols::Class::*;
         let font = MathFont::new().unwrap();
-        let c = Ctx::new(&font, 11.0);
+        let warned = RefCell::new(HashSet::new());
+        let c = Ctx::new(&font, &[], &warned, 11.0);
         // Bin spacing (medium) is real in text style, gone in script.
         assert!(c.spacing(Ord, Bin, Text) > 0.0);
         assert_eq!(c.spacing(Ord, Bin, Script), 0.0);
