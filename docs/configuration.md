@@ -632,6 +632,72 @@ is a clickable `GoTo` link to its target heading. The renderer runs
 a convergence loop on page count (bounded at 3 iterations) so the
 displayed page numbers match the final post-TOC offsets.
 
+## Security — confining image reads (`[security]`)
+
+`[security]` is operator-only configuration: it governs what the
+*renderer* is allowed to do on the host it runs on, not how a
+document looks. It has no `### ` peers among the document-authorable
+features above — it belongs alongside `Hyphenation` / `Page breaks` /
+`Inline HTML` below, not with metadata, headers/footers, the title
+page, or the TOC.
+
+```toml
+[security]
+image_root = "/srv/uploads"
+allow_absolute_image_paths = true
+allow_remote_images = true
+```
+
+**When you need this**: markdown can reference a local image by any
+path — `![](/etc/ssl/certs/logo.png)`, `![](../../.env)` — and by
+default the renderer reads it straight off disk and embeds the bytes
+in the PDF. That is fine for a person converting their own document,
+but if you render markdown **you did not author** (a server accepting
+user-submitted documents, a pipeline over untrusted input), a crafted
+document can pull any server-local image the process can read into
+the output the attacker receives. If that's your situation, set
+`image_root` to a directory the document is allowed to pull images
+from — typically the same directory the markdown itself came from, or
+a dedicated uploads folder.
+
+- `image_root` (default: unset) — when set, every local image path is
+  resolved against this directory and confined to it. A relative path
+  resolves inside it; any path — relative or absolute — that escapes
+  it (including via a symlink planted inside the root) is refused.
+  Unset preserves the historical behavior: relative paths resolve
+  against the process's working directory and absolute paths are read
+  as given.
+- `allow_absolute_image_paths` (default: `true`) — set `false` to
+  reject any absolute local image path outright, independent of
+  `image_root`. This check runs *before* root confinement, so an
+  absolute path is refused even if it points at a file genuinely
+  inside `image_root` — set both knobs expecting them to compose, not
+  `image_root` alone to be the deciding factor.
+- `allow_remote_images` (default: `true`) — set `false` to reject
+  `http`/`https` image references. Independent of whether the crate
+  was compiled with the `fetch` feature — without it, remote images
+  already fail.
+
+A refused image degrades exactly like a missing or undecodable one:
+the renderer logs a warning and falls back to the italic
+`[image: ALT]` placeholder rather than failing the whole render. A
+path that simply doesn't exist (a typo, a moved file) is logged
+separately from an actual policy refusal, so you're not sent hunting
+through security config for what's really a bad path.
+
+These three all default to the permissive, pre-existing behavior — a
+document can never set them itself (frontmatter is metadata-only), so
+they only ever come from your own config file, `-c` flag, or
+`ConfigSource::Embedded`.
+
+**Known limitations**: this is a containment check, not a sandbox.
+Hardlinks inside `image_root` aren't detected (though creating one
+already requires write access inside the root — a stronger primitive
+than the image read it would buy); there is a TOCTOU window between
+the path being resolved and the file actually being read; and, as
+above, `allow_absolute_image_paths = false` is checked before root
+confinement.
+
 ## Hyphenation
 
 The `split_long_words` pre-pass consults a Knuth-Liang English

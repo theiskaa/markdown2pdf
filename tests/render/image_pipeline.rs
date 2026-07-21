@@ -247,6 +247,125 @@ mod html_img_paths {
     }
 }
 
+/// `[security]` image-confinement policy (Plan 005). The defaults
+/// (`image_root` unset, `allow_absolute_image_paths = true`,
+/// `allow_remote_images = true`) preserve the historical, unconfined
+/// behavior — the `default_config_still_embeds_image` case below is
+/// the backward-compatibility regression guard. The other cases prove
+/// the guard actually refuses reads it should refuse: each places a
+/// real, decodable image *outside* the configured root and asserts it
+/// is NOT embedded (rather than only asserting the render succeeds),
+/// so a neutered guard would fail these tests.
+mod security_image_confinement {
+    use super::*;
+
+    #[test]
+    fn absolute_path_outside_image_root_falls_back_to_alt_text() {
+        // A real PNG that decodes fine on its own, but lives outside
+        // the configured root.
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
+            16,
+            16,
+            image::Rgb([50, 60, 70]),
+        ));
+        let outside = write_temp(&img, ImageFormat::Png, "sec_outside");
+
+        // Root is an unrelated, empty temp directory that does not
+        // contain `outside`.
+        let root = std::env::temp_dir().join(format!(
+            "m2p_sec_root_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let cfg = format!(
+            "[security]\nimage_root = \"{}\"\n",
+            root.to_string_lossy().replace('\\', "\\\\")
+        );
+        let md = format!("![sec outside]({})\n", outside);
+        let cfg_owned = markdown2pdf::config::ConfigSource::Embedded(&cfg);
+        let font_cfg = markdown2pdf::fonts::FontConfig::new()
+            .with_default_font_source(markdown2pdf::fonts::FontSource::Builtin("Helvetica"));
+        let bytes = markdown2pdf::parse_into_bytes(md, cfg_owned, Some(&font_cfg))
+            .expect("render must succeed even when the image is refused");
+
+        assert!(pdf_well_formed(&bytes));
+        // The load-bearing assertion: with the guard doing its job the
+        // image must NOT be embedded, so the alt-text placeholder must
+        // appear instead. A neutered guard would embed the image and
+        // fail this.
+        assert!(
+            contains_text(&bytes, "[image: sec outside]"),
+            "image outside image_root must fall back to alt text, not embed"
+        );
+
+        let _ = std::fs::remove_file(&outside);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn default_config_still_embeds_image() {
+        // No `[security]` block at all — proves the defaults preserve
+        // historical (unconfined) behavior. Same shape as the
+        // pre-existing `valid_images::small_rgb_png_renders` test.
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
+            16,
+            16,
+            image::Rgb([10, 20, 30]),
+        ));
+        let p = write_temp(&img, ImageFormat::Png, "sec_default_ok");
+        let bytes = render_md(&format!("![sec default]({})\n", p));
+        assert!(pdf_well_formed(&bytes));
+        assert!(
+            !contains(&bytes, b"[image: sec default]"),
+            "default config (no [security] block) must still embed local images"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn remote_image_falls_back_when_allow_remote_images_false() {
+        let cfg = "[security]\nallow_remote_images = false\n";
+        let md = "![sec remote](https://example.invalid/should-not-fetch.png)\n";
+        let font_cfg = markdown2pdf::fonts::FontConfig::new()
+            .with_default_font_source(markdown2pdf::fonts::FontSource::Builtin("Helvetica"));
+        let bytes = markdown2pdf::parse_into_bytes(
+            md.to_string(),
+            markdown2pdf::config::ConfigSource::Embedded(cfg),
+            Some(&font_cfg),
+        )
+        .expect("render must succeed even when the remote image is refused");
+        assert!(pdf_well_formed(&bytes));
+        assert!(
+            contains_text(&bytes, "[image: sec remote]"),
+            "remote image must fall back to alt text when allow_remote_images = false"
+        );
+    }
+
+    #[test]
+    fn uppercase_scheme_url_is_treated_as_url_and_refused() {
+        // Scheme detection must be case-insensitive: an `HTTP://`
+        // reference has to route down the same URL branch as
+        // `http://` and be subject to `allow_remote_images`, not
+        // silently fall through to the local-file branch.
+        let cfg = "[security]\nallow_remote_images = false\n";
+        let md = "![sec upper](HTTP://example.invalid/should-not-fetch.png)\n";
+        let font_cfg = markdown2pdf::fonts::FontConfig::new()
+            .with_default_font_source(markdown2pdf::fonts::FontSource::Builtin("Helvetica"));
+        let bytes = markdown2pdf::parse_into_bytes(
+            md.to_string(),
+            markdown2pdf::config::ConfigSource::Embedded(cfg),
+            Some(&font_cfg),
+        )
+        .expect("render must succeed even when the uppercase-scheme remote image is refused");
+        assert!(pdf_well_formed(&bytes));
+        assert!(
+            contains_text(&bytes, "[image: sec upper]"),
+            "uppercase-scheme URL must be treated as a URL and fall back to alt text when allow_remote_images = false"
+        );
+    }
+}
+
 /// Every "image not shown" path must emit the same italic
 /// `[image: ALT]` placeholder so readers can spot at-a-glance which
 /// inline glyphs stood in for an image — regardless of whether the

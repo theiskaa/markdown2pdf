@@ -230,3 +230,14 @@ creator = "markdown2pdf"
 # enabled = false
 # title = "Contents"
 # max_depth = 3
+
+
+# Operator-only limits on what a document may pull in while rendering.
+# The document itself can never set these (frontmatter is metadata
+# only), so this block is the one place policy for *untrusted* input
+# lives. All three default to permissive, unconfined behavior — set
+# `image_root` if you render markdown you did not author yourself.
+# [security]
+# image_root = "/srv/uploads"        # confine local image reads to this directory
+# allow_absolute_image_paths = true  # false to reject absolute local paths outright
+# allow_remote_images = true         # false to reject http(s) images

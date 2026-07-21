@@ -49,6 +49,33 @@ pub struct DocumentConfig {
     pub footer: Option<PageFurnitureConfig>,
     pub title_page: Option<TitlePageConfig>,
     pub toc: Option<TocConfig>,
+    /// Operator-only policy on what the document is allowed to pull in
+    /// while rendering. See [`SecurityConfig`].
+    pub security: Option<SecurityConfig>,
+}
+
+/// Operator-controlled limits on what a document is allowed to pull in
+/// while rendering. These exist for callers who render *untrusted*
+/// markdown: a document can name any local path in an image reference,
+/// and without a root to confine it to, the renderer will read it. The
+/// document itself can never set these — frontmatter is metadata-only,
+/// so this block comes solely from the operator's config.
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct SecurityConfig {
+    /// Directory that local image paths are resolved against and confined
+    /// to. Relative paths resolve inside it; any path that escapes it
+    /// after symlink resolution is refused. `None` (the default) keeps
+    /// the historical behavior: relative paths resolve against the
+    /// process working directory and absolute paths are read as given.
+    pub image_root: Option<String>,
+    /// Whether a document may reference an absolute local path.
+    /// Defaults to `true` for backward compatibility.
+    pub allow_absolute_image_paths: Option<bool>,
+    /// Whether a document may reference a remote (`http`/`https`) image.
+    /// Defaults to `true`. Independent of the `fetch` feature — with the
+    /// feature off, remote images already fail.
+    pub allow_remote_images: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]

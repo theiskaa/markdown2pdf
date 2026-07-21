@@ -309,3 +309,53 @@ fn math_block_round_trips_and_defaults() {
     assert_eq!(d.math.color, d.paragraph.text_color);
     assert_eq!(d.math.margin_before_pt, d.paragraph.margin_before_pt);
 }
+
+#[test]
+fn security_block_round_trips_and_defaults() {
+    // Explicit overrides land on `style.security`.
+    let cfg = r#"[security]
+        image_root = "/srv/uploads"
+        allow_absolute_image_paths = false
+        allow_remote_images = false"#;
+    let s = load_config_strict(ConfigSource::Embedded(cfg), None).unwrap();
+    assert_eq!(
+        s.security.image_root.as_deref(),
+        Some(std::path::Path::new("/srv/uploads"))
+    );
+    assert!(!s.security.allow_absolute_image_paths);
+    assert!(!s.security.allow_remote_images);
+
+    // With no `[security]` block at all, the defaults must preserve
+    // the historical, unconfined behavior: no root, absolute paths
+    // allowed, remote images allowed. This is the backward-
+    // compatibility contract the whole plan hinges on.
+    let d = load_config_strict(ConfigSource::Embedded(""), None).unwrap();
+    assert_eq!(d.security.image_root, None);
+    assert!(d.security.allow_absolute_image_paths);
+    assert!(d.security.allow_remote_images);
+}
+
+#[test]
+fn security_merge_overlay_wins_on_some() {
+    let base: DocumentConfig = toml::from_str(
+        r#"
+        [security]
+        image_root = "/base/root"
+        allow_remote_images = false
+    "#,
+    )
+    .unwrap();
+    let overlay: DocumentConfig = toml::from_str(
+        r#"
+        [security]
+        allow_remote_images = true
+    "#,
+    )
+    .unwrap();
+    let merged = merge_documents(base, overlay);
+    let security = merged.security.unwrap();
+    // Overlay didn't set image_root, so base's value survives.
+    assert_eq!(security.image_root.as_deref(), Some("/base/root"));
+    // Overlay's allow_remote_images wins.
+    assert_eq!(security.allow_remote_images, Some(true));
+}

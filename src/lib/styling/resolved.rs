@@ -41,6 +41,9 @@ pub struct ResolvedStyle {
     /// order when the primary body / code font lacks a glyph for a
     /// codepoint.
     pub fallback_fonts: Vec<String>,
+    /// Operator-only policy on what the document may pull in while
+    /// rendering. Never influenced by document content.
+    pub security: ResolvedSecurity,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -189,6 +192,20 @@ pub struct ResolvedToc {
     pub title: String,
     pub max_depth: u8,
     pub style: ResolvedBlock,
+}
+
+/// Resolved image-access policy. `image_root` confines local image
+/// reads to a directory (`None` = historical unconfined behavior);
+/// `allow_absolute_image_paths` and `allow_remote_images` gate whether
+/// a document may reference an absolute local path or a remote URL at
+/// all. All defaults preserve pre-existing behavior — see
+/// `SecurityConfig` for the rationale.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ResolvedSecurity {
+    pub image_root: Option<std::path::PathBuf>,
+    pub allow_absolute_image_paths: bool,
+    pub allow_remote_images: bool,
 }
 
 /// Resolved admonition styling. The renderer picks the matching

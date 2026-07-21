@@ -16,8 +16,8 @@ use super::error::ResolveError;
 use super::resolved::{
     ResolvedAdmonition, ResolvedAdmonitionKind, ResolvedBlock, ResolvedBorder, ResolvedBorderSide,
     ResolvedImage, ResolvedInline, ResolvedList, ResolvedMath, ResolvedMetadata, ResolvedPage,
-    ResolvedPageFurniture, ResolvedRule, ResolvedStyle, ResolvedTable, ResolvedTitlePage,
-    ResolvedToc,
+    ResolvedPageFurniture, ResolvedRule, ResolvedSecurity, ResolvedStyle, ResolvedTable,
+    ResolvedTitlePage, ResolvedToc,
 };
 use super::schema::*;
 use super::themes::load_theme_preset;
@@ -81,6 +81,7 @@ pub fn merge_documents(base: DocumentConfig, overlay: DocumentConfig) -> Documen
         footer: merge_optional(base.footer, overlay.footer, merge_furniture),
         title_page: merge_optional(base.title_page, overlay.title_page, merge_title_page),
         toc: merge_optional(base.toc, overlay.toc, merge_toc),
+        security: merge_optional(base.security, overlay.security, merge_security),
     }
 }
 
@@ -278,6 +279,16 @@ fn merge_toc(base: TocConfig, overlay: TocConfig) -> TocConfig {
     }
 }
 
+fn merge_security(base: SecurityConfig, overlay: SecurityConfig) -> SecurityConfig {
+    SecurityConfig {
+        image_root: overlay.image_root.or(base.image_root),
+        allow_absolute_image_paths: overlay
+            .allow_absolute_image_paths
+            .or(base.allow_absolute_image_paths),
+        allow_remote_images: overlay.allow_remote_images.or(base.allow_remote_images),
+    }
+}
+
 fn merge_border(base: BorderConfig, overlay: BorderConfig) -> BorderConfig {
     BorderConfig {
         all: overlay.all.or(base.all),
@@ -395,6 +406,17 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
     let toc = lower_toc(theme, &defaults, cfg.toc)?;
     let fallback_fonts = defaults.fallback_fonts.clone().unwrap_or_default();
 
+    // Operator-only policy — never touched by document/theme content.
+    // Defaults below preserve the historical, unconfined behavior; see
+    // `SecurityConfig`'s doc comment for why they are deliberately
+    // permissive.
+    let security_cfg = cfg.security.unwrap_or_default();
+    let security = ResolvedSecurity {
+        image_root: security_cfg.image_root.map(std::path::PathBuf::from),
+        allow_absolute_image_paths: security_cfg.allow_absolute_image_paths.unwrap_or(true),
+        allow_remote_images: security_cfg.allow_remote_images.unwrap_or(true),
+    };
+
     Ok(ResolvedStyle {
         page,
         headings: [h1, h2, h3, h4, h5, h6],
@@ -418,6 +440,7 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
         title_page,
         toc,
         fallback_fonts,
+        security,
     })
 }
 
