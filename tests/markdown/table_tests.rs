@@ -7,7 +7,14 @@ use markdown2pdf::markdown::*;
 use super::common::parse;
 
 
-fn first_table(tokens: &[Token]) -> (&Vec<TableCell<Token>>, &Vec<markdown2pdf::markdown::TableAlignment>, &Vec<Vec<TableCell<Token>>>) {
+/// `(headers, aligns, rows)` borrowed from a parsed `Token::Table`.
+type TableParts<'a> = (
+    &'a Vec<TableCell<Token>>,
+    &'a Vec<markdown2pdf::markdown::TableAlignment>,
+    &'a Vec<Vec<TableCell<Token>>>,
+);
+
+fn first_table(tokens: &[Token]) -> TableParts<'_> {
     let Some(Token::Table { headers, aligns, rows }) =
         tokens.iter().find(|t| matches!(t, Token::Table { .. }))
     else {

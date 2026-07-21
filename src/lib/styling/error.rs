@@ -157,7 +157,7 @@ pub(super) fn closest_match<'a, I: IntoIterator<Item = &'a str>>(
     let mut best: Option<(&str, usize)> = None;
     for cand in candidates {
         let d = levenshtein(&target_lower, &cand.to_ascii_lowercase());
-        if d <= cutoff && best.map_or(true, |(_, bd)| d < bd) {
+        if d <= cutoff && best.is_none_or(|(_, bd)| d < bd) {
             best = Some((cand, d));
         }
     }

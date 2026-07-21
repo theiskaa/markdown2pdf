@@ -36,13 +36,11 @@ fn extract_named_numbers(bytes: &[u8], key: &[u8]) -> Vec<i32> {
         while end < bytes.len() && (bytes[end] == b'-' || bytes[end].is_ascii_digit()) {
             end += 1;
         }
-        if end > start {
-            if let Ok(s) = std::str::from_utf8(&bytes[start..end]) {
-                if let Ok(n) = s.parse::<i32>() {
+        if end > start
+            && let Ok(s) = std::str::from_utf8(&bytes[start..end])
+                && let Ok(n) = s.parse::<i32>() {
                     out.push(n);
                 }
-            }
-        }
         pos = end.max(start + 1);
     }
     out

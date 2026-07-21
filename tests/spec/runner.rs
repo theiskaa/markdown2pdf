@@ -131,11 +131,10 @@ fn parse_string(chars: &[char], i: &mut usize) -> String {
                     *i += 1;
                     let hex: String = chars[*i..*i + 4].iter().collect();
                     *i += 3; // we'll +1 below
-                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                        if let Some(c) = char::from_u32(code) {
+                    if let Ok(code) = u32::from_str_radix(&hex, 16)
+                        && let Some(c) = char::from_u32(code) {
                             out.push(c);
                         }
-                    }
                 }
                 c => out.push(c),
             }

@@ -297,11 +297,7 @@ fn audit(label: &str, bytes: &[u8]) {
         if t.raw_bytes + t.dict_bytes < 50 {
             continue;
         }
-        let avg = if t.count > 0 {
-            (t.raw_bytes + t.dict_bytes) / t.count
-        } else {
-            0
-        };
+        let avg = (t.raw_bytes + t.dict_bytes).checked_div(t.count).unwrap_or(0);
         println!(
             "    {:<28} n={:<4} payload={:<7} dict~{:<7} avg/obj={}",
             cat, t.count, t.raw_bytes, t.dict_bytes, avg,
@@ -463,8 +459,8 @@ fn audit_probe_renders() {
             println!("  {label}: form count = {forms} (single equation = 5 forms)");
         }
     }
-    if let Some((label, b)) = renders.iter().find(|(l, _)| l == "math_same_eq_x10") {
-        if let Ok(doc) = Document::load_mem(b) {
+    if let Some((label, b)) = renders.iter().find(|(l, _)| l == "math_same_eq_x10")
+        && let Ok(doc) = Document::load_mem(b) {
             let forms = doc.objects.values().filter(|o| {
                 if let Object::Stream(s) = o {
                     s.dict.get(b"Subtype").ok().and_then(|x| x.as_name().ok())
@@ -476,12 +472,11 @@ fn audit_probe_renders() {
             println!("  {label}: form count = {forms} (single equation = 5 forms; \
                       with cross-eq dedup expected ~5, without ~50)");
         }
-    }
     // Operator-pattern stats on the worst content-stream cases.
     for label in ["paragraphs+table", "table_storm", "hr_storm",
                   "admonitions_x10", "page_storm_50"] {
-        if let Some((_, b)) = renders.iter().find(|(l, _)| l == label) {
-            if let Ok(doc) = Document::load_mem(b) {
+        if let Some((_, b)) = renders.iter().find(|(l, _)| l == label)
+            && let Ok(doc) = Document::load_mem(b) {
                 for (_, obj) in doc.objects.iter() {
                     let Object::Stream(s) = obj else { continue };
                     if s.dict.get(b"Type").is_ok() || s.dict.get(b"Subtype").is_ok() {
@@ -493,6 +488,5 @@ fn audit_probe_renders() {
                     break;
                 }
             }
-        }
     }
 }

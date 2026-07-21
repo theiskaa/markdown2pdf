@@ -429,8 +429,8 @@ fn code_inline_font_family_routes_through_a_distinct_font_handle() {
     let mut handles = std::collections::HashSet::new();
     for line in s.lines() {
         let line = line.trim();
-        if let Some(stripped) = line.strip_prefix('/') {
-            if line.ends_with(" Tf") {
+        if let Some(stripped) = line.strip_prefix('/')
+            && line.ends_with(" Tf") {
                 let name: String = stripped
                     .chars()
                     .take_while(|c| !c.is_whitespace())
@@ -441,7 +441,6 @@ fn code_inline_font_family_routes_through_a_distinct_font_handle() {
                     handles.insert(name);
                 }
             }
-        }
     }
     assert!(
         handles.len() >= 2,
@@ -551,7 +550,7 @@ fn code_inline_horizontal_padding_emits_two_tj_offsets_per_span() {
     let baseline_tj = count_substr(&scan(&baseline), b" TJ");
     let padded_tj = count_substr(&scan(&padded), b" TJ");
     assert_eq!(
-        padded_tj.checked_sub(baseline_tj).unwrap_or(0),
+        padded_tj.saturating_sub(baseline_tj),
         2,
         "expected exactly 2 boundary TJ offsets for one inline-code \
          span; baseline TJ {}, padded TJ {}",

@@ -48,16 +48,14 @@ pub fn lower(tokens: &[Token]) -> Vec<Block> {
                 });
             }
         }
-        let mut next = entries.len() + 1;
         let mut unused: Vec<(String, Vec<InlineRun>)> = footnote_definitions.into_iter().collect();
         unused.sort_by(|a, b| a.0.cmp(&b.0));
-        for (label, runs) in unused {
+        for (next, (label, runs)) in (entries.len() + 1..).zip(unused) {
             entries.push(FootnoteEntry {
                 label,
                 number: next,
                 runs,
             });
-            next += 1;
         }
         out.push(Block::FootnoteDefinitions { entries });
     }
@@ -112,7 +110,7 @@ fn lower_blocks(
             }
             Token::Heading(content, level) => {
                 flush_paragraph(&mut out, &mut buffered_inline);
-                let runs = flatten_inline(content, RunFlags::default(), None, &footnote_numbers);
+                let runs = flatten_inline(content, RunFlags::default(), None, footnote_numbers);
                 out.push(Block::Heading {
                     level: (*level).clamp(1, 6) as u8,
                     runs,
@@ -205,7 +203,7 @@ fn lower_blocks(
                         terms: e
                             .terms
                             .iter()
-                            .map(|t| flatten_inline(t, RunFlags::default(), None, &footnote_numbers))
+                            .map(|t| flatten_inline(t, RunFlags::default(), None, footnote_numbers))
                             .collect(),
                         definitions: e
                             .definitions
@@ -235,7 +233,7 @@ fn lower_blocks(
                 // the document below. Pre-flatten the content's
                 // inline runs so the post-pass doesn't have to lower
                 // recursively.
-                let runs = flatten_inline(content, RunFlags::default(), None, &footnote_numbers);
+                let runs = flatten_inline(content, RunFlags::default(), None, footnote_numbers);
                 footnote_definitions
                     .entry(label.clone())
                     .or_insert(runs);
@@ -288,7 +286,7 @@ fn lower_blocks(
                 flush_paragraph(&mut out, &mut buffered_inline);
                 let to_runs = |cell: &TableCell<Token>| {
                     cell.map_content(|c| {
-                        flatten_inline(c, RunFlags::default(), None, &footnote_numbers)
+                        flatten_inline(c, RunFlags::default(), None, footnote_numbers)
                     })
                 };
                 let head_runs: Vec<TableCell<InlineRun>> =
@@ -867,12 +865,11 @@ fn flatten_inline(
     // token; we consume them here and toggle the relevant flag.
     let mut depth = InlineHtmlDepth::default();
     for tok in tokens {
-        if let Token::HtmlInline(tag) = tok {
-            if let Some(parsed) = classify_inline_html_tag(tag) {
+        if let Token::HtmlInline(tag) = tok
+            && let Some(parsed) = classify_inline_html_tag(tag) {
                 depth.handle(parsed);
                 continue;
             }
-        }
         let effective = depth.apply(flags);
         flatten_one(tok, effective, link, &mut out, footnotes);
     }
@@ -1222,12 +1219,11 @@ fn push_text(out: &mut Vec<InlineRun>, text: &str, flags: RunFlags, link: Option
         return;
     }
     let link_owned = link.map(|s| s.to_string());
-    if let Some(last) = out.last_mut() {
-        if last.math.is_none() && last.flags == flags && last.link == link_owned {
+    if let Some(last) = out.last_mut()
+        && last.math.is_none() && last.flags == flags && last.link == link_owned {
             last.text.push_str(text);
             return;
         }
-    }
     out.push(InlineRun { math: None,
         text: text.to_string(),
         flags,

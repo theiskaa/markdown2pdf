@@ -292,15 +292,14 @@ pub fn parse_into_file_with_style(
     font_config: Option<&fonts::FontConfig>,
 ) -> Result<(), MdpError> {
     let path = path.as_ref();
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty() && !parent.exists() {
             return Err(MdpError::IoError {
                 message: "Output directory does not exist".to_string(),
                 path: parent.display().to_string(),
                 suggestion: format!("Create the directory first: mkdir -p {}", parent.display()),
             });
         }
-    }
 
     let (body, fm) = split_frontmatter(markdown);
     let tokens = parse_markdown(body)?;
@@ -370,15 +369,14 @@ pub fn parse_into_file(
     font_config: Option<&fonts::FontConfig>,
 ) -> Result<(), MdpError> {
     let path = path.as_ref();
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty() && !parent.exists() {
             return Err(MdpError::IoError {
                 message: "Output directory does not exist".to_string(),
                 path: parent.display().to_string(),
                 suggestion: format!("Create the directory first: mkdir -p {}", parent.display()),
             });
         }
-    }
 
     let (body, fm) = split_frontmatter(markdown);
     let tokens = parse_markdown(body)?;

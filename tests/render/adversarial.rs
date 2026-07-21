@@ -335,7 +335,7 @@ mod tables {
 
     fn wide_table_md(cols: usize, rows: usize) -> String {
         let join = |f: &dyn Fn(usize) -> String| {
-            (0..cols).map(|i| f(i)).collect::<Vec<_>>().join(" | ")
+            (0..cols).map(f).collect::<Vec<_>>().join(" | ")
         };
         let mut md = format!(
             "| {} |\n| {} |\n",

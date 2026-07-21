@@ -253,6 +253,10 @@ struct OpenBlockBg {
     marker: usize,
 }
 
+/// Snapshot of an open block-background fragment: `(marker, x_left,
+/// x_right, top_y, color)`. See `paint_open_bg_fragments`.
+type OpenBgFrag = (usize, f32, f32, f32, (u8, u8, u8));
+
 impl<'a> Engine<'a> {
     fn new(style: &'a ResolvedStyle, font_set: &'a FontSet, doc: &'a mut PdfDocument) -> Self {
         let (page_width_mm, page_height_mm) = page_dimensions_mm(&style.page);
@@ -449,8 +453,8 @@ impl<'a> Engine<'a> {
         let mut pages = Vec::with_capacity(total);
         let combined = title_pages
             .into_iter()
-            .chain(toc_pages.into_iter())
-            .chain(content_pages.into_iter());
+            .chain(toc_pages)
+            .chain(content_pages);
         for (idx, content_ops) in combined.enumerate() {
             let ctx = base.with_page(idx + 1);
             let is_title_page = idx < title_offset;
@@ -1322,7 +1326,7 @@ impl<'a> Engine<'a> {
         let page_h = self.page_height_pt();
         let frag_bottom = page_h - self.bottom_margin_pt();
         // Snapshot to avoid borrow conflict with `self.page_ops`.
-        let frags: Vec<(usize, f32, f32, f32, (u8, u8, u8))> = self
+        let frags: Vec<OpenBgFrag> = self
             .open_bg
             .iter()
             .map(|ob| (ob.marker, ob.x_left, ob.x_right, ob.top_y, ob.color))
@@ -1450,7 +1454,7 @@ impl<'a> Engine<'a> {
             outer_x_right,
             outer_y_top,
             background_color: style.background_color,
-            border: style.border.clone(),
+            border: style.border,
             padding_bottom: style.padding.bottom,
             margin_after_pt: style.margin_after_pt,
             saved_letter_spacing,
@@ -1475,8 +1479,8 @@ impl<'a> Engine<'a> {
             // start_new_page on every page break, so they describe
             // the *final* fragment regardless of how many pages the
             // block crossed.
-            if let Some(ob) = self.open_bg.pop() {
-                if outer_y_bottom > ob.top_y {
+            if let Some(ob) = self.open_bg.pop()
+                && outer_y_bottom > ob.top_y {
                     let mut bg_ops: Vec<Op> = Vec::new();
                     draw_filled_rect(
                         &mut bg_ops,
@@ -1490,7 +1494,6 @@ impl<'a> Engine<'a> {
                     let insert_at = ob.marker.min(self.page_ops.len());
                     self.page_ops.splice(insert_at..insert_at, bg_ops);
                 }
-            }
         }
 
         if has_any_border(&ctx.border) && !spanned_page {
@@ -2471,8 +2474,8 @@ impl<'a> Engine<'a> {
             let group_top = self.y_from_top_pt;
             // Zebra striping: tint alternate data rows (every other
             // row, first data row left untinted) when configured.
-            if let Some(bg) = self.style.table.alternating_row_background {
-                if row_idx % 2 == 1 {
+            if let Some(bg) = self.style.table.alternating_row_background
+                && row_idx % 2 == 1 {
                     self.draw_table_row_background(
                         group_top,
                         group_height,
@@ -2481,7 +2484,6 @@ impl<'a> Engine<'a> {
                         (bg.r, bg.g, bg.b),
                     );
                 }
-            }
             let group_heights = &row_heights[row_idx..group_end];
             for local_idx in 0..(group_end - row_idx) {
                 self.y_from_top_pt = group_top + group_heights[..local_idx].iter().sum::<f32>();

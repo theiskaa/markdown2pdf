@@ -442,11 +442,10 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         if let Some(path) = &config_path {
             eprintln!("   Config: {}", path.display());
         }
-        if let Some(cfg) = &font_config {
-            if let Some(font) = &cfg.default_font {
+        if let Some(cfg) = &font_config
+            && let Some(font) = &cfg.default_font {
                 eprintln!("   Font: {}", font);
             }
-        }
     }
 
     markdown2pdf::parse_into_file_with_style(
@@ -460,8 +459,8 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
     if verbosity != Verbosity::Quiet {
         println!("Successfully saved PDF to {}", output_path_str);
 
-        if verbosity == Verbosity::Verbose {
-            if let Ok(metadata) = fs::metadata(output_path_str) {
+        if verbosity == Verbosity::Verbose
+            && let Ok(metadata) = fs::metadata(output_path_str) {
                 let size_kb = metadata.len() as f64 / 1024.0;
                 if size_kb < 1024.0 {
                     println!("   Size: {:.1} KB", size_kb);
@@ -469,7 +468,6 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
                     println!("   Size: {:.2} MB", size_kb / 1024.0);
                 }
             }
-        }
     }
 
     Ok(())

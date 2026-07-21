@@ -177,8 +177,7 @@ impl Parser {
         if self.depth > 200 {
             return out;
         }
-        loop {
-            let Some(tok) = self.lx.peek() else { break };
+        while let Some(tok) = self.lx.peek() {
             match (&tok, stop) {
                 (Tok::Close, StopAt::Brace) => {
                     self.lx.next();

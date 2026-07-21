@@ -228,7 +228,7 @@ pub(crate) fn extract_gfm_alert_marker(
         .trim_start()
         .to_string();
 
-    let mut stripped: Vec<String> = body_lines.iter().cloned().collect();
+    let mut stripped: Vec<String> = body_lines.to_vec();
     if trailing.is_empty() {
         stripped.remove(0);
     } else {
@@ -639,10 +639,7 @@ fn try_decode_entity(chars: &[char], start: usize) -> Option<(String, usize)> {
         let ch = if code == 0 || (0xD800..=0xDFFF).contains(&code) || code > 0x10FFFF {
             '\u{FFFD}'
         } else {
-            match char::from_u32(code) {
-                Some(c) => c,
-                None => '\u{FFFD}',
-            }
+            char::from_u32(code).unwrap_or('\u{FFFD}')
         };
         return Some((ch.to_string(), consumed));
     }
@@ -759,13 +756,12 @@ fn decode_escapes_and_entities(s: &str) -> String {
             i += 2;
             continue;
         }
-        if c == '&' {
-            if let Some((decoded, consumed)) = try_decode_entity(&chars, i) {
+        if c == '&'
+            && let Some((decoded, consumed)) = try_decode_entity(&chars, i) {
                 out.push_str(&decoded);
                 i += consumed;
                 continue;
             }
-        }
         out.push(c);
         i += 1;
     }
@@ -1458,8 +1454,8 @@ fn resolve_emphasis_chunk(tokens: &mut Vec<Token>) {
             // Rule 9/10
             if (o.can_open && o.can_close) || c_can_open {
                 let sum = o.count + c_count;
-                if sum % 3 == 0
-                    && !(o.count % 3 == 0 && c_count % 3 == 0)
+                if sum.is_multiple_of(3)
+                    && !(o.count.is_multiple_of(3) && c_count.is_multiple_of(3))
                 {
                     continue;
                 }
@@ -1474,8 +1470,8 @@ fn resolve_emphasis_chunk(tokens: &mut Vec<Token>) {
             // Deactivate delims between opener and closer (they're inside
             // the wrapped Emphasis content; an inner pair may still match
             // via the recursive call below in wrap_emphasis_pair).
-            for k in (oi + 1)..ci {
-                active[k] = false;
+            for slot in active.iter_mut().take(ci).skip(oi + 1) {
+                *slot = false;
             }
             wrap_emphasis_pair(
                 tokens,
@@ -1599,8 +1595,8 @@ fn char_before_token(tokens: &[Token], idx: usize) -> Option<char> {
 }
 
 fn char_after_token(tokens: &[Token], idx: usize) -> Option<char> {
-    for i in (idx + 1)..tokens.len() {
-        if let Some(c) = first_meaningful_char(&tokens[i]) {
+    for tok in tokens.iter().skip(idx + 1) {
+        if let Some(c) = first_meaningful_char(tok) {
             return Some(c);
         }
     }
@@ -1768,12 +1764,11 @@ pub(crate) fn slugify(text: &str) -> String {
         if ch.is_ascii_alphanumeric() {
             out.push(ch.to_ascii_lowercase());
             last_was_dash = false;
-        } else if ch.is_whitespace() || ch == '-' || ch == '_' {
-            if !last_was_dash {
+        } else if (ch.is_whitespace() || ch == '-' || ch == '_')
+            && !last_was_dash {
                 out.push('-');
                 last_was_dash = true;
             }
-        }
     }
     while out.ends_with('-') {
         out.pop();
@@ -2229,12 +2224,11 @@ impl Lexer {
                                 continue;
                             }
                         }
-                        '0'..='9' => {
-                            if self.check_ordered_list_marker().is_some() {
+                        '0'..='9'
+                            if self.check_ordered_list_marker().is_some() => {
                                 content.push(self.parse_list_item(true, ctx)?);
                                 continue;
                             }
-                        }
                         _ => {}
                     }
                 }
@@ -2324,21 +2318,18 @@ impl Lexer {
             && matches!(ctx, ParseContext::Root | ParseContext::BlockQuote)
             && !(matches!(current_char, '*' | '_' | '-')
                 && self.is_thematic_break_line())
-        {
-            if let Some(level) = self.peek_setext_level() {
+            && let Some(level) = self.peek_setext_level() {
                 return Ok(Some(self.consume_setext_heading(level)?));
             }
-        }
 
         // PHP Markdown Extra-style definition lists: a non-marker term
         // line followed immediately by a `: definition` line. Detection
         // must run before the regular `parse_text` fallthrough so the
         // term doesn't get glued into an adjacent paragraph.
-        if is_block_start && matches!(ctx, ParseContext::Root | ParseContext::BlockQuote) {
-            if let Some(tok) = self.try_parse_definition_list()? {
+        if is_block_start && matches!(ctx, ParseContext::Root | ParseContext::BlockQuote)
+            && let Some(tok) = self.try_parse_definition_list()? {
                 return Ok(Some(tok));
             }
-        }
 
         let token = match current_char {
             '#' if is_block_start && allow_block_tokens(ctx) && self.is_atx_heading_start() => {
@@ -3521,11 +3512,10 @@ impl Lexer {
         if self.position + 1 < self.input.len()
             && self.input[self.position + 1] == '^'
         {
-            if is_block_start {
-                if let Some(tok) = self.try_parse_footnote_definition()? {
+            if is_block_start
+                && let Some(tok) = self.try_parse_footnote_definition()? {
                     return Ok(tok);
                 }
-            }
             if let Some(tok) = self.try_parse_footnote_reference()? {
                 return Ok(tok);
             }
@@ -3838,10 +3828,7 @@ impl Lexer {
                 break;
             }
             let mut definitions: Vec<Vec<Token>> = Vec::new();
-            loop {
-                let Some(body) = self.consume_definition_body() else {
-                    break;
-                };
+            while let Some(body) = self.consume_definition_body() {
                 let trimmed = body.trim_end_matches('\n');
                 let def_tokens = if trimmed.is_empty() {
                     Vec::new()
@@ -4206,8 +4193,8 @@ impl Lexer {
                     continue;
                 }
             }
-            if c == '&' {
-                if let Some((decoded, consumed)) =
+            if c == '&'
+                && let Some((decoded, consumed)) =
                     try_decode_entity(&self.input, self.position)
                 {
                     url.push_str(&decoded);
@@ -4216,7 +4203,6 @@ impl Lexer {
                     }
                     continue;
                 }
-            }
             if c == '\n' {
                 break;
             }
@@ -4279,8 +4265,8 @@ impl Lexer {
                         continue;
                     }
                 }
-                if c == '&' {
-                    if let Some((decoded, consumed)) =
+                if c == '&'
+                    && let Some((decoded, consumed)) =
                         try_decode_entity(&self.input, self.position)
                     {
                         s.push_str(&decoded);
@@ -4289,7 +4275,6 @@ impl Lexer {
                         }
                         continue;
                     }
-                }
                 if c == '>' {
                     self.advance();
                     ok = true;
@@ -4386,8 +4371,8 @@ impl Lexer {
                     continue;
                 }
             }
-            if ch == '&' {
-                if let Some((decoded, consumed)) =
+            if ch == '&'
+                && let Some((decoded, consumed)) =
                     try_decode_entity(&self.input, self.position)
                 {
                     out.push_str(&decoded);
@@ -4396,7 +4381,6 @@ impl Lexer {
                     }
                     continue;
                 }
-            }
             out.push(ch);
             self.advance();
         }
@@ -4455,10 +4439,7 @@ impl Lexer {
             }
             p
         };
-        let alt_chars: Vec<char> = self.input[alt_text_start..alt_text_end]
-            .iter()
-            .copied()
-            .collect();
+        let alt_chars: Vec<char> = self.input[alt_text_start..alt_text_end].to_vec();
         let alt_input: String = alt_chars.iter().collect();
         let mut sub_alt = self.sub_lexer(alt_input);
         sub_alt.definitions = self.definitions.clone();
@@ -4925,8 +4906,8 @@ impl Lexer {
             }
 
             // HTML entity / numeric character references.
-            if ch == '&' {
-                if let Some((decoded, consumed)) =
+            if ch == '&'
+                && let Some((decoded, consumed)) =
                     try_decode_entity(&self.input, self.position)
                 {
                     content.push_str(&decoded);
@@ -4936,7 +4917,6 @@ impl Lexer {
                     last_was_escape = false;
                     continue;
                 }
-            }
 
             if ch == '\n' || self.is_start_of_special_token(ctx) {
                 break;
@@ -5218,8 +5198,8 @@ impl Lexer {
         // Precedence rule: this kind CANNOT interrupt an open paragraph
         // (per CommonMark spec). When the previous line is non-blank,
         // we fall through so the line stays part of the paragraph.
-        if self.input[self.position] == '<' && self.previous_line_is_blank_or_bof() {
-            if let Some(tag_name) = self.extract_html_tag_name_at(self.position) {
+        if self.input[self.position] == '<' && self.previous_line_is_blank_or_bof()
+            && let Some(tag_name) = self.extract_html_tag_name_at(self.position) {
                 let name_lower = tag_name.to_ascii_lowercase();
                 let is_block_element = BLOCK_ELEMENT_TAG_NAMES
                     .iter()
@@ -5227,8 +5207,8 @@ impl Lexer {
                 let is_raw_content = RAW_HTML_BLOCK_TAG_NAMES
                     .iter()
                     .any(|t| t.eq_ignore_ascii_case(&name_lower));
-                if !is_block_element && !is_raw_content {
-                    if let Some(tag_len) = self.try_match_html_tag_len() {
+                if !is_block_element && !is_raw_content
+                    && let Some(tag_len) = self.try_match_html_tag_len() {
                         let after_tag = self.position + tag_len;
                         // The complete tag must fit on a single line.
                         // CommonMark's Type 7 start condition is "line
@@ -5237,9 +5217,7 @@ impl Lexer {
                         // attributes wrap onto a continuation line
                         // (e.g. `<a href="foo\nbar">`) doesn't qualify
                         // and stays as inline HTML inside a paragraph.
-                        let tag_spans_newline = self.input[self.position..after_tag]
-                            .iter()
-                            .any(|c| *c == '\n');
+                        let tag_spans_newline = self.input[self.position..after_tag].contains(&'\n');
                         if !tag_spans_newline
                             && self.is_only_whitespace_to_eol(after_tag)
                         {
@@ -5260,9 +5238,7 @@ impl Lexer {
                             return Some(Token::HtmlBlock(content));
                         }
                     }
-                }
             }
-        }
 
         None
     }
@@ -5381,9 +5357,7 @@ impl Lexer {
         }
         let name: String = self.input[name_start..p].iter().collect();
         let name_lower = name.to_ascii_lowercase();
-        if !BLOCK_ELEMENT_TAG_NAMES
-            .iter()
-            .any(|t| *t == name_lower.as_str())
+        if !BLOCK_ELEMENT_TAG_NAMES.contains(&name_lower.as_str())
         {
             return false;
         }
@@ -5844,13 +5818,10 @@ impl Lexer {
                 }
                 if q < self.input.len()
                     && (self.input[q] == '.' || self.input[q] == ')')
-                {
-                    if let Some(&n) = self.input.get(q + 1) {
-                        if n == ' ' || n == '\t' || n == '\n' {
+                    && let Some(&n) = self.input.get(q + 1)
+                        && (n == ' ' || n == '\t' || n == '\n') {
                             return None;
                         }
-                    }
-                }
             }
             if c == '#' {
                 // ATX heading line — not a paragraph for setext purposes.
@@ -5952,13 +5923,11 @@ impl Lexer {
             }
             let c = self.input[p];
             // List marker
-            if matches!(c, '-' | '+' | '*') {
-                if let Some(&n) = self.input.get(p + 1) {
-                    if n == ' ' || n == '\t' {
+            if matches!(c, '-' | '+' | '*')
+                && let Some(&n) = self.input.get(p + 1)
+                    && (n == ' ' || n == '\t') {
                         return None;
                     }
-                }
-            }
             if c.is_ascii_digit() {
                 let mut q = p;
                 while q < self.input.len() && self.input[q].is_ascii_digit() {
@@ -5966,13 +5935,10 @@ impl Lexer {
                 }
                 if q < self.input.len()
                     && (self.input[q] == '.' || self.input[q] == ')')
-                {
-                    if let Some(&n) = self.input.get(q + 1) {
-                        if n == ' ' || n == '\t' {
+                    && let Some(&n) = self.input.get(q + 1)
+                        && (n == ' ' || n == '\t') {
                             return None;
                         }
-                    }
-                }
             }
             if c == '>' || c == '#' || c == '`' || c == '~' {
                 return None;
@@ -6009,7 +5975,7 @@ impl Lexer {
             let after_leading = line.len() - trimmed.len();
             let is_underline = after_leading <= 3
                 && !trimmed.is_empty()
-                && trimmed.chars().next() == Some(underline_char)
+                && trimmed.starts_with(underline_char)
                 && trimmed
                     .chars()
                     .take_while(|c| *c == underline_char)
@@ -6190,7 +6156,7 @@ impl Lexer {
         let following_is_eol = probe >= self.input.len() || self.input[probe] == '\n';
         let separator = if following_is_eol {
             1 // empty item — content_offset still uses 1
-        } else if spaces_after >= 1 && spaces_after <= 4 {
+        } else if (1..=4).contains(&spaces_after) {
             spaces_after
         } else {
             1
@@ -6393,10 +6359,7 @@ impl Lexer {
                 let sub_tokens = sub.parse_with_context(ParseContext::Root)?;
                 content.extend(sub_tokens);
                 first_line_handled = true;
-            } else if (ch == '-' || ch == '+') && self.is_list_marker(ch) {
-                content.push(self.parse_list_item(false, parent_ctx)?);
-                first_line_handled = true;
-            } else if ch == '*' && self.is_list_marker('*') {
+            } else if (ch == '-' || ch == '+' || ch == '*') && self.is_list_marker(ch) {
                 content.push(self.parse_list_item(false, parent_ctx)?);
                 first_line_handled = true;
             } else if ch.is_ascii_digit() && self.check_ordered_list_marker().is_some() {
@@ -6697,7 +6660,6 @@ impl Lexer {
         // by the emphasis algorithm yet. Sub-Lex paths already resolve
         // their content, but the raw inline-loop output does not — run
         // `resolve_emphasis` here so no internal token escapes the lexer.
-        let mut content = content;
         resolve_emphasis(&mut content);
         Ok(Token::ListItem {
             content,
@@ -6859,13 +6821,12 @@ impl Lexer {
         let mut out: Vec<TableCellPlan> = Vec::with_capacity(raw.len());
         let mut origin: Option<usize> = None;
         for cell in raw {
-            if cell == ">" {
-                if let Some(o) = origin {
+            if cell == ">"
+                && let Some(o) = origin {
                     out[o].colspan += 1;
                     out.push(TableCellPlan::covered());
                     continue;
                 }
-            }
             out.push(TableCellPlan::origin(cell));
             origin = Some(out.len() - 1);
         }

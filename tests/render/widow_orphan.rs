@@ -262,7 +262,7 @@ fn long_list_renders_without_dropping_items() {
 chunk of width on the page.\n"
         ));
     }
-    md.push_str("\n");
+    md.push('\n');
     let bytes = render(&md, "");
     let streams = page_streams(&bytes);
     assert!(

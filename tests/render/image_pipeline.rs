@@ -120,7 +120,7 @@ mod degenerate_and_hostile {
         let path = dir.join("m2p_w7e_corrupt.png");
         // Valid PNG signature, garbage body — decoder must error.
         let mut bytes = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        bytes.extend(std::iter::repeat(0xAB).take(200));
+        bytes.extend(std::iter::repeat_n(0xAB, 200));
         std::fs::write(&path, &bytes).unwrap();
         let pdf = render_md(&format!(
             "![broken image]({})\n",

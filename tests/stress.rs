@@ -219,7 +219,7 @@ fn many_link_definitions() {
     for i in 0..n {
         input.push_str(&format!("[ref{}]: /u{}\n", i, i));
     }
-    input.push_str("\n");
+    input.push('\n');
     for i in 0..n {
         input.push_str(&format!("[ref{}] ", i));
     }

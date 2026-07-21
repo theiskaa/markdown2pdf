@@ -124,11 +124,7 @@ impl VariantMetrics {
                 (s, c)
             }
         });
-        let fallback_width = if count > 0 {
-            (sum / count) as u16
-        } else {
-            500
-        };
+        let fallback_width = sum.checked_div(count).map_or(500, |v| v as u16);
 
         VariantMetrics {
             units_per_em,
@@ -519,14 +515,13 @@ impl FontSet {
     /// *primary* font for that flag combination. Fallback selection
     /// happens per-codepoint inside [`FontSet::split_for_emit`].
     pub fn resolve(&self, flags: RunFlags) -> FontResolution<'_> {
-        if flags.inline_code {
-            if let Some(ext) = self.external_code_inline.pick(flags) {
+        if flags.inline_code
+            && let Some(ext) = self.external_code_inline.pick(flags) {
                 return FontResolution::External {
                     handle: PdfFontHandle::External(ext.font_id.clone()),
                     font: ext,
                 };
             }
-        }
         if flags.monospace {
             if let Some(ext) = self.external_code.pick(flags) {
                 return FontResolution::External {
@@ -855,9 +850,9 @@ fn load_external_family(
             if !wanted {
                 continue;
             }
-            if let Some(variant_path) = find_variant_path(&path, names) {
-                if let Some(bytes) = read_font_file(&variant_path) {
-                    if let Some(parsed) =
+            if let Some(variant_path) = find_variant_path(&path, names)
+                && let Some(bytes) = read_font_file(&variant_path)
+                    && let Some(parsed) =
                         parse_and_register(bytes, kind.label(), used_codepoints, doc, false)
                     {
                         match kind {
@@ -866,8 +861,6 @@ fn load_external_family(
                             VariantKind::BoldItalic => family.bold_italic = Some(parsed),
                         }
                     }
-                }
-            }
         }
     }
 
@@ -996,12 +989,11 @@ fn parse_and_register(
     let mut orig_gid_advance: BTreeMap<u16, u16> = BTreeMap::new();
     for &ch in used_codepoints {
         let cp = ch as u32;
-        if let Some(gid) = face.glyph_index(ch) {
-            if let Some(w) = face.glyph_hor_advance(gid) {
+        if let Some(gid) = face.glyph_index(ch)
+            && let Some(w) = face.glyph_hor_advance(gid) {
                 codepoint_to_orig_gid.insert(cp, gid.0);
                 orig_gid_advance.insert(gid.0, w);
             }
-        }
     }
 
     // Subset the font down to just those glyphs. `.notdef` (gid 0)
@@ -1048,11 +1040,9 @@ fn parse_and_register(
             count += 1;
         }
     }
-    let fallback_advance = if count > 0 {
-        (sum / count) as u16
-    } else {
-        units_per_em / 2
-    };
+    let fallback_advance = sum
+        .checked_div(count)
+        .map_or(units_per_em / 2, |v| v as u16);
 
     // PDF spec (PDF 32000-1:2008 §9.8) requires /Ascent and /Descent
     // in glyph space normalized to 1000 units per em. printpdf 0.9
@@ -1327,7 +1317,7 @@ mod tests {
             enable_subsetting: true,
         };
         let mut doc = PdfDocument::new("test");
-        let set = FontSet::load(Some(&cfg), &['日' as char], VariantUsage::default(), &mut doc);
+        let set = FontSet::load(Some(&cfg), &['日'], VariantUsage::default(), &mut doc);
         assert!(set.fallbacks.is_empty());
         // Uncovered codepoint must not panic — it routes through the
         // primary's degraded path. With the auto-detected body font

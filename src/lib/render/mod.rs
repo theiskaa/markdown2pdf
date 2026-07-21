@@ -293,10 +293,8 @@ fn collect_style_codepoints(style: &ResolvedStyle, out: &mut Vec<char>) {
         }
     }
     for f in [style.header.as_ref(), style.footer.as_ref()].into_iter().flatten() {
-        for slot in [f.left.as_ref(), f.center.as_ref(), f.right.as_ref()] {
-            if let Some(t) = slot {
-                out.extend(t.chars());
-            }
+        for t in [f.left.as_ref(), f.center.as_ref(), f.right.as_ref()].into_iter().flatten() {
+            out.extend(t.chars());
         }
     }
 }

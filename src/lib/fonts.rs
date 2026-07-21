@@ -279,7 +279,7 @@ fn find_system_font_in(name: &str, dirs: &[&str]) -> Option<PathBuf> {
                 continue;
             }
 
-            if patterns.iter().any(|p| file_lower == *p) {
+            if patterns.contains(&file_lower) {
                 return Some(entry.path());
             }
 

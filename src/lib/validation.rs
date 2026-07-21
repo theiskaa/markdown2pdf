@@ -106,23 +106,20 @@ pub fn validate_conversion(
         warnings.push(ValidationWarning::large_document(markdown.len()));
     }
 
-    if let Some(unicode_chars) = detect_unicode_chars(markdown) {
-        if !has_unicode_font(font_config, style_fallback_fonts) {
+    if let Some(unicode_chars) = detect_unicode_chars(markdown)
+        && !has_unicode_font(font_config, style_fallback_fonts) {
             warnings.push(ValidationWarning::unicode_without_font(unicode_chars));
         }
-    }
 
-    if let Some(path) = output_path {
-        if let Some(parent) = Path::new(path).parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
+    if let Some(path) = output_path
+        && let Some(parent) = Path::new(path).parent()
+            && !parent.as_os_str().is_empty() && !parent.exists() {
                 warnings.push(ValidationWarning {
                     kind: WarningKind::SyntaxWarning,
                     message: format!("Output directory does not exist: {}", parent.display()),
                     suggestion: format!("Create directory with: mkdir -p {}", parent.display()),
                 });
             }
-        }
-    }
 
     warnings.extend(check_syntax_issues(markdown));
     warnings.extend(check_image_references(markdown));
@@ -163,15 +160,14 @@ fn has_unicode_font(font_config: Option<&FontConfig>, style_fallback_fonts: &[St
     if !style_fallback_fonts.is_empty() {
         return true;
     }
-    if let Some(config) = font_config {
-        if config.default_font.is_some()
+    if let Some(config) = font_config
+        && (config.default_font.is_some()
             || config.default_font_source.is_some()
             || !config.fallback_fonts.is_empty()
-            || !config.fallback_font_sources.is_empty()
+            || !config.fallback_font_sources.is_empty())
         {
             return true;
         }
-    }
     default_body_source().is_some()
 }
 
@@ -180,7 +176,7 @@ fn check_syntax_issues(markdown: &str) -> Vec<ValidationWarning> {
     let mut warnings = Vec::new();
 
     let code_fence_count = markdown.matches("```").count();
-    if code_fence_count % 2 != 0 {
+    if !code_fence_count.is_multiple_of(2) {
         warnings.push(ValidationWarning::syntax_warning(
             "Unclosed code block detected (odd number of ``` markers)",
         ));
@@ -192,7 +188,7 @@ fn check_syntax_issues(markdown: &str) -> Vec<ValidationWarning> {
     let inline_code_count = total_backticks
         .saturating_sub(double_backticks)
         .saturating_sub(triple_backticks);
-    if inline_code_count % 2 != 0 {
+    if !inline_code_count.is_multiple_of(2) {
         warnings.push(ValidationWarning::syntax_warning(
             "Possible unclosed inline code (odd number of ` markers)",
         ));
@@ -284,16 +280,16 @@ fn check_image_references(markdown: &str) -> Vec<ValidationWarning> {
 
     let mut chars = markdown.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '!' {
-            if chars.peek() == Some(&'[') {
+        if c == '!'
+            && chars.peek() == Some(&'[') {
                 // Found potential image
                 // Skip to the path part
                 while let Some(ch) = chars.next() {
-                    if ch == ']' {
-                        if chars.peek() == Some(&'(') {
+                    if ch == ']'
+                        && chars.peek() == Some(&'(') {
                             chars.next(); // consume '('
                             let mut path = String::new();
-                            while let Some(ch) = chars.next() {
+                            for ch in chars.by_ref() {
                                 if ch == ')' {
                                     break;
                                 }
@@ -303,17 +299,13 @@ fn check_image_references(markdown: &str) -> Vec<ValidationWarning> {
                             if !path.starts_with("http://")
                                 && !path.starts_with("https://")
                                 && !path.is_empty()
-                            {
-                                if !Path::new(&path).exists() {
+                                && !Path::new(&path).exists() {
                                     warnings.push(ValidationWarning::missing_image(&path));
                                 }
-                            }
                             break;
                         }
-                    }
                 }
             }
-        }
     }
 
     warnings

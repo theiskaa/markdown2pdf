@@ -65,13 +65,12 @@ fn x_clusters(mut xs: Vec<f32>, bin_pt: f32) -> Vec<f32> {
     xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mut clusters: Vec<(f32, usize)> = Vec::new(); // (sum, count)
     for x in xs {
-        if let Some((sum, n)) = clusters.last_mut() {
-            if (x - *sum / *n as f32).abs() < bin_pt {
+        if let Some((sum, n)) = clusters.last_mut()
+            && (x - *sum / *n as f32).abs() < bin_pt {
                 *sum += x;
                 *n += 1;
                 continue;
             }
-        }
         clusters.push((x, 1));
     }
     clusters.into_iter().map(|(s, n)| s / n as f32).collect()

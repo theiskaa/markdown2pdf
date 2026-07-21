@@ -120,12 +120,11 @@ pub fn inject_link_tooltips(bytes: Vec<u8>, tooltips: &HashMap<String, String>) 
                 if !is_link_annotation(d) {
                     continue;
                 }
-                if let Some(uri) = link_uri(d) {
-                    if let Some(tip) = tooltips.get(&uri) {
+                if let Some(uri) = link_uri(d)
+                    && let Some(tip) = tooltips.get(&uri) {
                         d.set("Contents", Object::string_literal(tip.clone()));
                         changed = true;
                     }
-                }
             }
         }
     }
@@ -252,13 +251,13 @@ fn is_link_annotation(d: &Dictionary) -> bool {
         return false;
     }
     // `Type` is optional on annotations per spec but printpdf emits it.
-    let type_annot = d
+    
+    d
         .get(b"Type")
         .ok()
         .and_then(|o| o.as_name().ok())
         .map(|n| n == b"Annot")
-        .unwrap_or(true);
-    type_annot
+        .unwrap_or(true)
 }
 
 fn link_uri(d: &Dictionary) -> Option<String> {

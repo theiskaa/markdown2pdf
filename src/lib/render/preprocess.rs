@@ -150,7 +150,7 @@ fn classify_anchor(tag: &str) -> AnchorTag {
     }
     let inner = trimmed[1..trimmed.len() - 1].trim();
     if let Some(rest) = inner.strip_prefix('/') {
-        let name = rest.trim().split_whitespace().next().unwrap_or("");
+        let name = rest.split_whitespace().next().unwrap_or("");
         return if name.eq_ignore_ascii_case("a") {
             AnchorTag::CloseA
         } else {

@@ -7,7 +7,10 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-fn first_admonition(tokens: &[Token]) -> Option<(&str, &str, Option<&Vec<Token>>, &Vec<Token>)> {
+/// `(kind, raw_label, title, body)` borrowed from a parsed `Token::Admonition`.
+type AdmonitionParts<'a> = (&'a str, &'a str, Option<&'a Vec<Token>>, &'a Vec<Token>);
+
+fn first_admonition(tokens: &[Token]) -> Option<AdmonitionParts<'_>> {
     tokens.iter().find_map(|t| match t {
         Token::Admonition {
             kind,

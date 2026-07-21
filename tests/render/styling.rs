@@ -1286,10 +1286,7 @@ fn colored_paragraph_spanning_pages_paints_per_page() {
     // The other half: a *paragraph* with an explicit background that
     // spans pages should now paint one fragment per page (paragraph
     // has no default bg, so every rect here is from our config).
-    let big = format!(
-        "{}",
-        "word ".repeat(12_000)
-    );
+    let big = "word ".repeat(12_000).to_string();
     let bytes = render(
         &big,
         r##"
@@ -1322,15 +1319,12 @@ mod inline_style_application {
         let mut m = 0.0f32;
         for line in s.lines() {
             let l = line.trim();
-            if let Some(p) = l.strip_suffix(" Td") {
-                if let Some(x) = p.split_whitespace().next() {
-                    if let Ok(v) = x.parse::<f32>() {
-                        if v > m {
+            if let Some(p) = l.strip_suffix(" Td")
+                && let Some(x) = p.split_whitespace().next()
+                    && let Ok(v) = x.parse::<f32>()
+                        && v > m {
                             m = v;
                         }
-                    }
-                }
-            }
         }
         m
     }

@@ -234,7 +234,7 @@ This is a paragraph with *italic* and **bold** text.
 [Link](https://example.com)"#;
 
     let tokens = parse(input);
-    assert!(tokens.len() > 0);
+    assert!(!tokens.is_empty());
     assert!(matches!(tokens[0], Token::Heading(_, 1)));
     // Add more specific assertions as needed
 }
@@ -320,7 +320,8 @@ fn test_blockquote_variations() {
     // After the blockquote shape change, the body is a Vec<Token> and
     // inline formatting inside a quote is parsed (so *emphasis* becomes
     // an Emphasis token, [link](url) becomes a Link, etc.).
-    let cases: &[(&str, &dyn Fn(&[Token])) ] = &[
+    type BlockquoteCase<'a> = (&'a str, &'a dyn Fn(&[Token]));
+    let cases: &[BlockquoteCase] = &[
         (
             "> Simple quote",
             &|body| {
@@ -421,7 +422,7 @@ A paragraph with `code` and [link](url).
 > Quote with [link](url)"#;
 
     let tokens = parse(input);
-    assert!(tokens.len() > 0);
+    assert!(!tokens.is_empty());
 
     // Verify first token is a heading with emphasis
     if let Token::Heading(content, 1) = &tokens[0] {
