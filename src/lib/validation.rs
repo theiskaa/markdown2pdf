@@ -83,8 +83,8 @@ impl ValidationWarning {
 
 impl std::fmt::Display for ValidationWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "⚠️  {}", self.message)?;
-        write!(f, "\n   💡 {}", self.suggestion)
+        write!(f, "Warning: {}", self.message)?;
+        write!(f, "\n   Suggestion: {}", self.suggestion)
     }
 }
 

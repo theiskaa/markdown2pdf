@@ -16,9 +16,16 @@ markdown2pdf converts Markdown to PDF through a fully in-tree pipeline: a Common
 
 It ships as both a binary and a library. The binary converts from a file, URL, or string on the command line; the library exposes programmatic generation with full control over styling and fonts. Configuration is loaded at runtime or embedded at compile time for containerized deployments.
 
-The lexer targets CommonMark 0.31.2 plus GFM and note-tool extensions such as WikiLinks, `==highlight==`, and LaTeX math, and passes 649 of the 652 CommonMark spec examples. The exceptions are deliberate, where the WikiLink syntax reclaims `[[…]]` (which CommonMark treats as nested brackets). Conformance is held in place by the full CommonMark spec runner alongside the lexer-unit, stress, and adversarial renderer suites.
+The lexer targets CommonMark 0.31.2 plus GFM and note-tool extensions such as WikiLinks, `==highlight==`, and LaTeX math, and passes 649 of the 652 CommonMark spec examples. The exceptions are deliberate: WikiLink syntax reclaims `[[…]]`, which CommonMark treats as nested brackets. Conformance is held in place by the full CommonMark spec runner, alongside the lexer-unit, stress, and adversarial renderer suites.
 
-The renderer covers headings with bookmarks and anchors, the full inline-emphasis set (bold, italic, monospace, strikethrough, underline, highlight, super/subscript, small-caps), nested ordered/unordered/task lists, GFM tables with per-column alignment, header repeat, and merged cells (a `>` cell extends the one before it across columns, a `^` cell continues the one above down a row; escape a literal marker with `\>` / `\^`), blockquotes, admonition / callout boxes in both MkDocs (`!!! note "Optional title"`) and GitHub (`> [!WARNING]`) styles with per-kind vector icons, fenced and indented code, images (local, URL, SVG), footnotes, definition lists, cross-references, and inline HTML (anchors become clickable links; `<div>` / `<section>` / `<figure>` wrappers drop through to their children). Mathematics is typeset by a built-in TeX engine — real fraction bars, radicals, script stacks, big operators with limits, growing delimiters, matrices, and accents — drawn as vector outlines and configurable through a `[math]` style block.
+The renderer covers most of what a document actually needs:
+
+- **Text and structure**: headings with bookmarks and anchors; the full inline-emphasis set (bold, italic, monospace, strikethrough, underline, highlight, super/subscript, small-caps); nested ordered/unordered/task lists; blockquotes.
+- **Tables**: GFM tables with per-column alignment and header repeat. Cells can merge: a `>` cell extends the one before it across columns, a `^` cell continues the one above down a row; escape a literal marker with `\>` / `\^`.
+- **Callouts and code**: admonition boxes in both MkDocs (`!!! note "Optional title"`) and GitHub (`> [!WARNING]`) styles, each with per-kind vector icons; fenced and indented code.
+- **Embedded content**: images (local, URL, SVG); footnotes; definition lists; cross-references; inline HTML, where anchors become clickable links and `<div>` / `<section>` / `<figure>` wrappers drop through to their children.
+
+Mathematics is typeset by a built-in TeX engine: fraction bars, radicals, script stacks, big operators with limits, growing delimiters, matrices, and accents, drawn as vector outlines and configurable through a `[math]` style block.
 
 Documents are styled per block with six bundled themes, configurable page setup, running headers and footers, an auto-generated table of contents, a title page, YAML/TOML frontmatter, and PDF metadata. Output is written to a file or returned as an in-memory byte buffer.
 
@@ -90,19 +97,19 @@ and the library. The library enables them in `Cargo.toml`
 (`features = [...]`); the binary enables them at install or build
 time (`cargo install markdown2pdf --features fetch,svg`).
 
-- **`fetch`** — URL input (the `-u`/`--url` flag) and remote images.
-  Uses pure-Rust TLS (rustls), so no system OpenSSL is needed; works
-  in `rust:slim` and Alpine. If you need native TLS for corporate
+- **`fetch`** enables URL input (the `-u`/`--url` flag) and remote images.
+  It uses pure-Rust TLS (rustls), so no system OpenSSL is needed; it
+  works in `rust:slim` and Alpine. If you need native TLS for corporate
   certificate stores, depend on `reqwest` directly with your
   preferred backend and Cargo will unify the features.
-- **`svg`** — SVG image rasterization via `resvg`, for SVG embedded
+- **`svg`** enables SVG image rasterization via `resvg`, for SVG embedded
   through `![](path.svg)` or `<img src="...svg">`.
 
 ## Configuration
 
-Every visual choice — fonts, colors, page setup, headers / footers,
-table of contents, title page, alignment, per-block typography — lives
-in a TOML configuration. Six bundled themes (`default`, `github`,
+Every visual choice lives in a TOML configuration: fonts, colors, page
+setup, headers / footers, table of contents, title page, alignment,
+per-block typography. Six bundled themes (`default`, `github`,
 `academic`, `minimal`, `compact`, `modern`) give one-line styling;
 per-block overrides handle the long tail; and **any value can be
 overridden per-run from the command line**, winning over the config
@@ -144,7 +151,7 @@ font selection are in **[`docs/cli.md`](docs/cli.md)**.
 
 `parse_into_file` writes a PDF to disk; `parse_into_bytes` returns the
 document as a `Vec<u8>` for in-memory use. `ConfigSource` selects
-styling — `Default`, `Theme("github")`, `File(path)`, or
+styling: `Default`, `Theme("github")`, `File(path)`, or
 `Embedded(toml)`.
 
 ```rust

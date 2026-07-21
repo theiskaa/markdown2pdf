@@ -52,10 +52,15 @@
 
 mod font;
 mod hyphenate;
+mod image_policy;
 mod ir;
 mod layout;
 mod lower;
 mod math;
+#[cfg(feature = "fetch")]
+mod net_guard;
+#[cfg(feature = "fetch")]
+mod net_read;
 mod postprocess;
 mod preprocess;
 

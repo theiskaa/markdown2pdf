@@ -164,14 +164,14 @@ impl fmt::Display for MdpError {
                 column,
                 suggestion,
             } => {
-                write!(f, "❌ Markdown Parsing Error: {}", message)?;
+                write!(f, "Markdown Parsing Error: {}", message)?;
                 if let (Some(l), Some(c)) = (line, column) {
                     write!(f, " (at line {}, column {})", l, c)?;
                 } else if let Some(l) = line {
                     write!(f, " (at line {})", l)?;
                 }
                 if let Some(hint) = suggestion {
-                    write!(f, "\n💡 Suggestion: {}", hint)?;
+                    write!(f, "\nSuggestion: {}", hint)?;
                 }
                 Ok(())
             }
@@ -180,12 +180,12 @@ impl fmt::Display for MdpError {
                 path,
                 suggestion,
             } => {
-                write!(f, "❌ PDF Generation Error: {}", message)?;
+                write!(f, "PDF Generation Error: {}", message)?;
                 if let Some(p) = path {
-                    write!(f, "\n📁 Path: {}", p)?;
+                    write!(f, "\nPath: {}", p)?;
                 }
                 if let Some(hint) = suggestion {
-                    write!(f, "\n💡 Suggestion: {}", hint)?;
+                    write!(f, "\nSuggestion: {}", hint)?;
                 }
                 Ok(())
             }
@@ -194,17 +194,17 @@ impl fmt::Display for MdpError {
                 message,
                 suggestion,
             } => {
-                write!(f, "❌ Font Error: Failed to load font '{}'", font_name)?;
+                write!(f, "Font Error: Failed to load font '{}'", font_name)?;
                 write!(f, "\n   Reason: {}", message)?;
-                write!(f, "\n💡 Suggestion: {}", suggestion)?;
+                write!(f, "\nSuggestion: {}", suggestion)?;
                 Ok(())
             }
             MdpError::ConfigError {
                 message,
                 suggestion,
             } => {
-                write!(f, "❌ Configuration Error: {}", message)?;
-                write!(f, "\n💡 Suggestion: {}", suggestion)?;
+                write!(f, "Configuration Error: {}", message)?;
+                write!(f, "\nSuggestion: {}", suggestion)?;
                 Ok(())
             }
             MdpError::IoError {
@@ -212,9 +212,9 @@ impl fmt::Display for MdpError {
                 path,
                 suggestion,
             } => {
-                write!(f, "❌ File Error: {}", message)?;
-                write!(f, "\n📁 Path: {}", path)?;
-                write!(f, "\n💡 Suggestion: {}", suggestion)?;
+                write!(f, "File Error: {}", message)?;
+                write!(f, "\nPath: {}", path)?;
+                write!(f, "\nSuggestion: {}", suggestion)?;
                 Ok(())
             }
         }

@@ -6,40 +6,23 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
-/// `Read` adapter enforcing a hard wall-clock deadline across every
-/// read call, on top of (not instead of) reqwest's own idle timeout.
-/// reqwest's blocking `.timeout()` behaves as an IDLE timeout while
-/// reading a response body — any forward progress resets it — so a
-/// server trickling data slower than the size cap but faster than the
-/// idle timeout can keep a `read_to_end` alive far longer than the
-/// configured timeout suggests. This wrapper fails the read once
-/// wall-clock time passes `deadline`, bounding total transfer time to
-/// roughly the deadline plus one more idle-timeout period: the read
-/// straddling the deadline can still block up to the idle timeout
-/// before this adapter gets a chance to check the clock again.
-/// Bounded and honest, not an instantaneous cutoff. Mirrors
-/// `markdown2pdf`'s own `DeadlineReader` in
-/// `src/lib/render/layout.rs`; duplicated here rather than shared
-/// because this binary doesn't otherwise depend on that private
-/// library item.
+// `DeadlineReader`, `read_capped_with_deadline`, and `MAX_FETCH_BYTES`
+// are shared with the library's own document-triggered image fetch
+// (`markdown2pdf::render`'s private `net_guard` module) by literally
+// including the same source file, the same way `tests/render.rs`
+// shares `tests/render/common.rs` via `#[path = ...]`. This binary is
+// a separate crate from the library and can only see its public API
+// — and none of this is API we want to publish just for internal
+// plumbing — so re-compiling the shared source is the way to avoid
+// duplicating it. See `src/lib/render/net_read.rs`'s doc comment for
+// why only this smaller file is shared rather than all of
+// `net_guard.rs`: that module also carries the SSRF host-block
+// predicates, which this CLI's operator-typed `--url` fetch
+// deliberately does not apply (see the comment on that call site
+// below).
 #[cfg(feature = "fetch")]
-struct DeadlineReader<R> {
-    inner: R,
-    deadline: std::time::Instant,
-}
-
-#[cfg(feature = "fetch")]
-impl<R: std::io::Read> std::io::Read for DeadlineReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if std::time::Instant::now() >= self.deadline {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "fetch exceeded total time budget",
-            ));
-        }
-        self.inner.read(buf)
-    }
-}
+#[path = "../lib/render/net_read.rs"]
+mod net_read;
 
 /// Split a dimension token into its numeric part and unit suffix.
 /// `"2.5cm"` -> `(2.5, "cm")`, `"25"` -> `(25.0, "")`.
@@ -212,7 +195,13 @@ fn get_markdown_input(matches: &clap::ArgMatches) -> Result<String, AppError> {
     // workflow.
     #[cfg(feature = "fetch")]
     if let Some(url) = matches.get_one::<String>("url") {
-        const MAX_BYTES: u64 = 10 * 1024 * 1024;
+        // 15s, vs. the library's own 5s for a document-triggered image
+        // fetch (`src/lib/render/net_guard.rs`): that fetch is
+        // triggered by an untrusted markdown document and bounded
+        // tightly on purpose, while this one is a URL the operator
+        // typed directly on the command line, so it's worth tolerating
+        // a slower, deliberately-chosen endpoint over strict CLI
+        // responsiveness.
         const TIMEOUT_SECS: u64 = 15;
 
         let client = Client::builder()
@@ -227,26 +216,19 @@ fn get_markdown_input(matches: &clap::ArgMatches) -> Result<String, AppError> {
             return Err(AppError::NetworkError(format!("HTTP {}", resp.status())));
         }
 
-        use std::io::Read;
-        let mut buf = Vec::new();
         // Hard wall-clock deadline across the whole body read — see
-        // `DeadlineReader`'s doc comment for why reqwest's own
-        // `.timeout()` doesn't already bound this. Read one byte past
-        // the cap so an over-size body is detectable without ever
-        // buffering the whole thing.
+        // `net_read::DeadlineReader`'s doc comment for why reqwest's
+        // own `.timeout()` doesn't already bound this. Reads one byte
+        // past the cap so an over-size body is detectable without
+        // ever buffering the whole thing.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIMEOUT_SECS);
-        let bounded = DeadlineReader {
-            inner: resp,
-            deadline,
-        };
-        let mut limited = bounded.take(MAX_BYTES + 1);
-        limited
-            .read_to_end(&mut buf)
-            .map_err(|e| AppError::NetworkError(e.to_string()))?;
-        if buf.len() as u64 > MAX_BYTES {
+        let buf = net_read::read_capped_with_deadline(resp, deadline)
+            .map_err(AppError::NetworkError)?;
+        if buf.len() as u64 > net_read::MAX_FETCH_BYTES {
             return Err(AppError::NetworkError(format!(
                 "response from {} exceeds the {} byte cap",
-                url, MAX_BYTES
+                url,
+                net_read::MAX_FETCH_BYTES
             )));
         }
 
@@ -419,22 +401,22 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
 
         if !warnings.is_empty() {
             if verbosity == Verbosity::Verbose {
-                eprintln!("\n🔍 Pre-flight validation:");
+                eprintln!("\nPre-flight validation:");
             }
             for warning in &warnings {
                 eprintln!("{}", warning);
             }
             eprintln!(); // Empty line after warnings
         } else if verbosity == Verbosity::Verbose {
-            eprintln!("✓ Pre-flight validation passed\n");
+            eprintln!("Pre-flight validation passed\n");
         }
 
         if dry_run {
-            println!("✓ Dry-run validation complete. No PDF generated.");
+            println!("Dry-run validation complete. No PDF generated.");
             if warnings.is_empty() {
-                println!("✓ No issues detected. Run without --dry-run to generate PDF.");
+                println!("No issues detected. Run without --dry-run to generate PDF.");
             } else {
-                println!("⚠️  {} warning(s) found. Review above and run without --dry-run to generate PDF anyway.", warnings.len());
+                println!("{} warning(s) found. Review above and run without --dry-run to generate PDF anyway.", warnings.len());
             }
             return Ok(());
         }
@@ -456,7 +438,7 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
     }
 
     if verbosity == Verbosity::Verbose {
-        eprintln!("📄 Generating PDF...");
+        eprintln!("Generating PDF...");
         if let Some(path) = &config_path {
             eprintln!("   Config: {}", path.display());
         }
@@ -476,7 +458,7 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
     .map_err(|e| AppError::ConversionError(e.to_string()))?;
 
     if verbosity != Verbosity::Quiet {
-        println!("✅ Successfully saved PDF to {}", output_path_str);
+        println!("Successfully saved PDF to {}", output_path_str);
 
         if verbosity == Verbosity::Verbose {
             if let Ok(metadata) = fs::metadata(output_path_str) {

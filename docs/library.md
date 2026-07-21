@@ -43,7 +43,7 @@ fn render(markdown: String) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
 ## Selecting a style
 
-The `ConfigSource` enum chooses where styling comes from. `Default` uses the bundled `default` theme with no overrides. `Theme(name)` selects one of the bundled presets — `default`, `github`, `academic`, `minimal`, `compact`, or `modern` — by name, which lets library code pick a known-good look without carrying any TOML. `File(path)` reads and parses a TOML configuration at runtime. `Embedded(toml)` treats a string as the configuration body, which combined with `include_str!` bakes the configuration into the binary at compile time — the standard approach for containerized or read-only deployments.
+The `ConfigSource` enum chooses where styling comes from. `Default` uses the bundled `default` theme with no overrides. `Theme(name)` selects one of the bundled presets (`default`, `github`, `academic`, `minimal`, `compact`, or `modern`) by name, which lets library code pick a known-good look without carrying any TOML. `File(path)` reads and parses a TOML configuration at runtime. `Embedded(toml)` treats a string as the configuration body, which combined with `include_str!` bakes the configuration into the binary at compile time: the standard approach for containerized or read-only deployments.
 
 ```rust
 use markdown2pdf::{parse_into_file, config::ConfigSource};
@@ -70,7 +70,7 @@ let style = load_config_strict(ConfigSource::File("brand.toml"), Some("github"))
 let pdf = parse_into_bytes_with_style(markdown, style, None)?;
 ```
 
-`load_config_strict_with_overrides` adds a highest-priority override layer expressed as a TOML fragment. The keys mirror the configuration schema exactly, and the layer wins over both the configuration file and the theme — this is the same mechanism the binary's `-V` flag uses, exposed for programmatic callers that want, for example, to inject a per-request title or color:
+`load_config_strict_with_overrides` adds a highest-priority override layer expressed as a TOML fragment. The keys mirror the configuration schema exactly, and the layer wins over both the configuration file and the theme. This is the same mechanism the binary's `-V` flag uses, exposed for programmatic callers that want, for example, to inject a per-request title or color:
 
 ```rust
 use markdown2pdf::config::{ConfigSource, load_config_strict_with_overrides};
@@ -83,11 +83,11 @@ let style = load_config_strict_with_overrides(
 let pdf = markdown2pdf::parse_into_bytes_with_style(markdown, style, None)?;
 ```
 
-These strict functions return a `ResolveError` describing exactly what went wrong: malformed TOML, an unknown theme, a cyclic `inherits` chain, or an I/O failure, with unknown keys carrying a closest-match suggestion. When a silent fallback is preferable to an error — for instance when a missing optional config should simply yield the default look — `load_config_from_source` logs the problem and returns the default theme instead of failing.
+These strict functions return a `ResolveError` describing exactly what went wrong: malformed TOML, an unknown theme, a cyclic `inherits` chain, or an I/O failure, with unknown keys carrying a closest-match suggestion. When a silent fallback is preferable to an error (for instance, a missing optional config should yield the default look), `load_config_from_source` logs the problem and returns the default theme instead of failing.
 
 ## Fonts
 
-`FontConfig` selects the body and code fonts and is built fluently. A font may be named — resolving to a built-in (`Helvetica`, `Times`, `Courier`) or a system font — or supplied as raw bytes through `FontSource`, which is the right choice for GUI applications and sandboxed environments that cannot read the filesystem. Glyph subsetting is enabled by default, so only the glyphs used in the document are embedded.
+`FontConfig` selects the body and code fonts and is built fluently. A font may be named, which resolves to a built-in (`Helvetica`, `Times`, `Courier`) or a system font; or it may be supplied as raw bytes through `FontSource`, the right choice for GUI applications and sandboxed environments that cannot read the filesystem. Glyph subsetting is enabled by default, so only the glyphs used in the document are embedded.
 
 Selecting fonts by name covers the common case:
 
@@ -117,7 +117,7 @@ parse_into_file(md, "out.pdf", ConfigSource::Default, Some(&fonts))?;
 
 ## Frontmatter
 
-A YAML block delimited by `---` or a TOML block delimited by `+++` at the very top of the Markdown is consumed before lexing and folded into the document metadata. The recognized keys are `title`, `author`, `subject`, `keywords`, `creator`, and `language` (also accepted as `lang`); they override the configuration's `[metadata]` section. This requires no change at the call site — every `parse_into_*` entry point handles frontmatter transparently — so a document can carry its own title and author without the caller knowing them:
+A YAML block delimited by `---` or a TOML block delimited by `+++` at the very top of the Markdown is consumed before lexing and folded into the document metadata. The recognized keys are `title`, `author`, `subject`, `keywords`, `creator`, and `language` (also accepted as `lang`); they override the configuration's `[metadata]` section. This requires no change at the call site; every `parse_into_*` entry point handles frontmatter transparently, so a document can carry its own title and author without the caller knowing them:
 
 ```markdown
 ---
@@ -131,7 +131,7 @@ keywords: [rust, pdf]
 
 ## Errors
 
-Every entry point returns `Result<_, MdpError>`. The variants distinguish where the failure originated: `ParseError` carries a message and a one-based line and column for a lexer failure, `PdfError` covers generation and write failures and includes the offending path, `FontError` names the font that could not be loaded, `ConfigError` reports an invalid configuration, and `IoError` reports a filesystem failure with its path. Every variant also carries a human-readable suggestion. `MdpError` implements `std::error::Error` and `Display` — the `Display` output includes the suggestion — so it composes directly with `?` and `Box<dyn Error>` without any manual mapping.
+Every entry point returns `Result<_, MdpError>`. The variants distinguish where the failure originated: `ParseError` carries a message and a one-based line and column for a lexer failure, `PdfError` covers generation and write failures and includes the offending path, `FontError` names the font that could not be loaded, `ConfigError` reports an invalid configuration, and `IoError` reports a filesystem failure with its path. Every variant also carries a human-readable suggestion. `MdpError` implements `std::error::Error` and `Display` (the `Display` output includes the suggestion), so it composes directly with `?` and `Box<dyn Error>` without any manual mapping.
 
 ## Logging
 

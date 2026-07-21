@@ -1,8 +1,8 @@
 # Command-line usage
 
-The `markdown2pdf` binary converts a Markdown file, a string, or a remote URL into a styled PDF. Styling is resolved from a bundled theme and an optional TOML configuration, and every value in that configuration can be overridden per invocation directly on the command line. Because overrides take precedence over both the configuration file and the selected theme, most one-off documents need no configuration file at all — a theme plus a handful of flags is enough.
+The `markdown2pdf` binary converts a Markdown file, a string, or a remote URL into a styled PDF. Styling is resolved from a bundled theme and an optional TOML configuration, and every value in that configuration can be overridden per invocation directly on the command line. Because overrides take precedence over both the configuration file and the selected theme, most one-off documents need no configuration file at all: a theme plus a handful of flags is enough.
 
-This document covers every flag, the way styling is resolved, the font system, and the runtime override mechanism in full. The configuration schema itself — every section and field that a config file or an override can set — is documented separately in [configuration.md](configuration.md), with an annotated, copy-and-tweak starting point in [config.toml](config.toml).
+This document covers every flag, the way styling is resolved, the font system, and the runtime override mechanism in full. The configuration schema itself (every section and field that a config file or an override can set) is documented separately in [configuration.md](configuration.md), with an annotated, copy-and-tweak starting point in [config.toml](config.toml).
 
 ## Input and output
 
@@ -43,7 +43,7 @@ done
 
 ## How styling is resolved
 
-Styling is composed in layers, each able to override the one below it. The bundled `default` theme provides the baseline. A selected theme preset is layered on top of it — chosen either with `--theme NAME` or by a `theme = "NAME"` line inside a configuration file, with the command-line flag winning if both are present. The configuration file is applied next: its `[defaults]` block cascades into every block that does not set a field explicitly, and per-block sections such as `[paragraph]` or `[headings.h1]` take precedence over `[defaults]`. Command-line overrides are applied last and therefore win over everything.
+Styling is composed in layers, each able to override the one below it. The bundled `default` theme provides the baseline. A selected theme preset is layered on top of it, chosen either with `--theme NAME` or by a `theme = "NAME"` line inside a configuration file, with the command-line flag winning if both are present. The configuration file is applied next: its `[defaults]` block cascades into every block that does not set a field explicitly, and per-block sections such as `[paragraph]` or `[headings.h1]` take precedence over `[defaults]`. Command-line overrides are applied last and therefore win over everything.
 
 The six bundled presets are `default`, `github`, `academic`, `minimal`, `compact`, and `modern`. A preset is selected with `--theme`:
 
@@ -67,7 +67,7 @@ markdown2pdf --theme academic -V headings.h1.font_size_pt=28 --print-effective-c
 
 ## Fonts and build features
 
-The font system has four modes. The built-in fonts — Helvetica, Times, and Courier — require no files and render identically everywhere, including minimal Docker images and CI runners with no system fonts installed; they are the default and the fastest path. A system font is selected by name and is searched for in the standard operating-system font directories. A font file is loaded directly when the value looks like a path to a `.ttf` or `.otf`. In all cases glyph subsetting is automatic: only the glyphs that actually appear in the document are embedded, so a Unicode document set in a large CJK typeface produces a PDF measured in tens of kilobytes rather than tens of megabytes.
+The font system has four modes. The built-in fonts (Helvetica, Times, and Courier) require no files and render identically everywhere, including minimal Docker images and CI runners with no system fonts installed; they are the default and the fastest path. A system font is selected by name and is searched for in the standard operating-system font directories. A font file is loaded directly when the value looks like a path to a `.ttf` or `.otf`. In all cases glyph subsetting is automatic: only the glyphs that actually appear in the document are embedded, so a Unicode document set in a large CJK typeface produces a PDF measured in tens of kilobytes rather than tens of megabytes.
 
 The body font is selected with `--default-font` and the font used for code blocks and inline code with `--code-font`:
 
@@ -98,9 +98,9 @@ markdown2pdf -p report.md \
   -o report.pdf
 ```
 
-Dimension values are unit-aware. A bare number is interpreted in the schema's native unit — millimetres for margins and points for font size — while a suffix is converted: `25` and `25mm` are both 25 mm, `2.5cm` is 25 mm, `1in` is 25.4 mm, and `72pt` is 25.4 mm. The `--font-size` flag accepts a bare number or an explicit `pt` suffix only, since centimetre or inch type sizes are not meaningful.
+Dimension values are unit-aware. A bare number is interpreted in the schema's native unit (millimetres for margins, points for font size), while a suffix is converted: `25` and `25mm` are both 25 mm, `2.5cm` is 25 mm, `1in` is 25.4 mm, and `72pt` is 25.4 mm. The `--font-size` flag accepts a bare number or an explicit `pt` suffix only, since centimetre or inch type sizes are not meaningful.
 
-For everything the typed flags do not cover, the repeatable `-V KEY=VALUE` flag reaches any field in the schema. The key is a dotted path that mirrors the configuration structure exactly — `page.size`, `headings.h1.font_size_pt`, `blockquote.text_color`, and so on — and the value is interpreted as TOML. A value of `true` or `false` becomes a boolean, a value that parses as a number becomes a number, a value that begins with `[`, `{`, or a quote is passed through verbatim so that arrays and inline tables can be written directly, and anything else becomes a string, which is what makes `#RRGGBB` colors, font names, alignment keywords, and footer templates work without extra quoting:
+For everything the typed flags do not cover, the repeatable `-V KEY=VALUE` flag reaches any field in the schema. The key is a dotted path that mirrors the configuration structure exactly (`page.size`, `headings.h1.font_size_pt`, `blockquote.text_color`, and so on), and the value is interpreted as TOML. A value of `true` or `false` becomes a boolean, a value that parses as a number becomes a number, a value that begins with `[`, `{`, or a quote is passed through verbatim so that arrays and inline tables can be written directly, and anything else becomes a string, which is what makes `#RRGGBB` colors, font names, alignment keywords, and footer templates work without extra quoting:
 
 ```sh
 markdown2pdf -p doc.md \
