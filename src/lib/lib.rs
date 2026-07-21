@@ -60,28 +60,29 @@
 //! Page layout properties control the overall document structure:
 //! ```toml
 //! [page]
-//! margins = { top = 72, right = 72, bottom = 72, left = 72 }
-//! size = "a4"
+//! size = "A4"
 //! orientation = "portrait"
+//! margins = { top = 22.6, right = 22.6, bottom = 22.6, left = 22.6 }  # mm
 //! ```
 //!
 //! Individual elements can be styled with precise control:
 //! ```toml
-//! [heading.1]
-//! size = 24
-//! textcolor = { r = 0, g = 0, b = 0 }
-//! bold = true
-//! afterspacing = 1.0
+//! [defaults]
+//! font_family = "Helvetica"
+//! font_size_pt = 11.0
 //!
-//! [text]
-//! size = 12
-//! fontfamily = "roboto"
-//! alignment = "left"
+//! [headings.h1]
+//! font_size_pt = 24.0
+//! text_color = { r = 0, g = 0, b = 0 }
+//! font_weight = "bold"
 //!
-//! [code]
-//! backgroundcolor = { r = 245, g = 245, b = 245 }
-//! fontfamily = "roboto-mono"
+//! [code_block]
+//! background_color = { r = 245, g = 245, b = 245 }
+//! font_family = "roboto-mono"
 //! ```
+//!
+//! See `docs/config.toml` for a fully annotated reference and
+//! `docs/configuration.md` for the complete field-by-field guide.
 //!
 //! The conversion process follows a carefully structured pipeline. First, the Markdown text undergoes
 //! lexical analysis to produce a stream of semantic tokens. These tokens then receive styling rules
@@ -246,55 +247,44 @@ impl MdpError {
     }
 }
 
-/// Transforms Markdown content into a styled PDF document and saves it to the specified path.
-/// This function provides a high-level interface for converting Markdown to PDF with configurable
-/// styling through TOML configuration files.
-///
-/// The process begins by parsing the Markdown content into a structured token representation.
-/// It then applies styling rules, either from a configuration file if present or using defaults.
-/// Finally, it generates the PDF document with the appropriate styling and structure.
+/// Variant of [`parse_into_file`] that takes a pre-resolved
+/// [`styling::ResolvedStyle`] instead of a `ConfigSource`. Prefer this
+/// when the caller has already resolved the style (e.g. to also
+/// serialize it for `--print-effective-config`) and doesn't want to
+/// load or resolve the config again.
 ///
 /// # Arguments
 /// * `markdown` - The Markdown content to convert
 /// * `path` - The output file path for the generated PDF
-/// * `config` - Configuration source (Default, File path, or Embedded TOML)
+/// * `style` - A fully resolved style, typically produced by [`styling::resolve`]
+/// * `font_config` - Font overrides; pass `None` to auto-detect a system Unicode font
 ///
 /// # Returns
 /// * `Ok(())` on successful PDF generation and save
-/// * `Err(MdpError)` if errors occur during parsing, styling, or file operations
+/// * `Err(MdpError)` if errors occur during parsing, rendering, or the file write
+///
+/// # Errors
+/// * `MdpError::IoError` if the output directory does not exist
+/// * `MdpError::ParseError` if the Markdown itself fails to lex
+/// * `MdpError::PdfError` (or another `MdpError` variant) if PDF rendering fails
 ///
 /// # Example
 /// ```rust
 /// use std::error::Error;
-/// use markdown2pdf::config::ConfigSource;
-/// use markdown2pdf::fonts::FontConfig;
+/// use markdown2pdf::styling;
 ///
-/// fn example() -> Result<(), Box<dyn Error>> {
+/// fn example_with_resolved_style() -> Result<(), Box<dyn Error>> {
 ///     let markdown = "# Hello World\nThis is a test.".to_string();
 ///
-///     // Use default configuration
-///     markdown2pdf::parse_into_file(markdown.clone(), "output1.pdf", ConfigSource::Default, None)?;
-///
-///     // Use file-based configuration
-///     markdown2pdf::parse_into_file(markdown.clone(), "output2.pdf", ConfigSource::File("config.toml"), None)?;
-///
-///     // Use embedded configuration with custom font
-///     const EMBEDDED: &str = r#"
-///         [heading.1]
-///         size = 18
-///         bold = true
-///     "#;
-///     let font_config = FontConfig::new()
-///         .with_default_font("Georgia");
-///     markdown2pdf::parse_into_file(markdown, "output3.pdf", ConfigSource::Embedded(EMBEDDED), Some(&font_config))?;
+///     // Resolve a style once (e.g. to also print it via
+///     // `--print-effective-config`), then reuse it without re-parsing
+///     // the config source.
+///     let style = styling::resolve(styling::DocumentConfig::default(), None)?;
+///     markdown2pdf::parse_into_file_with_style(markdown, "output.pdf", style, None)?;
 ///
 ///     Ok(())
 /// }
 /// ```
-/// Variant of [`parse_into_file`] that takes a pre-resolved style
-/// instead of a `ConfigSource`. Useful when the caller has already
-/// loaded the config (e.g. to also serialize it for
-/// `--print-effective-config`) and doesn't want to load it again.
 pub fn parse_into_file_with_style(
     markdown: String,
     path: impl AsRef<std::path::Path>,
@@ -321,6 +311,58 @@ pub fn parse_into_file_with_style(
     render::render_to_file(tokens, style, font_config, path)
 }
 
+/// Transforms Markdown content into a styled PDF document and saves it to the specified path.
+/// This function provides a high-level interface for converting Markdown to PDF with configurable
+/// styling through TOML configuration files.
+///
+/// The process begins by parsing the Markdown content into a structured token representation.
+/// It then applies styling rules, either from a configuration file if present or using defaults.
+/// Finally, it generates the PDF document with the appropriate styling and structure.
+///
+/// # Arguments
+/// * `markdown` - The Markdown content to convert
+/// * `path` - The output file path for the generated PDF
+/// * `config` - Configuration source: `Default` (built-in theme), `File(path)` (load a
+///   `markdown2pdfrc.toml`-style file from disk), or `Embedded(toml_str)` (an in-memory TOML string)
+/// * `font_config` - Font overrides; pass `None` to auto-detect a system Unicode font
+///
+/// # Returns
+/// * `Ok(())` on successful PDF generation and save
+/// * `Err(MdpError)` if errors occur during parsing, styling, or file operations
+///
+/// # Errors
+/// * `MdpError::IoError` if the output directory does not exist
+/// * `MdpError::ParseError` if the Markdown itself fails to lex
+/// * `MdpError::PdfError` (or another `MdpError` variant) if PDF rendering fails
+///
+/// # Example
+/// ```rust
+/// use std::error::Error;
+/// use markdown2pdf::config::ConfigSource;
+/// use markdown2pdf::fonts::FontConfig;
+///
+/// fn example() -> Result<(), Box<dyn Error>> {
+///     let markdown = "# Hello World\nThis is a test.".to_string();
+///
+///     // Use default configuration
+///     markdown2pdf::parse_into_file(markdown.clone(), "output1.pdf", ConfigSource::Default, None)?;
+///
+///     // Use file-based configuration
+///     markdown2pdf::parse_into_file(markdown.clone(), "output2.pdf", ConfigSource::File("config.toml"), None)?;
+///
+///     // Use embedded configuration with custom font
+///     const EMBEDDED: &str = r#"
+///         [headings.h1]
+///         font_size_pt = 18.0
+///         font_weight = "bold"
+///     "#;
+///     let font_config = FontConfig::new()
+///         .with_default_font("Georgia");
+///     markdown2pdf::parse_into_file(markdown, "output3.pdf", ConfigSource::Embedded(EMBEDDED), Some(&font_config))?;
+///
+///     Ok(())
+/// }
+/// ```
 pub fn parse_into_file(
     markdown: String,
     path: impl AsRef<std::path::Path>,
@@ -401,6 +443,10 @@ fn parse_markdown(markdown: String) -> Result<Vec<markdown::Token>, MdpError> {
 /// * `Ok(Vec<u8>)` containing the PDF data on successful conversion
 /// * `Err(MdpError)` if errors occur during parsing or PDF generation
 ///
+/// # Errors
+/// * `MdpError::ParseError` if the Markdown itself fails to lex
+/// * `MdpError::PdfError` (or another `MdpError` variant) if PDF rendering fails
+///
 /// # Example
 /// ```rust
 /// use std::fs;
@@ -413,9 +459,9 @@ fn parse_markdown(markdown: String) -> Result<Vec<markdown::Token>, MdpError> {
 ///
 ///     // Use embedded configuration
 ///     const EMBEDDED: &str = r#"
-///         [heading.1]
-///         size = 18
-///         bold = true
+///         [headings.h1]
+///         font_size_pt = 18.0
+///         font_weight = "bold"
 ///     "#;
 ///     let pdf_bytes = markdown2pdf::parse_into_bytes(markdown, ConfigSource::Embedded(EMBEDDED), None)?;
 ///
@@ -442,6 +488,19 @@ pub fn parse_into_bytes(
 /// instead of a `ConfigSource`. Mirrors [`parse_into_file_with_style`]
 /// for callers that already have a `ResolvedStyle` in hand (web
 /// services, in-memory pipelines).
+///
+/// # Arguments
+/// * `markdown` - The Markdown content to convert
+/// * `style` - A fully resolved style, typically produced by [`styling::resolve`]
+/// * `font_config` - Font overrides; pass `None` to auto-detect a system Unicode font
+///
+/// # Returns
+/// * `Ok(Vec<u8>)` containing the PDF data on successful conversion
+/// * `Err(MdpError)` if errors occur during parsing or PDF generation
+///
+/// # Errors
+/// * `MdpError::ParseError` if the Markdown itself fails to lex
+/// * `MdpError::PdfError` (or another `MdpError` variant) if PDF rendering fails
 pub fn parse_into_bytes_with_style(
     markdown: String,
     style: styling::ResolvedStyle,

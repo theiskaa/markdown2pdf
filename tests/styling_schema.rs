@@ -223,6 +223,69 @@ fn print_effective_config_round_trip() {
 }
 
 #[test]
+fn maintained_reference_config_parses() {
+    // `docs/config.toml` is the maintained, human-facing reference config
+    // (linked from the crate-level rustdoc and README). Pin it against
+    // `deny_unknown_fields` so it can never silently rot.
+    const REFERENCE: &str = include_str!("../docs/config.toml");
+    let result = load_config_strict(ConfigSource::Embedded(REFERENCE), None);
+    assert!(
+        result.is_ok(),
+        "docs/config.toml failed to parse: {:?}",
+        result.err()
+    );
+}
+
+/// Pull every ```toml fenced block out of a `//!` doc-comment source
+/// file, stripping the `//! ` (or bare `//!` for blank lines) prefix
+/// from each line so the result is plain TOML text.
+fn extract_toml_fences(source: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    for piece in source.split("```toml").skip(1) {
+        let Some(end) = piece.find("```") else {
+            continue;
+        };
+        let fenced = &piece[..end];
+        let mut toml_text = String::new();
+        for line in fenced.lines() {
+            let stripped = line
+                .strip_prefix("//! ")
+                .or_else(|| line.strip_prefix("//!"))
+                .unwrap_or(line);
+            toml_text.push_str(stripped);
+            toml_text.push('\n');
+        }
+        blocks.push(toml_text);
+    }
+    blocks
+}
+
+#[test]
+fn rustdoc_crate_level_examples_parse() {
+    // Extract directly from the real source rather than a hand-typed
+    // copy, so this test guards the TOML that actually ships on
+    // docs.rs — a bad key introduced into the crate-level `//!` docs
+    // fails here, against the same `deny_unknown_fields` schema.
+    const SOURCE: &str = include_str!("../src/lib/lib.rs");
+    let blocks = extract_toml_fences(SOURCE);
+    assert!(
+        !blocks.is_empty(),
+        "found no ```toml fenced blocks in src/lib/lib.rs; \
+         did the crate-level doc examples move, get renamed, or get removed? \
+         this test only guards docs that still exist"
+    );
+    for block in &blocks {
+        let result = load_config_strict(ConfigSource::Embedded(block), None);
+        assert!(
+            result.is_ok(),
+            "a ```toml example in the crate-level rustdoc (src/lib/lib.rs) failed to parse: {:?}\n---\n{}",
+            result.err(),
+            block
+        );
+    }
+}
+
+#[test]
 fn math_block_round_trips_and_defaults() {
     // Explicit overrides land on `style.math`.
     let cfg = r##"[math]
