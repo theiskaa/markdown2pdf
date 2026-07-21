@@ -114,11 +114,11 @@ fn build_overrides(m: &clap::ArgMatches) -> Result<Option<String>, AppError> {
         lines.push(format!("metadata.author = {}", toml_string(a)));
     }
     if let Some(fs_) = m.get_one::<String>("font-size") {
-        let pt = parse_font_pt(fs_).map_err(AppError::ConversionError)?;
+        let pt = parse_font_pt(fs_).map_err(AppError::Conversion)?;
         lines.push(format!("defaults.font_size_pt = {}", pt));
     }
     if let Some(mg) = m.get_one::<String>("margin") {
-        let mm = parse_margin_mm(mg).map_err(AppError::ConversionError)?;
+        let mm = parse_margin_mm(mg).map_err(AppError::Conversion)?;
         lines.push(format!(
             "page.margins = {{ top = {mm}, right = {mm}, bottom = {mm}, left = {mm} }}"
         ));
@@ -138,14 +138,14 @@ fn build_overrides(m: &clap::ArgMatches) -> Result<Option<String>, AppError> {
     if let Some(vars) = m.get_many::<String>("var") {
         for kv in vars {
             let (key, value) = kv.split_once('=').ok_or_else(|| {
-                AppError::ConversionError(format!(
+                AppError::Conversion(format!(
                     "-V expects KEY=VALUE, got `{}`",
                     kv
                 ))
             })?;
             let key = key.trim();
             if key.is_empty() {
-                return Err(AppError::ConversionError(format!(
+                return Err(AppError::Conversion(format!(
                     "-V key is empty in `{}`",
                     kv
                 )));
@@ -163,11 +163,11 @@ fn build_overrides(m: &clap::ArgMatches) -> Result<Option<String>, AppError> {
 
 #[derive(Debug)]
 enum AppError {
-    FileReadError(std::io::Error),
-    ConversionError(String),
-    PathError(String),
+    FileRead(std::io::Error),
+    Conversion(String),
+    Path(String),
     #[cfg(feature = "fetch")]
-    NetworkError(String),
+    Network(String),
 }
 
 /// Verbosity level for output
@@ -180,7 +180,7 @@ enum Verbosity {
 
 fn get_markdown_input(matches: &clap::ArgMatches) -> Result<String, AppError> {
     if let Some(file_path) = matches.get_one::<String>("path") {
-        return fs::read_to_string(file_path).map_err(AppError::FileReadError);
+        return fs::read_to_string(file_path).map_err(AppError::FileRead);
     }
 
     // The `url` argument is only registered when the `fetch` feature
@@ -207,13 +207,13 @@ fn get_markdown_input(matches: &clap::ArgMatches) -> Result<String, AppError> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
             .build()
-            .map_err(|e| AppError::NetworkError(e.to_string()))?;
+            .map_err(|e| AppError::Network(e.to_string()))?;
         let resp = client
             .get(url)
             .send()
-            .map_err(|e| AppError::NetworkError(e.to_string()))?;
+            .map_err(|e| AppError::Network(e.to_string()))?;
         if !resp.status().is_success() {
-            return Err(AppError::NetworkError(format!("HTTP {}", resp.status())));
+            return Err(AppError::Network(format!("HTTP {}", resp.status())));
         }
 
         // Hard wall-clock deadline across the whole body read — see
@@ -223,9 +223,9 @@ fn get_markdown_input(matches: &clap::ArgMatches) -> Result<String, AppError> {
         // ever buffering the whole thing.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIMEOUT_SECS);
         let buf = net_read::read_capped_with_deadline(resp, deadline)
-            .map_err(AppError::NetworkError)?;
+            .map_err(AppError::Network)?;
         if buf.len() as u64 > net_read::MAX_FETCH_BYTES {
-            return Err(AppError::NetworkError(format!(
+            return Err(AppError::Network(format!(
                 "response from {} exceeds the {} byte cap",
                 url,
                 net_read::MAX_FETCH_BYTES
@@ -235,19 +235,19 @@ fn get_markdown_input(matches: &clap::ArgMatches) -> Result<String, AppError> {
         // A non-UTF-8 response is not markdown; don't silently
         // lossy-convert it into something that looks plausible.
         let body = String::from_utf8(buf)
-            .map_err(|e| AppError::NetworkError(format!("response is not valid UTF-8: {}", e)))?;
+            .map_err(|e| AppError::Network(format!("response is not valid UTF-8: {}", e)))?;
         return Ok(body);
     }
 
     if let Some(markdown_string) = matches.get_one::<String>("string") {
         Ok(markdown_string.to_string())
     } else {
-        Err(AppError::ConversionError("No input provided".to_string()))
+        Err(AppError::Conversion("No input provided".to_string()))
     }
 }
 
 fn get_output_path(matches: &clap::ArgMatches) -> Result<PathBuf, AppError> {
-    let current_dir = std::env::current_dir().map_err(|e| AppError::PathError(e.to_string()))?;
+    let current_dir = std::env::current_dir().map_err(|e| AppError::Path(e.to_string()))?;
 
     Ok(matches
         .get_one::<String>("output")
@@ -308,7 +308,7 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         .or_else(discover_config_file);
     let config_source = match &config_path {
         Some(p) => markdown2pdf::config::ConfigSource::File(p.to_str().ok_or_else(|| {
-            AppError::PathError("config path is not valid UTF-8".to_string())
+            AppError::Path("config path is not valid UTF-8".to_string())
         })?),
         None => markdown2pdf::config::ConfigSource::Default,
     };
@@ -323,9 +323,9 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             theme_override,
             overrides.as_deref(),
         )
-        .map_err(|e| AppError::ConversionError(e.to_string()))?;
+        .map_err(|e| AppError::Conversion(e.to_string()))?;
         let toml = toml::to_string_pretty(&style)
-            .map_err(|e| AppError::ConversionError(e.to_string()))?;
+            .map_err(|e| AppError::Conversion(e.to_string()))?;
         println!("{}", toml);
         return Ok(());
     }
@@ -334,7 +334,7 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
     let output_path = get_output_path(&matches)?;
     let output_path_str = output_path
         .to_str()
-        .ok_or_else(|| AppError::PathError("Invalid output path".to_string()))?;
+        .ok_or_else(|| AppError::Path("Invalid output path".to_string()))?;
 
     let font_config = if matches.contains_id("default-font") || matches.contains_id("code-font") {
         let default_font = matches
@@ -368,7 +368,7 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         theme_override,
         overrides.as_deref(),
     )
-    .map_err(|e| AppError::ConversionError(e.to_string()))?;
+    .map_err(|e| AppError::Conversion(e.to_string()))?;
 
     // With no font on the CLI, fall back to the fonts named in the
     // resolved style ([defaults].font_family / [code_block]). This
@@ -430,7 +430,7 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         if warnings.is_empty() {
             return Ok(());
         } else {
-            return Err(AppError::ConversionError(format!(
+            return Err(AppError::Conversion(format!(
                 "{} validation warnings",
                 warnings.len()
             )));
@@ -454,7 +454,7 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         resolved_style,
         font_config.as_ref(),
     )
-    .map_err(|e| AppError::ConversionError(e.to_string()))?;
+    .map_err(|e| AppError::Conversion(e.to_string()))?;
 
     if verbosity != Verbosity::Quiet {
         println!("Successfully saved PDF to {}", output_path_str);
@@ -669,11 +669,11 @@ fn main() {
 
     if let Err(e) = run(matches) {
         match e {
-            AppError::FileReadError(e) => eprintln!("[X] Error reading file: {}", e),
-            AppError::ConversionError(e) => eprintln!("[X] Conversion error: {}", e),
-            AppError::PathError(e) => eprintln!("[X] Path error: {}", e),
+            AppError::FileRead(e) => eprintln!("[X] Error reading file: {}", e),
+            AppError::Conversion(e) => eprintln!("[X] Conversion error: {}", e),
+            AppError::Path(e) => eprintln!("[X] Path error: {}", e),
             #[cfg(feature = "fetch")]
-            AppError::NetworkError(e) => eprintln!("[X] Network error: {}", e),
+            AppError::Network(e) => eprintln!("[X] Network error: {}", e),
         }
         process::exit(1);
     }

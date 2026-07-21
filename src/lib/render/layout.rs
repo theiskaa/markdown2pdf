@@ -257,6 +257,24 @@ struct OpenBlockBg {
 /// x_right, top_y, color)`. See `paint_open_bg_fragments`.
 type OpenBgFrag = (usize, f32, f32, f32, (u8, u8, u8));
 
+/// Row-span bookkeeping for [`Engine::draw_row`]: which row this call
+/// starts at, the per-row heights of the whole table (needed to sum a
+/// row-spanning cell's merged region), and the shared column width.
+struct RowLayout<'r> {
+    row_offset: usize,
+    row_heights: &'r [f32],
+    col_width: f32,
+}
+
+/// Text styling shared by every cell in a [`Engine::draw_row`] call.
+#[derive(Clone, Copy)]
+struct RowTextStyle {
+    font_size: f32,
+    line_height_mult: f32,
+    bold: bool,
+    color: (u8, u8, u8),
+}
+
 impl<'a> Engine<'a> {
     fn new(style: &'a ResolvedStyle, font_set: &'a FontSet, doc: &'a mut PdfDocument) -> Self {
         let (page_width_mm, page_height_mm) = page_dimensions_mm(&style.page);
@@ -907,8 +925,8 @@ impl<'a> Engine<'a> {
                 let idx = (*level).clamp(1, 6) as usize - 1;
                 &self.style.headings[idx]
             }
-            Some(Block::CodeBlock { .. }) => &self.style.code_block,
-            Some(Block::BlockQuote { .. }) => &self.style.blockquote,
+            Some(Block::Code { .. }) => &self.style.code_block,
+            Some(Block::Quote { .. }) => &self.style.blockquote,
             Some(Block::List { entries }) => {
                 if let Some(first) = entries.first() {
                     let list = match first.bullet {
@@ -924,7 +942,7 @@ impl<'a> Engine<'a> {
                 }
             }
             Some(Block::Table { .. }) => &self.style.table.header,
-            // Image / HR / HtmlBlock / Math / FootnoteDefinitions /
+            // Image / HR / Html / Math / FootnoteDefinitions /
             // DefinitionList / PageBreak: paragraph is the conservative
             // default (these all have some leading margin and at least
             // one line-height worth of content).
@@ -1635,10 +1653,10 @@ impl<'a> Engine<'a> {
         match block {
             Block::Heading { level, runs } => self.render_heading(*level, runs, next),
             Block::Paragraph { runs } => self.render_paragraph(runs),
-            Block::CodeBlock { lines } => self.render_code_block(lines),
+            Block::Code { lines } => self.render_code_block(lines),
             Block::HorizontalRule => self.render_horizontal_rule(),
             Block::List { entries } => self.render_list(entries),
-            Block::BlockQuote { body } => self.render_blockquote(body),
+            Block::Quote { body } => self.render_blockquote(body),
             Block::Admonition {
                 kind,
                 raw_label,
@@ -1653,13 +1671,13 @@ impl<'a> Engine<'a> {
             Block::Image { path, alt, caption } => {
                 self.render_image(path, alt, caption.as_deref())
             }
-            Block::HtmlBlock { content } => self.render_html_block(content),
+            Block::Html { content } => self.render_html_block(content),
             Block::PageBreak => self.start_new_page(),
             Block::FootnoteDefinitions { entries } => {
                 self.render_footnote_definitions(entries)
             }
             Block::DefinitionList { entries } => self.render_definition_list(entries),
-            Block::MathBlock { content } => self.render_math_block(content),
+            Block::Math { content } => self.render_math_block(content),
         }
     }
 
@@ -2414,14 +2432,18 @@ impl<'a> Engine<'a> {
         }
         self.draw_row(
             headers,
-            0,
-            &[header_height],
             aligns,
-            s_header.font_size_pt,
-            s_header.line_height,
-            col_width,
-            true,
-            s_header.text_color_rgb(),
+            RowLayout {
+                row_offset: 0,
+                row_heights: &[header_height],
+                col_width,
+            },
+            RowTextStyle {
+                font_size: s_header.font_size_pt,
+                line_height_mult: s_header.line_height,
+                bold: true,
+                color: s_header.text_color_rgb(),
+            },
         );
         let header_bottom = header_top + header_height;
         self.y_from_top_pt = header_bottom;
@@ -2458,14 +2480,18 @@ impl<'a> Engine<'a> {
                 }
                 self.draw_row(
                     headers,
-                    0,
-                    &[header_height],
                     aligns,
-                    s_header.font_size_pt,
-                    s_header.line_height,
-                    col_width,
-                    true,
-                    s_header.text_color_rgb(),
+                    RowLayout {
+                        row_offset: 0,
+                        row_heights: &[header_height],
+                        col_width,
+                    },
+                    RowTextStyle {
+                        font_size: s_header.font_size_pt,
+                        line_height_mult: s_header.line_height,
+                        bold: true,
+                        color: s_header.text_color_rgb(),
+                    },
                 );
                 let header_bottom = header_top + header_height;
                 self.y_from_top_pt = header_bottom;
@@ -2489,14 +2515,18 @@ impl<'a> Engine<'a> {
                 self.y_from_top_pt = group_top + group_heights[..local_idx].iter().sum::<f32>();
                 self.draw_row(
                     &table_rows[row_idx + local_idx],
-                    local_idx,
-                    group_heights,
                     aligns,
-                    s_cell.font_size_pt,
-                    s_cell.line_height,
-                    col_width,
-                    false,
-                    s_cell.text_color_rgb(),
+                    RowLayout {
+                        row_offset: local_idx,
+                        row_heights: group_heights,
+                        col_width,
+                    },
+                    RowTextStyle {
+                        font_size: s_cell.font_size_pt,
+                        line_height_mult: s_cell.line_height,
+                        bold: false,
+                        color: s_cell.text_color_rgb(),
+                    },
                 );
             }
             self.y_from_top_pt = group_top + group_height;
@@ -2625,15 +2655,21 @@ impl<'a> Engine<'a> {
     fn draw_row(
         &mut self,
         cells: &[TableCell<InlineRun>],
-        row_offset: usize,
-        row_heights: &[f32],
         aligns: &[crate::markdown::TableAlignment],
-        font_size: f32,
-        line_height_mult: f32,
-        col_width: f32,
-        bold: bool,
-        color: (u8, u8, u8),
+        layout: RowLayout,
+        style: RowTextStyle,
     ) {
+        let RowLayout {
+            row_offset,
+            row_heights,
+            col_width,
+        } = layout;
+        let RowTextStyle {
+            font_size,
+            line_height_mult,
+            bold,
+            color,
+        } = style;
         let pad = self.style.table.cell_padding;
         let saved_left = self.indent_left_pt;
         let saved_right = self.indent_right_pt;
@@ -3065,12 +3101,14 @@ impl<'a> Engine<'a> {
         draw_admonition_icon(
             &mut self.page_ops,
             kind,
-            icon_left,
-            icon_top,
-            icon_size,
+            IconGeom {
+                x_left_pt: icon_left,
+                y_top_pt: icon_top,
+                size_pt: icon_size,
+                page_height_pt: page_h,
+            },
             &accent_color,
             &cutout_color,
-            page_h,
         );
 
         // Small gap between header and body.
@@ -3231,14 +3269,18 @@ impl<'a> Engine<'a> {
         let page_h = self.page_height_pt();
         draw_styled_line(
             &mut self.page_ops,
-            x_left_pt,
-            y_pt,
-            x_right_pt,
-            y_pt,
-            color,
-            thickness,
-            dash,
-            page_h,
+            LineGeom {
+                x0_pt: x_left_pt,
+                y0_pt: y_pt,
+                x1_pt: x_right_pt,
+                y1_pt: y_pt,
+                page_height_pt: page_h,
+            },
+            LineStroke {
+                col: color,
+                thickness_pt: thickness,
+                dash,
+            },
         );
 
         self.advance_y(s.margin_after_pt);
@@ -4147,53 +4189,69 @@ fn draw_outlined_rect(
     if let Some(side) = border.top {
         draw_styled_line(
             ops,
-            x0_pt,
-            y_top_pt,
-            x1_pt,
-            y_top_pt,
-            rgb_color((side.color.r, side.color.g, side.color.b)),
-            side.width_pt,
-            dash_pattern_for(side.style),
-            page_height_pt,
+            LineGeom {
+                x0_pt,
+                y0_pt: y_top_pt,
+                x1_pt,
+                y1_pt: y_top_pt,
+                page_height_pt,
+            },
+            LineStroke {
+                col: rgb_color((side.color.r, side.color.g, side.color.b)),
+                thickness_pt: side.width_pt,
+                dash: dash_pattern_for(side.style),
+            },
         );
     }
     if let Some(side) = border.bottom {
         draw_styled_line(
             ops,
-            x0_pt,
-            y_bot_pt,
-            x1_pt,
-            y_bot_pt,
-            rgb_color((side.color.r, side.color.g, side.color.b)),
-            side.width_pt,
-            dash_pattern_for(side.style),
-            page_height_pt,
+            LineGeom {
+                x0_pt,
+                y0_pt: y_bot_pt,
+                x1_pt,
+                y1_pt: y_bot_pt,
+                page_height_pt,
+            },
+            LineStroke {
+                col: rgb_color((side.color.r, side.color.g, side.color.b)),
+                thickness_pt: side.width_pt,
+                dash: dash_pattern_for(side.style),
+            },
         );
     }
     if let Some(side) = border.left {
         draw_styled_line(
             ops,
-            x0_pt,
-            y_top_pt,
-            x0_pt,
-            y_bot_pt,
-            rgb_color((side.color.r, side.color.g, side.color.b)),
-            side.width_pt,
-            dash_pattern_for(side.style),
-            page_height_pt,
+            LineGeom {
+                x0_pt,
+                y0_pt: y_top_pt,
+                x1_pt: x0_pt,
+                y1_pt: y_bot_pt,
+                page_height_pt,
+            },
+            LineStroke {
+                col: rgb_color((side.color.r, side.color.g, side.color.b)),
+                thickness_pt: side.width_pt,
+                dash: dash_pattern_for(side.style),
+            },
         );
     }
     if let Some(side) = border.right {
         draw_styled_line(
             ops,
-            x1_pt,
-            y_top_pt,
-            x1_pt,
-            y_bot_pt,
-            rgb_color((side.color.r, side.color.g, side.color.b)),
-            side.width_pt,
-            dash_pattern_for(side.style),
-            page_height_pt,
+            LineGeom {
+                x0_pt: x1_pt,
+                y0_pt: y_top_pt,
+                x1_pt,
+                y1_pt: y_bot_pt,
+                page_height_pt,
+            },
+            LineStroke {
+                col: rgb_color((side.color.r, side.color.g, side.color.b)),
+                thickness_pt: side.width_pt,
+                dash: dash_pattern_for(side.style),
+            },
         );
     }
 }
@@ -4225,21 +4283,41 @@ fn rowspan_group_end(rows: &[Vec<TableCell<InlineRun>>], start: usize) -> usize 
     end
 }
 
-/// Generalized line draw with explicit color / thickness / dash.
-/// `draw_horizontal_line` is now a thin wrapper around this for the
-/// solid-line case kept for backward compatibility with table borders
-/// and text decorations.
-fn draw_styled_line(
-    ops: &mut Vec<Op>,
+/// Endpoints of a styled line, in page-top-relative pt.
+#[derive(Clone, Copy)]
+struct LineGeom {
     x0_pt: f32,
     y0_pt: f32,
     x1_pt: f32,
     y1_pt: f32,
+    page_height_pt: f32,
+}
+
+/// Color / thickness / dash of a styled line.
+#[derive(Clone)]
+struct LineStroke {
     col: Color,
     thickness_pt: f32,
     dash: LineDashPattern,
-    page_height_pt: f32,
-) {
+}
+
+/// Generalized line draw with explicit color / thickness / dash.
+/// `draw_horizontal_line` is now a thin wrapper around this for the
+/// solid-line case kept for backward compatibility with table borders
+/// and text decorations.
+fn draw_styled_line(ops: &mut Vec<Op>, geom: LineGeom, stroke: LineStroke) {
+    let LineGeom {
+        x0_pt,
+        y0_pt,
+        x1_pt,
+        y1_pt,
+        page_height_pt,
+    } = geom;
+    let LineStroke {
+        col,
+        thickness_pt,
+        dash,
+    } = stroke;
     let y0_mm = pt_to_mm(page_height_pt - y0_pt);
     let y1_mm = pt_to_mm(page_height_pt - y1_pt);
     ops.push(Op::SaveGraphicsState);
@@ -4369,6 +4447,15 @@ fn draw_stroked_circle(
     draw_stroked_path(ops, &pts, color, thickness_pt, true, page_height_pt);
 }
 
+/// Placement of an admonition icon's bounding square on the page.
+#[derive(Clone, Copy)]
+struct IconGeom {
+    x_left_pt: f32,
+    y_top_pt: f32,
+    size_pt: f32,
+    page_height_pt: f32,
+}
+
 /// Per-kind callout glyph drawn into the header row's leading
 /// 12pt-ish square. All icons render in `accent`; `cutout` is the
 /// negative-space colour used for the X-mark inside the filled
@@ -4377,13 +4464,16 @@ fn draw_stroked_circle(
 fn draw_admonition_icon(
     ops: &mut Vec<Op>,
     kind: &str,
-    x_left_pt: f32,
-    y_top_pt: f32,
-    size_pt: f32,
+    geom: IconGeom,
     accent: &Color,
     cutout: &Color,
-    page_height_pt: f32,
 ) {
+    let IconGeom {
+        x_left_pt,
+        y_top_pt,
+        size_pt,
+        page_height_pt,
+    } = geom;
     let cx = x_left_pt + size_pt * 0.5;
     let cy = y_top_pt + size_pt * 0.5;
     let s = size_pt;

@@ -15,14 +15,14 @@ pub enum Block {
     /// A paragraph of flowing text.
     Paragraph { runs: Vec<InlineRun> },
     /// A fenced or indented code block. One entry per source line.
-    CodeBlock { lines: Vec<String> },
+    Code { lines: Vec<String> },
     /// A horizontal rule (`---`).
     HorizontalRule,
     /// A run of consecutive list items at the same level + marker
     /// shape. Ordered/unordered is determined by the entries.
     List { entries: Vec<ListEntry> },
     /// A block quote whose body is itself a sequence of [`Block`]s.
-    BlockQuote { body: Vec<Block> },
+    Quote { body: Vec<Block> },
     /// A semantic callout / admonition block. `kind` is the canonical
     /// kind name (`note` / `info` / `tip` / `warning` / `danger` /
     /// `generic`) the renderer keys per-kind styling off; `raw_label`
@@ -58,7 +58,7 @@ pub enum Block {
     /// Verbatim block-level raw HTML. Rendered as a monospace block
     /// so the source stays visible. CommonMark §4.6 lets us choose
     /// whether to interpret HTML or pass it through; we pass through.
-    HtmlBlock { content: String },
+    Html { content: String },
     /// A user-requested page break. Triggered by a standalone
     /// `<!-- pagebreak -->` block in the source. The renderer
     /// flushes the current page and starts a fresh one with no
@@ -75,7 +75,7 @@ pub enum Block {
     /// rendered centered in an italic monospace style. (v1 renders the
     /// source verbatim; full mathematical typesetting is a separate,
     /// larger effort tracked independently.)
-    MathBlock { content: String },
+    Math { content: String },
 }
 
 #[derive(Debug, Clone)]
@@ -213,7 +213,7 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
                 }
             }
         }
-        Block::BlockQuote { body } => {
+        Block::Quote { body } => {
             for child in body {
                 walk_block(child, u);
             }
@@ -250,7 +250,7 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
                 }
             }
         }
-        Block::CodeBlock { .. } | Block::HtmlBlock { .. } => {
+        Block::Code { .. } | Block::Html { .. } => {
             u.mono_regular = true;
         }
         Block::FootnoteDefinitions { entries } => {
@@ -279,7 +279,7 @@ fn walk_block(block: &Block, u: &mut VariantUsage) {
                 }
             }
         }
-        Block::MathBlock { .. } => {
+        Block::Math { .. } => {
             // Rendered as centered italic monospace.
             u.mono_italic = true;
         }

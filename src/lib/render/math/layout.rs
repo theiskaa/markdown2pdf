@@ -162,6 +162,18 @@ pub struct Ctx<'f> {
     warned: &'f RefCell<HashSet<char>>,
 }
 
+/// Geometry for [`Ctx::assemble_vertical`]: the glyph-repeat overlap,
+/// target stack height, starting y, column x, and font size, all in
+/// the same pt space.
+#[derive(Clone, Copy)]
+struct AssemblyGeometry {
+    overlap: f32,
+    height: f32,
+    bottom_y: f32,
+    x: f32,
+    size: f32,
+}
+
 impl<'f> Ctx<'f> {
     pub fn new(
         font: &'f MathFont,
@@ -573,7 +585,15 @@ impl<'f> Ctx<'f> {
             }
             Stretch::Assembly { parts, overlap } => {
                 radical_w = self.assemble_vertical(
-                    &mut f, &parts, overlap, need_pt, -bf.desc, 0.0, size,
+                    &mut f,
+                    &parts,
+                    AssemblyGeometry {
+                        overlap,
+                        height: need_pt,
+                        bottom_y: -bf.desc,
+                        x: 0.0,
+                        size,
+                    },
                 );
                 vinculum_y = bf.asc + gap;
             }
@@ -814,11 +834,13 @@ impl<'f> Ctx<'f> {
                 let w = self.assemble_vertical(
                     f,
                     &parts,
-                    overlap,
-                    height,
-                    axis - height / 2.0,
-                    x,
-                    size,
+                    AssemblyGeometry {
+                        overlap,
+                        height,
+                        bottom_y: axis - height / 2.0,
+                        x,
+                        size,
+                    },
                 );
                 f.asc = f.asc.max(axis + height / 2.0);
                 f.desc = f.desc.max(height / 2.0 - axis);
@@ -827,18 +849,21 @@ impl<'f> Ctx<'f> {
         }
     }
 
-    /// Stack assembly `parts` from `bottom_y` upward to span `height`
-    /// pt; returns the column advance width.
+    /// Stack assembly `parts` from `geom.bottom_y` upward to span
+    /// `geom.height` pt; returns the column advance width.
     fn assemble_vertical(
         &self,
         f: &mut Frag,
         parts: &[super::font::AssemblyPart],
-        overlap: f32,
-        height: f32,
-        bottom_y: f32,
-        x: f32,
-        size: f32,
+        geom: AssemblyGeometry,
     ) -> f32 {
+        let AssemblyGeometry {
+            overlap,
+            height,
+            bottom_y,
+            x,
+            size,
+        } = geom;
         let ov = self.font.scale(overlap, size);
         // Non-extender fixed length.
         let fixed: f32 = parts

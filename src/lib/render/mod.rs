@@ -253,7 +253,7 @@ fn collect_heading_slugs(blocks: &[ir::Block]) -> std::collections::HashSet<Stri
                     }
                     out.insert(slug);
                 }
-                ir::Block::BlockQuote { body } | ir::Block::Admonition { body, .. } => {
+                ir::Block::Quote { body } | ir::Block::Admonition { body, .. } => {
                     walk(body, out);
                 }
                 ir::Block::List { entries } => {
@@ -323,7 +323,7 @@ fn collect_synthesized_codepoints(
                 }
                 collect_synthesized_codepoints(body, style, out);
             }
-            ir::Block::BlockQuote { body } => {
+            ir::Block::Quote { body } => {
                 collect_synthesized_codepoints(body, style, out);
             }
             ir::Block::List { entries } => {

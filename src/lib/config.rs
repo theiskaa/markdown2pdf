@@ -63,7 +63,7 @@ pub fn load_config_strict_with_overrides(
                 let suggestion =
                     crate::styling::error::unknown_field_suggestion(source.message());
                 ResolveError::BadToml {
-                    source,
+                    source: Box::new(source),
                     input: text.to_string(),
                     file: None,
                     suggestion,
@@ -102,7 +102,7 @@ pub fn load_config_strict_with_overrides(
     let user: DocumentConfig = toml::from_str(&toml_text).map_err(|source| {
         let suggestion = crate::styling::error::unknown_field_suggestion(source.message());
         ResolveError::BadToml {
-            source,
+            source: Box::new(source),
             input: toml_text.clone(),
             file: file_for_errors,
             suggestion,

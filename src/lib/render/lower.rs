@@ -124,7 +124,7 @@ fn lower_blocks(
             } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 let lines = content.split('\n').map(|s| s.to_string()).collect();
-                out.push(Block::CodeBlock { lines });
+                out.push(Block::Code { lines });
                 i += 1;
             }
             Token::HorizontalRule => {
@@ -154,7 +154,7 @@ fn lower_blocks(
                         );
                         out.extend(inner_blocks);
                     } else if !is_only_html_comments(content) {
-                        out.push(Block::HtmlBlock {
+                        out.push(Block::Html {
                             content: content.clone(),
                         });
                     }
@@ -164,7 +164,7 @@ fn lower_blocks(
                     // markdown. Rendering them verbatim noisy; dropping
                     // them lets the wrapped content render normally.
                 } else if !is_only_html_comments(content) {
-                    out.push(Block::HtmlBlock {
+                    out.push(Block::Html {
                         content: content.clone(),
                     });
                 }
@@ -173,7 +173,7 @@ fn lower_blocks(
             Token::BlockQuote(body) => {
                 flush_paragraph(&mut out, &mut buffered_inline);
                 let nested = lower_blocks(body, footnote_numbers, footnote_definitions);
-                out.push(Block::BlockQuote { body: nested });
+                out.push(Block::Quote { body: nested });
                 i += 1;
             }
             Token::Admonition {
@@ -220,7 +220,7 @@ fn lower_blocks(
                 content,
             } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
-                out.push(Block::MathBlock {
+                out.push(Block::Math {
                     content: content.clone(),
                 });
                 i += 1;
@@ -1067,7 +1067,7 @@ fn flatten_one(
             // baseline. A display-math token only reaches here when it
             // isn't at the top level (e.g. inside a list item / table
             // cell); the top-level lower loop promotes standalone
-            // display math to a centered `Block::MathBlock`.
+            // display math to a centered `Block::Math`.
             out.push(InlineRun::math(
                 content.clone(),
                 flags,
@@ -1354,11 +1354,11 @@ mod tests {
             },
             Token::Text("outro".into()),
         ]);
-        // Paragraph("intro"), MathBlock, Paragraph("outro").
+        // Paragraph("intro"), Block::Math, Paragraph("outro").
         assert_eq!(blocks.len(), 3);
         assert!(matches!(blocks[0], Block::Paragraph { .. }));
-        let Block::MathBlock { content } = &blocks[1] else {
-            panic!("expected a MathBlock, got {:?}", blocks[1]);
+        let Block::Math { content } = &blocks[1] else {
+            panic!("expected a Block::Math, got {:?}", blocks[1]);
         };
         assert_eq!(content, "E = mc^2");
         assert!(matches!(blocks[2], Block::Paragraph { .. }));
@@ -1387,7 +1387,7 @@ mod tests {
             block: true,
         }]);
         assert_eq!(blocks.len(), 1);
-        let Block::CodeBlock { lines } = &blocks[0] else {
+        let Block::Code { lines } = &blocks[0] else {
             panic!();
         };
         assert_eq!(lines, &vec!["fn main()".to_string(), "{}".to_string()]);
@@ -1465,7 +1465,7 @@ mod tests {
                         }
                     }
                 }
-                Block::BlockQuote { body } | Block::Admonition { body, .. } => {
+                Block::Quote { body } | Block::Admonition { body, .. } => {
                     walk_superscript_markers(body, out);
                 }
                 Block::List { entries } => {

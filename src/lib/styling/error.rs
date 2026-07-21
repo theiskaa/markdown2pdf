@@ -5,11 +5,15 @@ use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ResolveError {
     /// TOML failed to parse (syntax error, type mismatch, unknown
-    /// field). Wraps `toml::de::Error` for span info.
+    /// field). Wraps `toml::de::Error` for span info. Boxed because
+    /// `toml::de::Error` alone is ~88 bytes, which would otherwise
+    /// make every `Result<_, ResolveError>` pay for this variant's
+    /// size regardless of which variant is actually returned.
     BadToml {
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
         /// The original TOML text. `toml::de::Error::span()` gives a
         /// byte offset but not the source, so we keep it here to
         /// resolve that offset to a line/column.
@@ -94,7 +98,7 @@ impl fmt::Display for ResolveError {
 impl std::error::Error for ResolveError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ResolveError::BadToml { source, .. } => Some(source),
+            ResolveError::BadToml { source, .. } => Some(source.as_ref()),
             ResolveError::Io { source, .. } => Some(source),
             _ => None,
         }
@@ -191,6 +195,11 @@ fn levenshtein(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_error_stays_small() {
+        assert!(std::mem::size_of::<ResolveError>() <= 96);
+    }
 
     #[test]
     fn levenshtein_basics() {
