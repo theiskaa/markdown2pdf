@@ -94,11 +94,6 @@ jobs:
     # Scheduled runs only exist to re-check advisories against unchanged
     # code (see the `audit` job) — skip formatting checks on that trigger.
     if: github.event_name != 'schedule'
-    # Non-blocking: the tree predates any formatting gate and `cargo fmt
-    # --all` would currently rewrite ~3950 lines across 115 files. Flipping
-    # this to blocking is a deliberate maintainer decision that should land
-    # as its own formatting-only commit, not as a side effect of CI config.
-    continue-on-error: true
 
     steps:
       - name: Checkout
@@ -118,11 +113,6 @@ jobs:
     # Scheduled runs only exist to re-check advisories against unchanged
     # code (see the `audit` job) — skip linting on that trigger.
     if: github.event_name != 'schedule'
-    # Non-blocking for now: the crate has never been linted, so the
-    # initial backlog would fail every PR. The job exists to surface
-    # findings and to make the backlog visible; flip
-    # `continue-on-error` off once it's burned down.
-    continue-on-error: true
 
     # The workflow-level RUSTFLAGS="-D warnings" (needed by `test`) would
     # otherwise leak in here and promote every warn-level clippy lint to
@@ -168,7 +158,4 @@ jobs:
           tool: cargo-audit
 
       - name: Audit dependencies
-        # RUSTSEC-2024-0370 (proc-macro-error unmaintained) is reached only
-        # through printpdf → allsorts → ouroboros and is build-time only.
-        # We can't upgrade it from here; re-check when printpdf updates.
-        run: cargo audit --ignore RUSTSEC-2024-0370
+        run: cargo audit

@@ -2,6 +2,25 @@
 
 All notable changes to **markdown2pdf** are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release section below is what ships as the GitHub Release notes.
 
+## [1.6.0] - 2026-07-22
+
+A security and robustness release. A crash on malformed HTML is fixed, remote fetching is hardened against SSRF and unbounded downloads, local image reads can now be confined to a directory, three RUSTSEC advisories are closed, and CI gained real gates for formatting, linting, and dependency audits.
+
+Thanks to **Alexander Bruegmann** ([@Brueggus](https://github.com/Brueggus)), first-time contributor, for the table header background fix in [#121](https://github.com/theiskaa/markdown2pdf/pull/121).
+
+- **Table header backgrounds render correctly**: a header row's `background_color` was resolved but never drawn, and the fill was missing again on every repeated header after a page or column break. Header and alternating-row fills now share one drawing path. Thanks to Alexander Bruegmann.
+- **Fixed a crash on malformed HTML**: a block such as `<p </p>`, where the opening tag is never closed, made the wrapper-stripping code compute an inverted byte range and panic, taking down the calling process. Such blocks now fall back to verbatim HTML rendering. Reachable from a seven-character document, so any caller rendering untrusted Markdown was exposed.
+- **Remote fetching hardened**: the renderer now resolves a remote image's host and validates every resolved address before connecting, then pins the connection to the address it checked. Loopback, private, link-local, CGNAT, and IPv6 NAT64 targets are refused, so a document can no longer reach cloud metadata endpoints or internal services. Redirects are capped and each hop is re-validated. Downloads are bounded in both size and total wall-clock time; previously the size cap trusted a server-supplied `Content-Length` and the timeout only measured idle time, so a slow-drip server could hold a fetch open indefinitely. The CLI's `--url` input gained the same size and time bounds. Set `MARKDOWN2PDF_ALLOW_PRIVATE_NETWORK=1` to opt out on an intranet.
+- **Local image reads can be confined**: a new `[security]` config block adds `image_root`, `allow_absolute_image_paths`, and `allow_remote_images`. With `image_root` set, image paths resolve inside it and anything escaping it, including through a symlink, is refused and degrades to alt text. Defaults are unchanged, so existing documents behave exactly as before; callers rendering untrusted Markdown should set `image_root`. See [docs/configuration.md](docs/configuration.md).
+- **SVG parsing no longer loads external resources**: an untrusted SVG could previously reference local files through `<image href="...">` during parsing. Data URIs still work.
+- **Crate documentation now matches the real schema**: the configuration examples on the docs.rs landing page used keys that no longer exist (`[heading.1]`, `size`, `textcolor`, `fontfamily`) and could not parse against the `deny_unknown_fields` schema. `parse_into_file` also had its documentation attached to the wrong function. A test now parses the documented examples so they cannot drift again.
+- **Three advisories closed**: RUSTSEC-2026-0187 (`lopdf`, stack overflow), RUSTSEC-2026-0185 (`quinn-proto`, memory exhaustion), and RUSTSEC-2026-0009 (`time`, denial of service). `cargo audit` reports zero vulnerabilities.
+- **printpdf 0.9 to 0.11**: collapses `lopdf` to a single `0.44` copy, where two versions previously coexisted, and drops the unmaintained `proc-macro-error` from the tree entirely.
+- **CI covers the optional features and gates on quality**: `fetch` and `svg` gate real code that CI had never compiled. Builds and tests now run across a four-way feature matrix, and the `fmt`, `clippy`, and `cargo audit` jobs block a merge rather than reporting into the void. A weekly scheduled run catches newly published advisories.
+- **Renderer internals reorganised**: network policy and image-path policy moved out of the layout engine into `net_guard`, `net_read`, and `image_policy`. No behavior change.
+- **Whole tree reformatted**: `cargo fmt --all` applied crate-wide for the first time, with the development toolchain pinned so the result is reproducible. Purely mechanical.
+- **Breaking**: `ResolveError` is now `#[non_exhaustive]`, so exhaustive `match`es need a wildcard arm, and `ResolveError::BadToml.source` changed from `toml::de::Error` to `Box<toml::de::Error>`, which shrinks the error type from 160 to 80 bytes. Code that constructs or exhaustively matches this type needs updating. The MSRV is now **1.88**, which the existing `lopdf` dependency already required in practice.
+
 ## [1.5.1] - 2026-07-17
 
 Two rendering fixes: math `\text{…}` now renders non-Latin scripts, and documents with many headings no longer produce corrupt PDFs.
