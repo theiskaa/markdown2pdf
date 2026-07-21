@@ -69,10 +69,8 @@ fn ipv6_blocked(ip: &std::net::Ipv6Addr) -> bool {
         );
         return ipv4_blocked(&v4);
     }
-    // fc00::/7 unique-local and fe80::/10 link-local. `is_unique_local`
-    // and `is_unicast_link_local` are still unstable on our MSRV (1.85),
-    // so the prefixes are matched by hand.
-    (seg[0] & 0xfe00) == 0xfc00 || (seg[0] & 0xffc0) == 0xfe80
+    // fc00::/7 unique-local and fe80::/10 link-local.
+    ip.is_unique_local() || ip.is_unicast_link_local()
 }
 
 fn socket_addr_blocked(sa: &std::net::SocketAddr) -> bool {
