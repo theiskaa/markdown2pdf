@@ -787,13 +787,10 @@ fn collect_inline_footnote_defs(
 }
 
 fn image_is_standalone(tokens: &[Token], idx: usize) -> bool {
-    for tok in tokens.iter().skip(idx + 1) {
-        match tok {
-            Token::Newline | Token::HardBreak => return true,
-            _ => return false,
-        }
+    match tokens.get(idx + 1) {
+        Some(Token::Newline | Token::HardBreak) | None => true,
+        Some(_) => false,
     }
-    true
 }
 
 /// Convert one `Token::ListItem` into a [`ListEntry`], splitting its
