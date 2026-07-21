@@ -550,6 +550,13 @@ fn strip_framing_wrapper(s: &str) -> Option<String> {
         return None;
     }
     let close_start = trimmed.len() - close_lower.len();
+    // The open tag's `>` can land *after* the close tag starts when the
+    // opening tag was never closed — `<p </p>` finds its first `>` at the
+    // very end, so the slice bounds invert. Bail to the verbatim-HTML
+    // fallback rather than slicing.
+    if open_end + 1 > close_start {
+        return None;
+    }
     let inner = trimmed[open_end + 1..close_start].trim().to_string();
     if inner.is_empty() {
         return None;
@@ -1555,5 +1562,49 @@ mod tests {
             .filter(|b| matches!(b, Block::FootnoteDefinitions { .. }))
             .count();
         assert_eq!(tail_count, 1);
+    }
+
+    /// Pins the bounds guard for an unclosed opening tag (`<p </p>`),
+    /// where the first `>` belongs to the closing tag and the slice
+    /// bounds would otherwise invert.
+    #[test]
+    fn unclosed_open_tag_does_not_panic() {
+        assert_eq!(strip_framing_wrapper("<p </p>"), None);
+    }
+
+    #[test]
+    fn unclosed_div_open_tag_does_not_panic() {
+        assert_eq!(strip_framing_wrapper("<div </div>"), None);
+    }
+
+    #[test]
+    fn unclosed_section_open_tag_does_not_panic() {
+        assert_eq!(strip_framing_wrapper("<section </section>"), None);
+    }
+
+    #[test]
+    fn unclosed_figure_open_tag_does_not_panic() {
+        assert_eq!(strip_framing_wrapper("<figure </figure>"), None);
+    }
+
+    #[test]
+    fn well_formed_p_wrapper_still_unwraps() {
+        assert_eq!(
+            strip_framing_wrapper("<p>text</p>"),
+            Some("text".to_string())
+        );
+    }
+
+    #[test]
+    fn wrapper_with_attributes_still_unwraps() {
+        assert_eq!(
+            strip_framing_wrapper("<div class=\"x\">body</div>"),
+            Some("body".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_wrapper_body_returns_none() {
+        assert_eq!(strip_framing_wrapper("<p></p>"), None);
     }
 }

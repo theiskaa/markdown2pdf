@@ -737,3 +737,68 @@ mod misc_robustness {
         }
     }
 }
+
+mod malformed_html_wrappers {
+    use super::*;
+
+    #[test]
+    fn unclosed_p_open_tag() {
+        render_must_not_panic("<p </p>\n");
+    }
+
+    #[test]
+    fn unclosed_div_open_tag() {
+        render_must_not_panic("<div </div>\n");
+    }
+
+    #[test]
+    fn unclosed_wrapper_embedded_in_larger_document() {
+        let md = "# Heading before\n\nSome paragraph before.\n\n<p </p>\n\n## Heading after\n\nSome paragraph after.\n";
+        let bytes = render_must_not_panic(md);
+        assert!(
+            contains_text(&bytes, "Heading before")
+                || contains(&bytes, b"Heading before"),
+            "content before the malformed wrapper was lost"
+        );
+        assert!(
+            contains_text(&bytes, "Heading after")
+                || contains(&bytes, b"Heading after"),
+            "content after the malformed wrapper was lost"
+        );
+    }
+
+    #[test]
+    fn well_formed_wrapper_still_unwraps_inner_markdown() {
+        // Positive control: a properly closed wrapper should still
+        // unwrap and render its inner markdown, not just avoid panicking.
+        //
+        // "bold" alone is a weak signal: if unwrapping silently fails,
+        // the caller falls back to rendering the block VERBATIM as an
+        // HTML code block, and the literal string
+        // `<div>**bold** text</div>` still contains the substring
+        // "bold". So we also assert the raw markup did NOT survive —
+        // that's only true when the wrapper was actually stripped and
+        // `**bold**` was re-lexed as markdown emphasis rather than
+        // drawn as literal text. For these negative checks we require
+        // *both* helpers to agree nothing was found (`&&`, not `||`):
+        // either helper spotting the raw text is enough to prove the
+        // leak happened.
+        let bytes = render_must_not_panic("<div>**bold** text</div>\n");
+        assert!(
+            contains_text(&bytes, "bold") || contains(&bytes, b"bold"),
+            "inner markdown of a well-formed wrapper was lost"
+        );
+        assert!(
+            !contains_text(&bytes, "**bold**") && !contains(&bytes, b"**bold**"),
+            "raw markdown syntax `**bold**` leaked into the output — the \
+             wrapper was not unwrapped and the block fell through to \
+             verbatim HTML rendering"
+        );
+        assert!(
+            !contains_text(&bytes, "<div>") && !contains(&bytes, b"<div>"),
+            "raw `<div>` tag leaked into the output — the wrapper was not \
+             unwrapped and the block fell through to verbatim HTML \
+             rendering"
+        );
+    }
+}
