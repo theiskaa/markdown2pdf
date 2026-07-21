@@ -2395,10 +2395,14 @@ impl<'a> Engine<'a> {
             col_width,
             true,
         );
+        let header_background = s_header.background_color_rgb();
         if self.y_from_top_pt + header_height + self.bottom_margin_pt() > self.page_height_pt() {
             self.advance_column();
         }
         let header_top = self.y_from_top_pt;
+        if let Some(bg) = header_background {
+            self.draw_table_row_background(header_top, header_height, col_width, col_count, bg);
+        }
         self.draw_row(
             headers,
             0,
@@ -2434,6 +2438,15 @@ impl<'a> Engine<'a> {
                 self.advance_column();
                 // Reprint headers on the new column (or page).
                 let header_top = self.y_from_top_pt;
+                if let Some(bg) = header_background {
+                    self.draw_table_row_background(
+                        header_top,
+                        header_height,
+                        col_width,
+                        col_count,
+                        bg,
+                    );
+                }
                 self.draw_row(
                     headers,
                     0,
@@ -2454,19 +2467,12 @@ impl<'a> Engine<'a> {
             // row, first data row left untinted) when configured.
             if let Some(bg) = self.style.table.alternating_row_background {
                 if row_idx % 2 == 1 {
-                    let table_left = self.indent_left_pt;
-                    let table_right = table_left + col_width * col_count as f32;
-                    let page_h = self.page_height_pt();
-                    let fill = rgb_color((bg.r, bg.g, bg.b));
-                    self.close_text_section();
-                    draw_filled_rect(
-                        &mut self.page_ops,
-                        table_left,
+                    self.draw_table_row_background(
                         group_top,
-                        table_right,
-                        group_top + group_height,
-                        fill,
-                        page_h,
+                        group_height,
+                        col_width,
+                        col_count,
+                        (bg.r, bg.g, bg.b),
                     );
                 }
             }
@@ -2492,6 +2498,30 @@ impl<'a> Engine<'a> {
 
         self.letter_spacing_pt = saved_letter_spacing;
         self.advance_y(after_pt);
+    }
+
+    fn draw_table_row_background(
+        &mut self,
+        row_top: f32,
+        row_height: f32,
+        col_width: f32,
+        col_count: usize,
+        bg: (u8, u8, u8),
+    ) {
+        let table_left = self.indent_left_pt;
+        let table_right = table_left + col_width * col_count as f32;
+        let page_h = self.page_height_pt();
+        let fill = rgb_color(bg);
+        self.close_text_section();
+        draw_filled_rect(
+            &mut self.page_ops,
+            table_left,
+            row_top,
+            table_right,
+            row_top + row_height,
+            fill,
+            page_h,
+        );
     }
 
     fn measure_row_height(

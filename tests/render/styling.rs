@@ -1523,6 +1523,29 @@ mod inline_style_application {
         );
     }
 
+    #[test]
+    fn table_header_background_paints_repeated_headers() {
+        let mut md = String::from("| HDRMARK | C2 |\n|---|---|\n");
+        for i in 0..150 {
+            md.push_str(&format!("| row{i} body | val{i} |\n"));
+        }
+        let b = render(
+            &md,
+            r##"
+            [table.header]
+            background_color = "#FFCC00"
+            "##,
+        );
+        let pages = page_count(&b);
+        assert!(pages >= 2, "expected a multi-page table, got {pages}");
+        assert!(
+            count_rect_ops(&b) >= pages,
+            "table header background emitted {} fill rects across {} pages",
+            count_rect_ops(&b),
+            pages
+        );
+    }
+
     // AC1: a header cell spanning two columns renders once, with the
     // covered slot drawing no separate cell.
     #[test]
