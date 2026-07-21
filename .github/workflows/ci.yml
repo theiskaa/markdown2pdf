@@ -7,12 +7,23 @@ on:
     branches: [main, develop]
   # Lets you re-run the CI manually from the Actions tab.
   workflow_dispatch:
+  # Weekly so new security advisories are caught even without a push.
+  # Only the `audit` job runs on this trigger (see its `if:` guards below
+  # on `test`/`fmt`/`clippy`) — the test matrix and lint jobs would just
+  # re-check unchanged code and burn CI minutes for no new signal.
+  schedule:
+    - cron: "0 6 * * 1"
 
 # Cancel in-progress runs of the same workflow on the same branch when
 # new commits are pushed — saves CI minutes during rapid iteration.
+# Scheduled runs are exempt: they share the main-branch concurrency group
+# with ordinary push CI, so without this exemption a push to main while
+# the weekly audit is running would silently cancel it — a cancellation
+# isn't a failure, so nothing would go red and nobody would notice a
+# newly published advisory going uncaught.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -22,8 +33,28 @@ env:
 
 jobs:
   test:
-    name: cargo test
+    name: cargo test (${{ matrix.label }})
     runs-on: ubuntu-latest
+    # Scheduled runs only exist to re-check advisories against unchanged
+    # code (see the `audit` job) — skip the test matrix on that trigger.
+    if: github.event_name != 'schedule'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every feature combination the README tells users to install with.
+        # `fetch` and `svg` gate real code (the `--url` CLI branch, remote
+        # image fetching, SVG rasterization) that default-features-only CI
+        # would otherwise never compile.
+        include:
+          - features: ""
+            label: default
+          - features: "--features fetch"
+            label: fetch
+          - features: "--features svg"
+            label: svg
+          - features: "--all-features"
+            label: all
 
     steps:
       - name: Checkout
@@ -34,19 +65,110 @@ jobs:
 
       - name: Cache cargo registry + build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.label }}
 
       - name: Build
-        run: cargo build --all-targets --verbose
+        run: cargo build --all-targets --verbose ${{ matrix.features }}
 
       - name: Test (lib unit + integration + spec + stress + doc)
-        run: cargo test --all-targets --verbose
+        run: cargo test --all-targets --verbose ${{ matrix.features }}
 
       - name: Doc tests
+        # Doesn't vary by feature — only run once, on the default entry.
+        if: matrix.features == ''
         run: cargo test --doc --verbose
 
       - name: CommonMark spec — surface full report in CI log
         # Same suite as above, but re-runs the spec target with the
         # per-section breakdown captured in the workflow log so any
         # regression in spec compliance is visible without re-running
-        # CI locally.
+        # CI locally. Doesn't vary by feature — only run once, on the
+        # default entry.
+        if: matrix.features == ''
         run: cargo test --test commonmark_spec -- --nocapture
+
+  fmt:
+    name: cargo fmt --check
+    runs-on: ubuntu-latest
+    # Scheduled runs only exist to re-check advisories against unchanged
+    # code (see the `audit` job) — skip formatting checks on that trigger.
+    if: github.event_name != 'schedule'
+    # Non-blocking: the tree predates any formatting gate and `cargo fmt
+    # --all` would currently rewrite ~3950 lines across 115 files. Flipping
+    # this to blocking is a deliberate maintainer decision that should land
+    # as its own formatting-only commit, not as a side effect of CI config.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    # Scheduled runs only exist to re-check advisories against unchanged
+    # code (see the `audit` job) — skip linting on that trigger.
+    if: github.event_name != 'schedule'
+    # Non-blocking for now: the crate has never been linted, so the
+    # initial backlog would fail every PR. The job exists to surface
+    # findings and to make the backlog visible; flip
+    # `continue-on-error` off once it's burned down.
+    continue-on-error: true
+
+    # The workflow-level RUSTFLAGS="-D warnings" (needed by `test`) would
+    # otherwise leak in here and promote every warn-level clippy lint to
+    # `error:`, making this advisory job's log misleadingly read "N errors"
+    # and silently inflating what "burn down the backlog" means. Do NOT
+    # delete this override — it is deliberate, not a stray empty value.
+    env:
+      RUSTFLAGS: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry + build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (all targets, all features)
+        run: cargo clippy --all-targets --all-features
+
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        # Fetches a prebuilt binary instead of compiling cargo-audit's
+        # dependency tree (advisory parsing, index client, semver) from
+        # source on every run, which used to be the most expensive step
+        # in the workflow relative to its value.
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies
+        # RUSTSEC-2024-0370 (proc-macro-error unmaintained) is reached only
+        # through printpdf → allsorts → ouroboros and is build-time only.
+        # We can't upgrade it from here; re-check when printpdf updates.
+        run: cargo audit --ignore RUSTSEC-2024-0370
