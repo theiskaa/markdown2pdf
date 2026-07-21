@@ -70,3 +70,6 @@ mod columns;
 
 #[path = "render/widow_orphan.rs"]
 mod widow_orphan;
+
+#[path = "render/net_guard.rs"]
+mod net_guard;

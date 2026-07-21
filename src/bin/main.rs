@@ -6,6 +6,41 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
+/// `Read` adapter enforcing a hard wall-clock deadline across every
+/// read call, on top of (not instead of) reqwest's own idle timeout.
+/// reqwest's blocking `.timeout()` behaves as an IDLE timeout while
+/// reading a response body — any forward progress resets it — so a
+/// server trickling data slower than the size cap but faster than the
+/// idle timeout can keep a `read_to_end` alive far longer than the
+/// configured timeout suggests. This wrapper fails the read once
+/// wall-clock time passes `deadline`, bounding total transfer time to
+/// roughly the deadline plus one more idle-timeout period: the read
+/// straddling the deadline can still block up to the idle timeout
+/// before this adapter gets a chance to check the clock again.
+/// Bounded and honest, not an instantaneous cutoff. Mirrors
+/// `markdown2pdf`'s own `DeadlineReader` in
+/// `src/lib/render/layout.rs`; duplicated here rather than shared
+/// because this binary doesn't otherwise depend on that private
+/// library item.
+#[cfg(feature = "fetch")]
+struct DeadlineReader<R> {
+    inner: R,
+    deadline: std::time::Instant,
+}
+
+#[cfg(feature = "fetch")]
+impl<R: std::io::Read> std::io::Read for DeadlineReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if std::time::Instant::now() >= self.deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "fetch exceeded total time budget",
+            ));
+        }
+        self.inner.read(buf)
+    }
+}
+
 /// Split a dimension token into its numeric part and unit suffix.
 /// `"2.5cm"` -> `(2.5, "cm")`, `"25"` -> `(25.0, "")`.
 fn split_num_unit(s: &str) -> Result<(f64, &str), String> {
@@ -169,14 +204,56 @@ fn get_markdown_input(matches: &clap::ArgMatches) -> Result<String, AppError> {
     // is compiled in. Querying clap for an argument id that was never
     // defined panics, so this whole branch must be cfg-gated — in a
     // non-fetch build the `url` id genuinely does not exist.
+    //
+    // No private-host guard here (unlike the library's remote-image
+    // fetch): this URL is typed by the operator running the CLI, not
+    // pulled from an untrusted document, so an SSRF guard would only
+    // get in the way of a legitimate `--url http://localhost:8080/doc.md`
+    // workflow.
     #[cfg(feature = "fetch")]
     if let Some(url) = matches.get_one::<String>("url") {
-        let body = Client::new()
+        const MAX_BYTES: u64 = 10 * 1024 * 1024;
+        const TIMEOUT_SECS: u64 = 15;
+
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
+            .build()
+            .map_err(|e| AppError::NetworkError(e.to_string()))?;
+        let resp = client
             .get(url)
             .send()
-            .map_err(|e| AppError::NetworkError(e.to_string()))?
-            .text()
             .map_err(|e| AppError::NetworkError(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(AppError::NetworkError(format!("HTTP {}", resp.status())));
+        }
+
+        use std::io::Read;
+        let mut buf = Vec::new();
+        // Hard wall-clock deadline across the whole body read — see
+        // `DeadlineReader`'s doc comment for why reqwest's own
+        // `.timeout()` doesn't already bound this. Read one byte past
+        // the cap so an over-size body is detectable without ever
+        // buffering the whole thing.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIMEOUT_SECS);
+        let bounded = DeadlineReader {
+            inner: resp,
+            deadline,
+        };
+        let mut limited = bounded.take(MAX_BYTES + 1);
+        limited
+            .read_to_end(&mut buf)
+            .map_err(|e| AppError::NetworkError(e.to_string()))?;
+        if buf.len() as u64 > MAX_BYTES {
+            return Err(AppError::NetworkError(format!(
+                "response from {} exceeds the {} byte cap",
+                url, MAX_BYTES
+            )));
+        }
+
+        // A non-UTF-8 response is not markdown; don't silently
+        // lossy-convert it into something that looks plausible.
+        let body = String::from_utf8(buf)
+            .map_err(|e| AppError::NetworkError(format!("response is not valid UTF-8: {}", e)))?;
         return Ok(body);
     }
 
