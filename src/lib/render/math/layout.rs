@@ -193,9 +193,7 @@ impl<'f> Ctx<'f> {
         match st {
             Display | DisplayCramped | Text | TextCramped => self.base_pt,
             Script | ScriptCramped => self.base_pt * self.font.c.script_percent,
-            ScriptScript | ScriptScriptCramped => {
-                self.base_pt * self.font.c.script_script_percent
-            }
+            ScriptScript | ScriptScriptCramped => self.base_pt * self.font.c.script_script_percent,
         }
     }
 
@@ -271,9 +269,7 @@ impl<'f> Ctx<'f> {
             Node::Delimited { left, right, body } => {
                 (self.delimited(*left, *right, body, st), Class::Inner)
             }
-            Node::SizedDelim { ch, class, level } => {
-                (self.sized_delim(*ch, *level, st), *class)
-            }
+            Node::SizedDelim { ch, class, level } => (self.sized_delim(*ch, *level, st), *class),
             Node::Accent {
                 mark,
                 stretchy,
@@ -290,7 +286,10 @@ impl<'f> Ctx<'f> {
                 left,
                 right,
                 align_left,
-            } => (self.array(rows, *left, *right, *align_left, st), Class::Inner),
+            } => (
+                self.array(rows, *left, *right, *align_left, st),
+                Class::Inner,
+            ),
         }
     }
 
@@ -331,9 +330,24 @@ impl<'f> Ctx<'f> {
         let h = 0.62 * size;
         let t = 0.045 * size;
         // Hollow rectangle built from four filled rules.
-        f.rules.push(Rule { x, y_top: h, w, thickness: t });
-        f.rules.push(Rule { x, y_top: t, w, thickness: t });
-        f.rules.push(Rule { x, y_top: h, w: t, thickness: h });
+        f.rules.push(Rule {
+            x,
+            y_top: h,
+            w,
+            thickness: t,
+        });
+        f.rules.push(Rule {
+            x,
+            y_top: t,
+            w,
+            thickness: t,
+        });
+        f.rules.push(Rule {
+            x,
+            y_top: h,
+            w: t,
+            thickness: h,
+        });
         f.rules.push(Rule {
             x: x + w - t,
             y_top: h,
@@ -480,7 +494,11 @@ impl<'f> Ctx<'f> {
         let disp = st.is_display();
         let c = &self.font.c;
         let s = |v: f32| self.font.scale(v, size);
-        let rule = if bar { s(c.fraction_rule_thickness) } else { 0.0 };
+        let rule = if bar {
+            s(c.fraction_rule_thickness)
+        } else {
+            0.0
+        };
         let axis = s(c.axis_height);
         let (nu0, de0, gn0, gd0) = match (bar, disp) {
             (true, true) => (
@@ -612,8 +630,7 @@ impl<'f> Ctx<'f> {
             let idf = self.list(idx, Style::ScriptScript);
             let kb = s(c.radical_kern_before_degree);
             let ka = s(c.radical_kern_after_degree);
-            let raise =
-                (c.radical_degree_bottom_raise_percent * (vinculum_y + rule)).max(0.0);
+            let raise = (c.radical_degree_bottom_raise_percent * (vinculum_y + rule)).max(0.0);
             f = f.shift(kb + idf.w + ka, 0.0);
             f.absorb(idf.clone().shift(0.0, raise), kb);
             left = kb + idf.w + ka;
@@ -626,13 +643,7 @@ impl<'f> Ctx<'f> {
         f
     }
 
-    fn scripts(
-        &self,
-        base: &Node,
-        sup: Option<&[Node]>,
-        sub: Option<&[Node]>,
-        st: Style,
-    ) -> Frag {
+    fn scripts(&self, base: &Node, sup: Option<&[Node]>, sub: Option<&[Node]>, st: Style) -> Frag {
         // Big operators / operator names with limits stack their
         // scripts above and below in display style.
         let limits = match base {
@@ -688,8 +699,9 @@ impl<'f> Ctx<'f> {
                 // Don't let the superscript hang too low: lift the
                 // whole pair (preserving the gap) until the sup bottom
                 // reaches superscriptBottomMaxWithSubscript.
-                let max_bottom =
-                    self.font.scale(c.superscript_bottom_max_with_subscript, size);
+                let max_bottom = self
+                    .font
+                    .scale(c.superscript_bottom_max_with_subscript, size);
                 let bottom = *u - supf.desc;
                 if bottom < max_bottom {
                     let lift = max_bottom - bottom;
@@ -756,13 +768,7 @@ impl<'f> Ctx<'f> {
         f
     }
 
-    fn delimited(
-        &self,
-        left: Option<char>,
-        right: Option<char>,
-        body: &[Node],
-        st: Style,
-    ) -> Frag {
+    fn delimited(&self, left: Option<char>, right: Option<char>, body: &[Node], st: Style) -> Frag {
         let size = self.size(st);
         let inner = self.list(body, st);
         let axis = self.font.scale(self.font.c.axis_height, size);
@@ -936,9 +942,7 @@ impl<'f> Ctx<'f> {
         };
         let mut f = bf.clone();
         let base_top = bf.asc;
-        let clearance = (base_top
-            - self.font.scale(self.font.c.accent_base_height, size))
-        .max(0.0);
+        let clearance = (base_top - self.font.scale(self.font.c.accent_base_height, size)).max(0.0);
         let acc_y = base_top - clearance + self.font.scale(am.depth(), size);
         f.glyphs.push(PlacedGlyph {
             gid: ag,
@@ -1001,8 +1005,7 @@ impl<'f> Ctx<'f> {
                     w: bf.w,
                     thickness: th,
                 });
-                f.desc = bf.desc + gap + th
-                    + self.font.scale(c.underbar_extra_descender, size);
+                f.desc = bf.desc + gap + th + self.font.scale(c.underbar_extra_descender, size);
             } else if let Some(ch) = under {
                 let g = self.font.glyph_id(ch).unwrap_or(0);
                 let m = self.font.glyph(g);
@@ -1101,7 +1104,6 @@ impl<'f> Ctx<'f> {
         f.desc = f.desc.max(body.desc);
         f
     }
-
 }
 
 /// Unicode Default_Ignorable_Code_Point (the common subset): soft
@@ -1258,7 +1260,9 @@ fn reverse_runs(chars: &mut [char], lvl: &mut [u8], min: u8) {
     let mut i = 0;
     while i < chars.len() {
         if lvl[i] >= min {
-            let j = (i..chars.len()).find(|&k| lvl[k] < min).unwrap_or(chars.len());
+            let j = (i..chars.len())
+                .find(|&k| lvl[k] < min)
+                .unwrap_or(chars.len());
             chars[i..j].reverse();
             lvl[i..j].reverse();
             i = j;
@@ -1485,7 +1489,10 @@ mod tests {
             GlyphFont::Text(0),
             "{probe} must come from the fallback face"
         );
-        assert!(f.rules.is_empty(), "covered char must not draw a notdef box");
+        assert!(
+            f.rules.is_empty(),
+            "covered char must not draw a notdef box"
+        );
         assert!(f.w > 0.0 && f.w.is_finite() && f.asc > 0.0);
         assert!(f.glyphs[1].x > f.glyphs[0].x, "fallback glyph advances");
     }
@@ -1579,7 +1586,10 @@ mod tests {
         // Logical اب ; visually ب must land left of ا.
         let f = ctx.list(&parse("\\text{\u{0627}\u{0628}}"), Text);
         assert_eq!(f.glyphs.len(), 2);
-        assert_eq!(f.glyphs[0].gid, beh, "leftmost glyph is the logically-second letter");
+        assert_eq!(
+            f.glyphs[0].gid, beh,
+            "leftmost glyph is the logically-second letter"
+        );
         assert_eq!(f.glyphs[1].gid, alef);
         assert!(f.glyphs[0].x < f.glyphs[1].x);
     }
@@ -1664,7 +1674,7 @@ mod tests {
         for src in &inputs {
             for display in [true, false] {
                 let warned = RefCell::new(HashSet::new());
-        let ctx = Ctx::new(&font, &[], &warned, 11.0);
+                let ctx = Ctx::new(&font, &[], &warned, 11.0);
                 let f = ctx.list(&parse(src), if display { Display } else { Text });
                 let tag = format!("{src:?} display={display}");
                 assert!(
@@ -1674,7 +1684,10 @@ mod tests {
                     f.asc,
                     f.desc
                 );
-                assert!(f.w >= 0.0 && f.asc >= 0.0 && f.desc >= 0.0, "negative for {tag}");
+                assert!(
+                    f.w >= 0.0 && f.asc >= 0.0 && f.desc >= 0.0,
+                    "negative for {tag}"
+                );
                 for g in &f.glyphs {
                     assert!(
                         g.x.is_finite() && g.y.is_finite() && g.size.is_finite(),
@@ -1771,7 +1784,10 @@ mod tests {
         let bin = lay("a+b", false).w;
         let rel = lay("a=b", false).w;
         assert!(bin > plain, "+ must add binary spacing ({bin} vs {plain})");
-        assert!(rel > plain, "= must add relation spacing ({rel} vs {plain})");
+        assert!(
+            rel > plain,
+            "= must add relation spacing ({rel} vs {plain})"
+        );
     }
 
     #[test]
@@ -1823,10 +1839,7 @@ mod tests {
     #[test]
     fn delimiters_grow_with_their_content() {
         let small = lay("\\left( x \\right)", true);
-        let tall = lay(
-            "\\left( \\frac{\\frac{a}{b}}{\\frac{c}{d}} \\right)",
-            true,
-        );
+        let tall = lay("\\left( \\frac{\\frac{a}{b}}{\\frac{c}{d}} \\right)", true);
         assert!(
             tall.asc + tall.desc > 2.0 * (small.asc + small.desc),
             "fences must grow to a tall body ({} vs {})",
@@ -1886,11 +1899,7 @@ mod tests {
     fn fraction_rule_spans_the_wider_part() {
         let f = lay("\\frac{a+b+c+d}{x}", true);
         let rule = f.rules[0];
-        let widest = f
-            .glyphs
-            .iter()
-            .map(|g| g.x)
-            .fold(0.0_f32, f32::max);
+        let widest = f.glyphs.iter().map(|g| g.x).fold(0.0_f32, f32::max);
         // The bar must reach at least to the rightmost glyph it spans.
         assert!(
             rule.x + rule.w >= widest,

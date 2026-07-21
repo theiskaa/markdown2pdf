@@ -68,7 +68,11 @@ fn four_space_indent_is_code_block_not_html() {
     // 4-space indent → indented code block beats HTML block.
     let tokens = parse("    <!DOCTYPE html>\n");
     assert!(first_html_block(&tokens).is_none());
-    assert!(tokens.iter().any(|t| matches!(t, Token::Code { block: true, .. })));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code { block: true, .. }))
+    );
 }
 
 #[test]

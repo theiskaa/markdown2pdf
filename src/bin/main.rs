@@ -138,17 +138,11 @@ fn build_overrides(m: &clap::ArgMatches) -> Result<Option<String>, AppError> {
     if let Some(vars) = m.get_many::<String>("var") {
         for kv in vars {
             let (key, value) = kv.split_once('=').ok_or_else(|| {
-                AppError::Conversion(format!(
-                    "-V expects KEY=VALUE, got `{}`",
-                    kv
-                ))
+                AppError::Conversion(format!("-V expects KEY=VALUE, got `{}`", kv))
             })?;
             let key = key.trim();
             if key.is_empty() {
-                return Err(AppError::Conversion(format!(
-                    "-V key is empty in `{}`",
-                    kv
-                )));
+                return Err(AppError::Conversion(format!("-V key is empty in `{}`", kv)));
             }
             lines.push(format!("{} = {}", key, toml_value(value)));
         }
@@ -222,8 +216,7 @@ fn get_markdown_input(matches: &clap::ArgMatches) -> Result<String, AppError> {
         // past the cap so an over-size body is detectable without
         // ever buffering the whole thing.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIMEOUT_SECS);
-        let buf = net_read::read_capped_with_deadline(resp, deadline)
-            .map_err(AppError::Network)?;
+        let buf = net_read::read_capped_with_deadline(resp, deadline).map_err(AppError::Network)?;
         if buf.len() as u64 > net_read::MAX_FETCH_BYTES {
             return Err(AppError::Network(format!(
                 "response from {} exceeds the {} byte cap",
@@ -307,9 +300,10 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         .map(PathBuf::from)
         .or_else(discover_config_file);
     let config_source = match &config_path {
-        Some(p) => markdown2pdf::config::ConfigSource::File(p.to_str().ok_or_else(|| {
-            AppError::Path("config path is not valid UTF-8".to_string())
-        })?),
+        Some(p) => markdown2pdf::config::ConfigSource::File(
+            p.to_str()
+                .ok_or_else(|| AppError::Path("config path is not valid UTF-8".to_string()))?,
+        ),
         None => markdown2pdf::config::ConfigSource::Default,
     };
 
@@ -324,8 +318,8 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             overrides.as_deref(),
         )
         .map_err(|e| AppError::Conversion(e.to_string()))?;
-        let toml = toml::to_string_pretty(&style)
-            .map_err(|e| AppError::Conversion(e.to_string()))?;
+        let toml =
+            toml::to_string_pretty(&style).map_err(|e| AppError::Conversion(e.to_string()))?;
         println!("{}", toml);
         return Ok(());
     }
@@ -416,7 +410,10 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             if warnings.is_empty() {
                 println!("No issues detected. Run without --dry-run to generate PDF.");
             } else {
-                println!("{} warning(s) found. Review above and run without --dry-run to generate PDF anyway.", warnings.len());
+                println!(
+                    "{} warning(s) found. Review above and run without --dry-run to generate PDF anyway.",
+                    warnings.len()
+                );
             }
             return Ok(());
         }
@@ -443,9 +440,10 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
             eprintln!("   Config: {}", path.display());
         }
         if let Some(cfg) = &font_config
-            && let Some(font) = &cfg.default_font {
-                eprintln!("   Font: {}", font);
-            }
+            && let Some(font) = &cfg.default_font
+        {
+            eprintln!("   Font: {}", font);
+        }
     }
 
     markdown2pdf::parse_into_file_with_style(
@@ -460,14 +458,15 @@ fn run(matches: clap::ArgMatches) -> Result<(), AppError> {
         println!("Successfully saved PDF to {}", output_path_str);
 
         if verbosity == Verbosity::Verbose
-            && let Ok(metadata) = fs::metadata(output_path_str) {
-                let size_kb = metadata.len() as f64 / 1024.0;
-                if size_kb < 1024.0 {
-                    println!("   Size: {:.1} KB", size_kb);
-                } else {
-                    println!("   Size: {:.2} MB", size_kb / 1024.0);
-                }
+            && let Ok(metadata) = fs::metadata(output_path_str)
+        {
+            let size_kb = metadata.len() as f64 / 1024.0;
+            if size_kb < 1024.0 {
+                println!("   Size: {:.1} KB", size_kb);
+            } else {
+                println!("   Size: {:.2} MB", size_kb / 1024.0);
             }
+        }
     }
 
     Ok(())

@@ -6,7 +6,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn has_hr(tokens: &[Token]) -> bool {
     tokens.iter().any(|t| matches!(t, Token::HorizontalRule))
 }

@@ -7,11 +7,15 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn first_code_block(input: &str) -> (String, String) {
     let tokens = parse(input);
-    let Some(Token::Code { language, content, block: true }) =
-        tokens.iter().find(|t| matches!(t, Token::Code { block: true, .. }))
+    let Some(Token::Code {
+        language,
+        content,
+        block: true,
+    }) = tokens
+        .iter()
+        .find(|t| matches!(t, Token::Code { block: true, .. }))
     else {
         panic!("expected fenced/indented Code block, got {:?}", tokens);
     };
@@ -99,7 +103,10 @@ fn fenced_code_inside_blockquote() {
     let Some(Token::BlockQuote(body)) = tokens.first() else {
         panic!("expected BlockQuote, got {:?}", tokens);
     };
-    assert!(body.iter().any(|t| matches!(t, Token::Code { block: true, .. })));
+    assert!(
+        body.iter()
+            .any(|t| matches!(t, Token::Code { block: true, .. }))
+    );
 }
 
 #[test]

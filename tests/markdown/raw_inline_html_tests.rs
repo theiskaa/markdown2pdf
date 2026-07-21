@@ -2,12 +2,13 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn open_tag_inline() {
     let tokens = parse("text <span> more");
     assert!(
-        tokens.iter().any(|t| matches!(t, Token::HtmlInline(s) if s == "<span>")),
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::HtmlInline(s) if s == "<span>")),
         "got {:?}",
         tokens
     );
@@ -17,7 +18,9 @@ fn open_tag_inline() {
 fn closing_tag_inline() {
     let tokens = parse("text </span> more");
     assert!(
-        tokens.iter().any(|t| matches!(t, Token::HtmlInline(s) if s == "</span>")),
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::HtmlInline(s) if s == "</span>")),
         "got {:?}",
         tokens
     );
@@ -40,7 +43,9 @@ fn open_tag_with_attribute() {
 fn open_tag_self_closing() {
     let tokens = parse("text <br/>");
     assert!(
-        tokens.iter().any(|t| matches!(t, Token::HtmlInline(s) if s.contains("br"))),
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::HtmlInline(s) if s.contains("br"))),
         "got {:?}",
         tokens
     );
@@ -85,5 +90,9 @@ fn surrounding_text_preserved() {
         .iter()
         .filter(|t| matches!(t, Token::HtmlInline(_)))
         .count();
-    assert_eq!(html_count, 2, "expected 2 HtmlInline tokens, got {:?}", tokens);
+    assert_eq!(
+        html_count, 2,
+        "expected 2 HtmlInline tokens, got {:?}",
+        tokens
+    );
 }

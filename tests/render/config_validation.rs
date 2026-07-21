@@ -6,9 +6,7 @@
 //!    valid PDF: bad config degrades to the default theme, hostile
 //!    numerics are clamped so the renderer never hangs or crashes.
 
-use markdown2pdf::config::{
-    ConfigSource, load_config_strict, load_config_strict_with_overrides,
-};
+use markdown2pdf::config::{ConfigSource, load_config_strict, load_config_strict_with_overrides};
 use markdown2pdf::styling::ResolveError;
 
 use super::common::*;
@@ -18,9 +16,8 @@ use super::common::*;
 /// up as a failed assertion.
 fn must_be_bad_toml(cfg: &str) {
     let cfg = cfg.to_string();
-    let result = std::panic::catch_unwind(move || {
-        load_config_strict(ConfigSource::Embedded(&cfg), None)
-    });
+    let result =
+        std::panic::catch_unwind(move || load_config_strict(ConfigSource::Embedded(&cfg), None));
     let result = result.expect("config parse panicked instead of erroring");
     assert!(
         matches!(result, Err(ResolveError::BadToml { .. })),
@@ -84,9 +81,7 @@ mod color_errors_are_typed {
 
     #[test]
     fn struct_unknown_field() {
-        must_be_bad_toml(
-            "[paragraph]\ntext_color = { r = 1, g = 2, b = 3, a = 4 }\n",
-        );
+        must_be_bad_toml("[paragraph]\ntext_color = { r = 1, g = 2, b = 3, a = 4 }\n");
     }
 
     #[test]
@@ -96,16 +91,12 @@ mod color_errors_are_typed {
 
     #[test]
     fn struct_value_over_255() {
-        must_be_bad_toml(
-            "[paragraph]\ntext_color = { r = 300, g = 0, b = 0 }\n",
-        );
+        must_be_bad_toml("[paragraph]\ntext_color = { r = 300, g = 0, b = 0 }\n");
     }
 
     #[test]
     fn struct_negative_value() {
-        must_be_bad_toml(
-            "[paragraph]\ntext_color = { r = -1, g = 0, b = 0 }\n",
-        );
+        must_be_bad_toml("[paragraph]\ntext_color = { r = -1, g = 0, b = 0 }\n");
     }
 
     #[test]
@@ -139,10 +130,7 @@ mod bad_color_soft_fails_to_default {
 
     #[test]
     fn unknown_field_still_renders() {
-        render_is_valid(
-            "Body text.",
-            "[paragraph]\nnonexistent_field = 42\n",
-        );
+        render_is_valid("Body text.", "[paragraph]\nnonexistent_field = 42\n");
     }
 }
 
@@ -171,10 +159,7 @@ mod numeric_clamping {
     #[test]
     fn huge_font_size_does_not_crash() {
         // 5000pt text overflows every page but must not panic.
-        render_is_valid(
-            "Huge text here.",
-            "[paragraph]\nfont_size_pt = 5000.0\n",
-        );
+        render_is_valid("Huge text here.", "[paragraph]\nfont_size_pt = 5000.0\n");
     }
 
     #[test]
@@ -203,10 +188,7 @@ mod numeric_clamping {
 
     #[test]
     fn negative_padding_does_not_crash() {
-        render_is_valid(
-            "Padded block content.",
-            "[blockquote]\npadding = -20.0\n",
-        );
+        render_is_valid("Padded block content.", "[blockquote]\npadding = -20.0\n");
     }
 
     #[test]
@@ -218,9 +200,11 @@ mod numeric_clamping {
     fn clamped_font_size_resolves_to_positive() {
         // Verify the clamp actually fires at resolve time, not just
         // that render survives.
-        let style =
-            load_config_strict(ConfigSource::Embedded("[paragraph]\nfont_size_pt = -10.0\n"), None)
-                .expect("config should resolve (clamp, not error)");
+        let style = load_config_strict(
+            ConfigSource::Embedded("[paragraph]\nfont_size_pt = -10.0\n"),
+            None,
+        )
+        .expect("config should resolve (clamp, not error)");
         assert!(
             style.paragraph.font_size_pt > 0.0,
             "negative font size must clamp to a positive value, got {}",
@@ -230,9 +214,11 @@ mod numeric_clamping {
 
     #[test]
     fn clamped_line_height_resolves_to_positive() {
-        let style =
-            load_config_strict(ConfigSource::Embedded("[paragraph]\nline_height = -1.0\n"), None)
-                .expect("config should resolve");
+        let style = load_config_strict(
+            ConfigSource::Embedded("[paragraph]\nline_height = -1.0\n"),
+            None,
+        )
+        .expect("config should resolve");
         assert!(
             style.paragraph.line_height > 0.0,
             "negative line height must clamp positive, got {}",
@@ -242,9 +228,11 @@ mod numeric_clamping {
 
     #[test]
     fn clamped_padding_resolves_nonnegative() {
-        let style =
-            load_config_strict(ConfigSource::Embedded("[blockquote]\npadding = -30.0\n"), None)
-                .expect("config should resolve");
+        let style = load_config_strict(
+            ConfigSource::Embedded("[blockquote]\npadding = -30.0\n"),
+            None,
+        )
+        .expect("config should resolve");
         let p = &style.blockquote.padding;
         assert!(
             p.top >= 0.0 && p.right >= 0.0 && p.bottom >= 0.0 && p.left >= 0.0,
@@ -518,7 +506,10 @@ mod geometry_field_extremes {
 
     #[test]
     fn horizontal_rule_extremes() {
-        render_is_valid("---\n", "[horizontal_rule]\nthickness_pt = 1e39\nwidth_pct = 1e39\n");
+        render_is_valid(
+            "---\n",
+            "[horizontal_rule]\nthickness_pt = 1e39\nwidth_pct = 1e39\n",
+        );
         render_is_valid("---\n", "[horizontal_rule]\nthickness_pt = -50.0\n");
     }
 

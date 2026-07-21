@@ -5,9 +5,7 @@
 //! lower to `ResolvedStyle`. Errors surface through
 //! [`styling::ResolveError`].
 
-use crate::styling::{
-    DocumentConfig, ResolveError, ResolvedStyle, merge::resolve_with_overrides,
-};
+use crate::styling::{DocumentConfig, ResolveError, ResolvedStyle, merge::resolve_with_overrides};
 use std::fs;
 use std::path::Path;
 
@@ -60,8 +58,7 @@ pub fn load_config_strict_with_overrides(
     let overrides: Option<DocumentConfig> = match overrides_toml {
         Some(text) if !text.trim().is_empty() => {
             let parsed = toml::from_str(text).map_err(|source| {
-                let suggestion =
-                    crate::styling::error::unknown_field_suggestion(source.message());
+                let suggestion = crate::styling::error::unknown_field_suggestion(source.message());
                 ResolveError::BadToml {
                     source: Box::new(source),
                     input: text.to_string(),
@@ -76,11 +73,7 @@ pub fn load_config_strict_with_overrides(
 
     let (toml_text, file_for_errors) = match source {
         ConfigSource::Default => {
-            return resolve_with_overrides(
-                DocumentConfig::default(),
-                theme_override,
-                overrides,
-            );
+            return resolve_with_overrides(DocumentConfig::default(), theme_override, overrides);
         }
         ConfigSource::Theme(name) => {
             // CLI `--theme` semantics: caller-supplied theme_override
@@ -223,8 +216,7 @@ mod tests {
     #[test]
     fn overrides_none_equals_no_overrides() {
         let a = load_config_strict(ConfigSource::Default, None).unwrap();
-        let b =
-            load_config_strict_with_overrides(ConfigSource::Default, None, None).unwrap();
+        let b = load_config_strict_with_overrides(ConfigSource::Default, None, None).unwrap();
         assert_eq!(a.paragraph.font_size_pt, b.paragraph.font_size_pt);
         assert_eq!(a.headings[0].font_size_pt, b.headings[0].font_size_pt);
     }
@@ -311,23 +303,16 @@ mod tests {
 
     #[test]
     fn invalid_override_key_is_typed_error_not_panic() {
-        let err = load_config_strict_with_overrides(
-            ConfigSource::Default,
-            None,
-            Some("bogus.key = 1"),
-        );
+        let err =
+            load_config_strict_with_overrides(ConfigSource::Default, None, Some("bogus.key = 1"));
         assert!(matches!(err, Err(ResolveError::BadToml { .. })));
     }
 
     #[test]
     fn empty_override_fragment_is_noop() {
         let a = load_config_strict(ConfigSource::Default, None).unwrap();
-        let b = load_config_strict_with_overrides(
-            ConfigSource::Default,
-            None,
-            Some("   \n  "),
-        )
-        .unwrap();
+        let b = load_config_strict_with_overrides(ConfigSource::Default, None, Some("   \n  "))
+            .unwrap();
         assert_eq!(a.paragraph.font_size_pt, b.paragraph.font_size_pt);
     }
 

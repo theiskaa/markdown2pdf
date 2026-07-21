@@ -5,24 +5,34 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn single_tab_is_4_columns_for_indented_code() {
     let tokens = parse("\tcode\n");
-    assert!(tokens.iter().any(|t| matches!(t, Token::Code { block: true, .. })));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code { block: true, .. }))
+    );
 }
 
 #[test]
 fn mixed_tabs_and_spaces_reach_4_cols() {
     // 2 spaces + 1 tab = 4 cols → indented code.
     let tokens = parse("  \tcode\n");
-    assert!(tokens.iter().any(|t| matches!(t, Token::Code { block: true, .. })));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code { block: true, .. }))
+    );
 }
 
 #[test]
 fn tab_inside_fenced_code_preserved() {
     let tokens = parse("```\nbody\twith\ttabs\n```");
-    let Some(Token::Code { content, .. }) = tokens.iter().find(|t| matches!(t, Token::Code { block: true, .. })) else {
+    let Some(Token::Code { content, .. }) = tokens
+        .iter()
+        .find(|t| matches!(t, Token::Code { block: true, .. }))
+    else {
         panic!("expected fenced Code, got {:?}", tokens);
     };
     assert!(content.contains('\t'));

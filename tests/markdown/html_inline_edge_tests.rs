@@ -58,8 +58,7 @@ fn inline_cdata() {
 #[test]
 fn short_comment_empty_body() {
     let tokens = parse("text <!--> tail");
-    let Some(Token::HtmlComment(body)) =
-        tokens.iter().find(|t| matches!(t, Token::HtmlComment(_)))
+    let Some(Token::HtmlComment(body)) = tokens.iter().find(|t| matches!(t, Token::HtmlComment(_)))
     else {
         panic!("expected HtmlComment, got {:?}", tokens);
     };
@@ -69,8 +68,7 @@ fn short_comment_empty_body() {
 #[test]
 fn short_comment_single_hyphen_body() {
     let tokens = parse("text <!---> tail");
-    let Some(Token::HtmlComment(body)) =
-        tokens.iter().find(|t| matches!(t, Token::HtmlComment(_)))
+    let Some(Token::HtmlComment(body)) = tokens.iter().find(|t| matches!(t, Token::HtmlComment(_)))
     else {
         panic!("expected HtmlComment, got {:?}", tokens);
     };

@@ -158,9 +158,15 @@ fn category(obj: &Object) -> String {
 }
 
 fn name_pair(d: &lopdf::Dictionary, kind: &str) -> String {
-    let ty = d.get(b"Type").ok().and_then(|o| o.as_name().ok())
+    let ty = d
+        .get(b"Type")
+        .ok()
+        .and_then(|o| o.as_name().ok())
         .map(|n| String::from_utf8_lossy(n).into_owned());
-    let sub = d.get(b"Subtype").ok().and_then(|o| o.as_name().ok())
+    let sub = d
+        .get(b"Subtype")
+        .ok()
+        .and_then(|o| o.as_name().ok())
         .map(|n| String::from_utf8_lossy(n).into_owned());
     match (ty.as_deref(), sub.as_deref()) {
         (Some(t), Some(s)) => format!("{kind}:/{t}//{s}"),
@@ -182,7 +188,10 @@ fn approx_obj_bytes(obj: &Object) -> usize {
         Object::Null => 4,
         Object::Array(items) => items.iter().map(approx_obj_bytes).sum::<usize>() + 2,
         Object::Dictionary(d) => {
-            d.iter().map(|(k, v)| k.len() + 2 + approx_obj_bytes(v)).sum::<usize>() + 4
+            d.iter()
+                .map(|(k, v)| k.len() + 2 + approx_obj_bytes(v))
+                .sum::<usize>()
+                + 4
         }
         Object::Stream(_) => 0,
     }
@@ -190,12 +199,13 @@ fn approx_obj_bytes(obj: &Object) -> usize {
 
 fn approx_dict_bytes(obj: &Object) -> usize {
     match obj {
-        Object::Stream(s) => {
-            s.dict.iter().fold(0, |a, (k, v)| a + k.len() + 2 + approx_obj_bytes(v))
-        }
-        Object::Dictionary(d) => {
-            d.iter().fold(0, |a, (k, v)| a + k.len() + 2 + approx_obj_bytes(v))
-        }
+        Object::Stream(s) => s
+            .dict
+            .iter()
+            .fold(0, |a, (k, v)| a + k.len() + 2 + approx_obj_bytes(v)),
+        Object::Dictionary(d) => d
+            .iter()
+            .fold(0, |a, (k, v)| a + k.len() + 2 + approx_obj_bytes(v)),
         _ => approx_obj_bytes(obj),
     }
 }
@@ -210,11 +220,14 @@ fn uncompressed_size(doc_bytes: &[u8]) -> Option<usize> {
     // writes them raw.
     doc.decompress();
     let mut out = Vec::new();
-    let _ = doc.save_with_options(&mut out, SaveOptions {
-        use_object_streams: false,
-        use_xref_streams: false,
-        ..Default::default()
-    });
+    let _ = doc.save_with_options(
+        &mut out,
+        SaveOptions {
+            use_object_streams: false,
+            use_xref_streams: false,
+            ..Default::default()
+        },
+    );
     Some(out.len())
 }
 
@@ -233,7 +246,11 @@ fn audit(label: &str, bytes: &[u8]) {
 
     for (id, obj) in doc.objects.iter() {
         let cat = category(obj);
-        let raw = if let Object::Stream(s) = obj { s.content.len() } else { 0 };
+        let raw = if let Object::Stream(s) = obj {
+            s.content.len()
+        } else {
+            0
+        };
         total_payload += raw;
         let dict = approx_dict_bytes(obj);
         tally.entry(cat).or_default().record(raw, dict);
@@ -254,15 +271,20 @@ fn audit(label: &str, bytes: &[u8]) {
     // page's /Resources/Font dict; tells us whether fonts are
     // shared via the page tree or duplicated per page.
     for pid in doc.page_iter() {
-        if let Ok(font_dict) = doc.get_object(pid).and_then(|p| {
-            p.as_dict().and_then(|d| d.get(b"Resources"))
-        }).and_then(|r| match r {
-            Object::Reference(rid) => doc.get_object(*rid).and_then(|o| o.as_dict()),
-            other => other.as_dict(),
-        }).and_then(|res| res.get(b"Font").and_then(|f| match f {
-            Object::Reference(rid) => doc.get_object(*rid).and_then(|o| o.as_dict()),
-            other => other.as_dict(),
-        })) {
+        if let Ok(font_dict) = doc
+            .get_object(pid)
+            .and_then(|p| p.as_dict().and_then(|d| d.get(b"Resources")))
+            .and_then(|r| match r {
+                Object::Reference(rid) => doc.get_object(*rid).and_then(|o| o.as_dict()),
+                other => other.as_dict(),
+            })
+            .and_then(|res| {
+                res.get(b"Font").and_then(|f| match f {
+                    Object::Reference(rid) => doc.get_object(*rid).and_then(|o| o.as_dict()),
+                    other => other.as_dict(),
+                })
+            })
+        {
             for (_, v) in font_dict.iter() {
                 if let Object::Reference(rid) = v {
                     *font_ref_counter.entry(*rid).or_insert(0) += 1;
@@ -290,14 +312,14 @@ fn audit(label: &str, bytes: &[u8]) {
     );
 
     let mut rows: Vec<(&String, &CategoryTally)> = tally.iter().collect();
-    rows.sort_by(|a, b| {
-        (b.1.raw_bytes + b.1.dict_bytes).cmp(&(a.1.raw_bytes + a.1.dict_bytes))
-    });
+    rows.sort_by_key(|b| std::cmp::Reverse(b.1.raw_bytes + b.1.dict_bytes));
     for (cat, t) in rows.iter().take(10) {
         if t.raw_bytes + t.dict_bytes < 50 {
             continue;
         }
-        let avg = (t.raw_bytes + t.dict_bytes).checked_div(t.count).unwrap_or(0);
+        let avg = (t.raw_bytes + t.dict_bytes)
+            .checked_div(t.count)
+            .unwrap_or(0);
         println!(
             "    {:<28} n={:<4} payload={:<7} dict~{:<7} avg/obj={}",
             cat, t.count, t.raw_bytes, t.dict_bytes, avg,
@@ -324,7 +346,9 @@ fn snippet(bytes: &[u8], limit: usize) -> String {
 }
 
 fn dump_math_forms(label: &str, bytes: &[u8], limit: usize) {
-    let Ok(doc) = Document::load_mem(bytes) else { return };
+    let Ok(doc) = Document::load_mem(bytes) else {
+        return;
+    };
     println!("--- {label}: first {limit} Form XObject streams (inflated) ---");
     let mut shown = 0usize;
     let mut decompressed_total = 0usize;
@@ -337,7 +361,9 @@ fn dump_math_forms(label: &str, bytes: &[u8], limit: usize) {
         if subtype != Some(&b"Form"[..]) {
             continue;
         }
-        let dict_keys: Vec<String> = s.dict.iter()
+        let dict_keys: Vec<String> = s
+            .dict
+            .iter()
             .map(|(k, _)| String::from_utf8_lossy(k).into_owned())
             .collect();
         let inflated = inflate_stream(s);
@@ -352,20 +378,26 @@ fn dump_math_forms(label: &str, bytes: &[u8], limit: usize) {
         );
         println!(
             "      compressed={} B  inflated={} B  ratio={:.1}x",
-            s.content.len(), inflated.len(),
+            s.content.len(),
+            inflated.len(),
             inflated.len() as f64 / s.content.len().max(1) as f64,
         );
         println!("      ops: {}", snippet(&inflated, 240));
         shown += 1;
     }
     if shown > 0 {
-        println!("    (decompressed total for {} forms: {} B)", shown, decompressed_total);
+        println!(
+            "    (decompressed total for {} forms: {} B)",
+            shown, decompressed_total
+        );
     }
     println!();
 }
 
 fn dump_first_page_content(label: &str, bytes: &[u8], take: usize) {
-    let Ok(doc) = Document::load_mem(bytes) else { return };
+    let Ok(doc) = Document::load_mem(bytes) else {
+        return;
+    };
     println!("--- {label}: page content stream (inflated) ---");
     for (_, obj) in doc.objects.iter() {
         let Object::Stream(s) = obj else { continue };
@@ -375,7 +407,8 @@ fn dump_first_page_content(label: &str, bytes: &[u8], take: usize) {
         let inflated = inflate_stream(s);
         println!(
             "    compressed={} B  inflated={} B  ratio={:.1}x",
-            s.content.len(), inflated.len(),
+            s.content.len(),
+            inflated.len(),
             inflated.len() as f64 / s.content.len().max(1) as f64,
         );
         println!("    ops: {}", snippet(&inflated, take));
@@ -448,45 +481,64 @@ fn audit_probe_renders() {
         // limit=0 still prints the header so the reader can see
         // we looked.
         if let Ok(doc) = Document::load_mem(b) {
-            let forms = doc.objects.values().filter(|o| {
-                if let Object::Stream(s) = o {
-                    s.dict.get(b"Subtype").ok().and_then(|x| x.as_name().ok())
-                        == Some(&b"Form"[..])
-                } else {
-                    false
-                }
-            }).count();
+            let forms = doc
+                .objects
+                .values()
+                .filter(|o| {
+                    if let Object::Stream(s) = o {
+                        s.dict.get(b"Subtype").ok().and_then(|x| x.as_name().ok())
+                            == Some(&b"Form"[..])
+                    } else {
+                        false
+                    }
+                })
+                .count();
             println!("  {label}: form count = {forms} (single equation = 5 forms)");
         }
     }
     if let Some((label, b)) = renders.iter().find(|(l, _)| l == "math_same_eq_x10")
-        && let Ok(doc) = Document::load_mem(b) {
-            let forms = doc.objects.values().filter(|o| {
+        && let Ok(doc) = Document::load_mem(b)
+    {
+        let forms = doc
+            .objects
+            .values()
+            .filter(|o| {
                 if let Object::Stream(s) = o {
-                    s.dict.get(b"Subtype").ok().and_then(|x| x.as_name().ok())
-                        == Some(&b"Form"[..])
+                    s.dict.get(b"Subtype").ok().and_then(|x| x.as_name().ok()) == Some(&b"Form"[..])
                 } else {
                     false
                 }
-            }).count();
-            println!("  {label}: form count = {forms} (single equation = 5 forms; \
-                      with cross-eq dedup expected ~5, without ~50)");
-        }
+            })
+            .count();
+        println!(
+            "  {label}: form count = {forms} (single equation = 5 forms; \
+                      with cross-eq dedup expected ~5, without ~50)"
+        );
+    }
     // Operator-pattern stats on the worst content-stream cases.
-    for label in ["paragraphs+table", "table_storm", "hr_storm",
-                  "admonitions_x10", "page_storm_50"] {
+    for label in [
+        "paragraphs+table",
+        "table_storm",
+        "hr_storm",
+        "admonitions_x10",
+        "page_storm_50",
+    ] {
         if let Some((_, b)) = renders.iter().find(|(l, _)| l == label)
-            && let Ok(doc) = Document::load_mem(b) {
-                for (_, obj) in doc.objects.iter() {
-                    let Object::Stream(s) = obj else { continue };
-                    if s.dict.get(b"Type").is_ok() || s.dict.get(b"Subtype").is_ok() {
-                        continue;
-                    }
-                    let inflated = inflate_stream(s);
-                    println!("  ops[{label}]: {} (inflated={} B)",
-                             op_pattern_stats(&inflated), inflated.len());
-                    break;
+            && let Ok(doc) = Document::load_mem(b)
+        {
+            for (_, obj) in doc.objects.iter() {
+                let Object::Stream(s) = obj else { continue };
+                if s.dict.get(b"Type").is_ok() || s.dict.get(b"Subtype").is_ok() {
+                    continue;
                 }
+                let inflated = inflate_stream(s);
+                println!(
+                    "  ops[{label}]: {} (inflated={} B)",
+                    op_pattern_stats(&inflated),
+                    inflated.len()
+                );
+                break;
             }
+        }
     }
 }

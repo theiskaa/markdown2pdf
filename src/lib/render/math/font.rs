@@ -9,8 +9,7 @@ use ttf_parser::{Face, GlyphId};
 
 /// STIX Two Math, embedded once. ~820 KB; only pulled into the PDF
 /// when a document actually contains math (see `emit`).
-pub static MATH_FONT_BYTES: &[u8] =
-    include_bytes!("../../../../assets/fonts/STIXTwoMath.otf");
+pub static MATH_FONT_BYTES: &[u8] = include_bytes!("../../../../assets/fonts/STIXTwoMath.otf");
 
 /// A glyph's design-space metrics (font units).
 #[derive(Debug, Clone, Copy)]
@@ -64,7 +63,10 @@ pub enum Stretch {
     /// A vertical stack assembled from `parts` (top → bottom order),
     /// repeating extenders as needed. `overlap` is the minimum
     /// connector overlap between adjacent parts.
-    Assembly { parts: Vec<AssemblyPart>, overlap: f32 },
+    Assembly {
+        parts: Vec<AssemblyPart>,
+        overlap: f32,
+    },
 }
 
 /// The subset of the OpenType MATH constant table the engine uses,
@@ -153,9 +155,7 @@ impl MathFont {
             superscript_bottom_min: v(k.superscript_bottom_min()),
             superscript_baseline_drop_max: v(k.superscript_baseline_drop_max()),
             sub_superscript_gap_min: v(k.sub_superscript_gap_min()),
-            superscript_bottom_max_with_subscript: v(
-                k.superscript_bottom_max_with_subscript(),
-            ),
+            superscript_bottom_max_with_subscript: v(k.superscript_bottom_max_with_subscript()),
             space_after_script: v(k.space_after_script()),
             upper_limit_gap_min: v(k.upper_limit_gap_min()),
             upper_limit_baseline_rise_min: v(k.upper_limit_baseline_rise_min()),
@@ -170,9 +170,7 @@ impl MathFont {
             fraction_num_shift_up: v(k.fraction_numerator_shift_up()),
             fraction_num_display_shift_up: v(k.fraction_numerator_display_style_shift_up()),
             fraction_denom_shift_down: v(k.fraction_denominator_shift_down()),
-            fraction_denom_display_shift_down: v(
-                k.fraction_denominator_display_style_shift_down(),
-            ),
+            fraction_denom_display_shift_down: v(k.fraction_denominator_display_style_shift_down()),
             fraction_num_gap_min: v(k.fraction_numerator_gap_min()),
             fraction_num_display_gap_min: v(k.fraction_num_display_style_gap_min()),
             fraction_rule_thickness: v(k.fraction_rule_thickness()),
@@ -190,8 +188,7 @@ impl MathFont {
             radical_extra_ascender: v(k.radical_extra_ascender()),
             radical_kern_before_degree: v(k.radical_kern_before_degree()),
             radical_kern_after_degree: v(k.radical_kern_after_degree()),
-            radical_degree_bottom_raise_percent: k.radical_degree_bottom_raise_percent()
-                as f32
+            radical_degree_bottom_raise_percent: k.radical_degree_bottom_raise_percent() as f32
                 / 100.0,
         };
         Some(MathFont {
@@ -304,7 +301,10 @@ impl MathFont {
                 return var.variant_glyph.0;
             }
         }
-        con.variants.last().map(|v| v.variant_glyph.0).unwrap_or(base)
+        con.variants
+            .last()
+            .map(|v| v.variant_glyph.0)
+            .unwrap_or(base)
     }
 }
 
@@ -452,10 +452,11 @@ mod tests {
         // once (the emitter appends a single `f`); a glyph with no
         // outline (space) yields nothing.
         assert!(matches!(segs.first(), Some(PathSeg::Move(..))));
-        assert!(f
-            .glyph_id(' ')
-            .map(|sp| f.outline(sp).is_empty())
-            .unwrap_or(true));
+        assert!(
+            f.glyph_id(' ')
+                .map(|sp| f.outline(sp).is_empty())
+                .unwrap_or(true)
+        );
     }
 
     #[test]

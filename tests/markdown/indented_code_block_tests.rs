@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn four_space_indented_line_is_code() {
     let tokens = parse("    let x = 5;");
@@ -84,6 +83,10 @@ fn list_item_four_space_indent_is_nesting_not_code() {
         .iter()
         .filter(|t| matches!(t, Token::ListItem { .. }))
         .count();
-    assert!(li_count >= 2, "expected at least 2 list items, got {:?}", tokens);
+    assert!(
+        li_count >= 2,
+        "expected at least 2 list items, got {:?}",
+        tokens
+    );
     assert!(!tokens.iter().any(|t| matches!(t, Token::Code { .. })));
 }

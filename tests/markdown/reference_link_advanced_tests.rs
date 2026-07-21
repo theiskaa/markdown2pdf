@@ -4,10 +4,13 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn link_url_of(tokens: &[Token]) -> Option<String> {
     tokens.iter().find_map(|t| {
-        if let Token::Link { url, .. } = t { Some(url.clone()) } else { None }
+        if let Token::Link { url, .. } = t {
+            Some(url.clone())
+        } else {
+            None
+        }
     })
 }
 

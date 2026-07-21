@@ -8,7 +8,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn basic_single_star() {
     let tokens = parse("*x*");
@@ -112,5 +111,9 @@ fn nested_emphasis_strong_in_em() {
     let Token::Emphasis { content, .. } = &tokens[0] else {
         panic!("expected outer Emphasis, got {:?}", tokens);
     };
-    assert!(content.iter().any(|t| matches!(t, Token::Emphasis { level: 2, .. })));
+    assert!(
+        content
+            .iter()
+            .any(|t| matches!(t, Token::Emphasis { level: 2, .. }))
+    );
 }

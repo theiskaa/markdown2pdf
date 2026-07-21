@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn atx_without_space_is_text() {
     let tokens = parse("#hello");

@@ -6,7 +6,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn atx_heading_interrupts_paragraph() {
     let tokens = parse("paragraph\n# heading\n");
@@ -16,7 +15,11 @@ fn atx_heading_interrupts_paragraph() {
 #[test]
 fn fenced_code_interrupts_paragraph() {
     let tokens = parse("paragraph\n```\ncode\n```\n");
-    assert!(tokens.iter().any(|t| matches!(t, Token::Code { block: true, .. })));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code { block: true, .. }))
+    );
 }
 
 #[test]

@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn collected(input: &str) -> String {
     Token::collect_all_text(&parse(input))
 }
@@ -71,7 +70,14 @@ fn entity_inside_emphasis() {
 fn entity_not_decoded_inside_code_span() {
     // Code spans are literal — entity stays as-is.
     let tokens = parse("`&amp;`");
-    assert_eq!(tokens, vec![Token::Code { language: "".to_string(), content: "&amp;".to_string(), block: false }]);
+    assert_eq!(
+        tokens,
+        vec![Token::Code {
+            language: "".to_string(),
+            content: "&amp;".to_string(),
+            block: false
+        }]
+    );
 }
 
 #[test]
@@ -96,10 +102,7 @@ fn extended_named_entities_decode() {
 #[test]
 fn longest_named_entity_decodes() {
     // 31-char body; verifies the lookahead is wide enough.
-    assert_eq!(
-        collected("&CounterClockwiseContourIntegral;"),
-        "\u{2233}"
-    );
+    assert_eq!(collected("&CounterClockwiseContourIntegral;"), "\u{2233}");
 }
 
 #[test]

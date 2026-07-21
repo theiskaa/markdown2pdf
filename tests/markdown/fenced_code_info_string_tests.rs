@@ -2,15 +2,22 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn fence(input: &str) -> (String, String) {
     let tokens = parse(input);
     for t in &tokens {
-        if let Token::Code { language: lang, content: body, .. } = t {
+        if let Token::Code {
+            language: lang,
+            content: body,
+            ..
+        } = t
+        {
             return (lang.clone(), body.clone());
         }
     }
-    panic!("expected Code token, got {}", Token::slice_to_compact(&tokens));
+    panic!(
+        "expected Code token, got {}",
+        Token::slice_to_compact(&tokens)
+    );
 }
 
 #[test]
@@ -75,9 +82,9 @@ fn backtick_fence_with_backticks_in_info_string_is_inline_span() {
     // dropped; the inline-span fallback includes the info-string text
     // (`bad` literal) inside the span body.
     let tokens = parse("``` `bad` info\nbody\n```");
-    let inline_span_with_info_text = tokens.iter().any(|t| {
-        matches!(t, Token::Code { content: body, .. } if body.contains("bad"))
-    });
+    let inline_span_with_info_text = tokens
+        .iter()
+        .any(|t| matches!(t, Token::Code { content: body, .. } if body.contains("bad")));
     assert!(
         inline_span_with_info_text,
         "expected inline span carrying info-string text, got {}",

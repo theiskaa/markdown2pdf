@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn body(t: &Token) -> &Vec<Token> {
     if let Token::BlockQuote(body) = t {
         body
@@ -31,7 +30,12 @@ fn multiple_lazy_lines_all_join() {
     assert_eq!(tokens.len(), 1, "got {}", Token::slice_to_compact(&tokens));
     let text = Token::collect_all_text(body(&tokens[0]));
     for needle in &["foo", "bar", "baz"] {
-        assert!(text.contains(needle), "{:?} missing from {:?}", needle, text);
+        assert!(
+            text.contains(needle),
+            "{:?} missing from {:?}",
+            needle,
+            text
+        );
     }
 }
 
@@ -42,7 +46,12 @@ fn lazy_mixed_with_marker_lines() {
     assert_eq!(tokens.len(), 1, "got {}", Token::slice_to_compact(&tokens));
     let text = Token::collect_all_text(body(&tokens[0]));
     for needle in &["foo", "bar", "baz"] {
-        assert!(text.contains(needle), "{:?} missing from {:?}", needle, text);
+        assert!(
+            text.contains(needle),
+            "{:?} missing from {:?}",
+            needle,
+            text
+        );
     }
 }
 
@@ -51,7 +60,11 @@ fn blank_line_terminates_lazy() {
     let tokens = parse("> foo\nbar\n\nbaz");
     let q_text = Token::collect_all_text(body(&tokens[0]));
     assert!(q_text.contains("foo") && q_text.contains("bar"));
-    assert!(!q_text.contains("baz"), "blank line didn't stop quote: {:?}", q_text);
+    assert!(
+        !q_text.contains("baz"),
+        "blank line didn't stop quote: {:?}",
+        q_text
+    );
     // baz should appear as a separate top-level token.
     let after = Token::collect_all_text(&tokens[1..]);
     assert!(after.contains("baz"), "baz missing from rest {:?}", after);
@@ -64,7 +77,9 @@ fn thematic_break_interrupts_lazy() {
     assert!(q_text.contains("foo"));
     assert!(!q_text.contains("---"), "thematic leaked in: {:?}", q_text);
     assert!(
-        tokens[1..].iter().any(|t| matches!(t, Token::HorizontalRule)),
+        tokens[1..]
+            .iter()
+            .any(|t| matches!(t, Token::HorizontalRule)),
         "expected HR after quote, got {}",
         Token::slice_to_compact(&tokens)
     );
@@ -77,7 +92,9 @@ fn list_marker_interrupts_lazy() {
     assert!(q_text.contains("foo"));
     assert!(!q_text.contains("bar"), "marker leaked in: {:?}", q_text);
     assert!(
-        tokens[1..].iter().any(|t| matches!(t, Token::ListItem { .. })),
+        tokens[1..]
+            .iter()
+            .any(|t| matches!(t, Token::ListItem { .. })),
         "expected ListItem after quote, got {}",
         Token::slice_to_compact(&tokens)
     );
@@ -90,7 +107,9 @@ fn atx_heading_interrupts_lazy() {
     assert!(q_text.contains("foo"));
     assert!(!q_text.contains("heading"));
     assert!(
-        tokens[1..].iter().any(|t| matches!(t, Token::Heading(_, 1))),
+        tokens[1..]
+            .iter()
+            .any(|t| matches!(t, Token::Heading(_, 1))),
         "expected H1 after quote, got {}",
         Token::slice_to_compact(&tokens)
     );
@@ -121,7 +140,13 @@ fn lazy_in_nested_blockquote_attaches_innermost() {
     // body contains both `foo` and `bar`.
     let inner = outer
         .iter()
-        .find_map(|t| if let Token::BlockQuote(b) = t { Some(b) } else { None })
+        .find_map(|t| {
+            if let Token::BlockQuote(b) = t {
+                Some(b)
+            } else {
+                None
+            }
+        })
         .expect("expected nested BlockQuote");
     let inner_text = Token::collect_all_text(inner);
     assert!(

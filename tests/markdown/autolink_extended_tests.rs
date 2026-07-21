@@ -6,7 +6,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn first_autolink_url(tokens: &[Token]) -> Option<String> {
     tokens.iter().find_map(|t| {
         if let Token::Link { url, .. } = t {
@@ -97,9 +96,16 @@ fn email_without_dot_in_domain_rejected() {
     let tokens = parse("<user@example>");
     // Either rejected (no Link) or accepted as fallback — pin "must not produce
     // a Link with that exact URL".
-    let urls: Vec<_> = tokens.iter().filter_map(|t| {
-        if let Token::Link { url, .. } = t { Some(url.clone()) } else { None }
-    }).collect();
+    let urls: Vec<_> = tokens
+        .iter()
+        .filter_map(|t| {
+            if let Token::Link { url, .. } = t {
+                Some(url.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
     assert!(urls.iter().all(|u| u != "user@example"), "got {:?}", urls);
 }
 
@@ -108,15 +114,25 @@ fn whitespace_inside_angle_brackets_rejected() {
     let tokens = parse("<http://a b>");
     // Either parses as no autolink, or as an autolink without the space —
     // pin the "no autolink with space in URL" contract.
-    let urls: Vec<_> = tokens.iter().filter_map(|t| {
-        if let Token::Link { url, .. } = t { Some(url.clone()) } else { None }
-    }).collect();
+    let urls: Vec<_> = tokens
+        .iter()
+        .filter_map(|t| {
+            if let Token::Link { url, .. } = t {
+                Some(url.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
     assert!(urls.iter().all(|u| !u.contains(' ')), "got {:?}", urls);
 }
 
 #[test]
 fn adjacent_autolinks() {
     let tokens = parse("<http://a:1><http://b:2>");
-    let count = tokens.iter().filter(|t| matches!(t, Token::Link { .. })).count();
+    let count = tokens
+        .iter()
+        .filter(|t| matches!(t, Token::Link { .. }))
+        .count();
     assert_eq!(count, 2);
 }

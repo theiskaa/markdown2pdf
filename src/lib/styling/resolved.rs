@@ -322,4 +322,3 @@ impl Default for ResolvedStyle {
             .expect("bundled `default` theme preset failed to load — please file an issue")
     }
 }
-

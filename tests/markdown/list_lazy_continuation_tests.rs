@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn indented_continuation_belongs_to_item() {
     let input = "- item one\n  continues here\n- item two";
@@ -48,7 +47,10 @@ fn blank_line_ends_list_item() {
     assert_eq!(li_count, 2);
     if let Token::ListItem { content, .. } = &tokens[0] {
         let text = Token::collect_all_text(content);
-        assert!(!text.contains("item two"), "first item should not include second");
+        assert!(
+            !text.contains("item two"),
+            "first item should not include second"
+        );
     }
 }
 
@@ -59,7 +61,10 @@ fn heading_line_terminates_item() {
     assert!(tokens.iter().any(|t| matches!(t, Token::Heading(_, 1))));
     if let Token::ListItem { content, .. } = &tokens[0] {
         let text = Token::collect_all_text(content);
-        assert!(!text.contains("heading"), "heading shouldn't be inside item");
+        assert!(
+            !text.contains("heading"),
+            "heading shouldn't be inside item"
+        );
     }
 }
 
@@ -90,7 +95,10 @@ fn simple_two_items_unchanged() {
     let input = "- a\n- b";
     let tokens = parse(input);
     assert_eq!(
-        tokens.iter().filter(|t| matches!(t, Token::ListItem { .. })).count(),
+        tokens
+            .iter()
+            .filter(|t| matches!(t, Token::ListItem { .. }))
+            .count(),
         2
     );
 }

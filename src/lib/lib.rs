@@ -293,13 +293,15 @@ pub fn parse_into_file_with_style(
 ) -> Result<(), MdpError> {
     let path = path.as_ref();
     if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty() && !parent.exists() {
-            return Err(MdpError::IoError {
-                message: "Output directory does not exist".to_string(),
-                path: parent.display().to_string(),
-                suggestion: format!("Create the directory first: mkdir -p {}", parent.display()),
-            });
-        }
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        return Err(MdpError::IoError {
+            message: "Output directory does not exist".to_string(),
+            path: parent.display().to_string(),
+            suggestion: format!("Create the directory first: mkdir -p {}", parent.display()),
+        });
+    }
 
     let (body, fm) = split_frontmatter(markdown);
     let tokens = parse_markdown(body)?;
@@ -370,13 +372,15 @@ pub fn parse_into_file(
 ) -> Result<(), MdpError> {
     let path = path.as_ref();
     if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty() && !parent.exists() {
-            return Err(MdpError::IoError {
-                message: "Output directory does not exist".to_string(),
-                path: parent.display().to_string(),
-                suggestion: format!("Create the directory first: mkdir -p {}", parent.display()),
-            });
-        }
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        return Err(MdpError::IoError {
+            message: "Output directory does not exist".to_string(),
+            path: parent.display().to_string(),
+            suggestion: format!("Create the directory first: mkdir -p {}", parent.display()),
+        });
+    }
 
     let (body, fm) = split_frontmatter(markdown);
     let tokens = parse_markdown(body)?;

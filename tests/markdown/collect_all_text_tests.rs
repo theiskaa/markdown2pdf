@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn plain_text() {
     let tokens = vec![Token::Text("hello world".to_string())];

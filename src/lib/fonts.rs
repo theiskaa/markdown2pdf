@@ -229,8 +229,12 @@ pub fn find_system_font(name: &str) -> Option<PathBuf> {
 /// `/System/Library/Fonts`) is the macOS winner.
 pub fn default_body_source() -> Option<FontSource> {
     #[cfg(target_os = "macos")]
-    const CANDIDATES: &[&str] =
-        &["Helvetica Neue", "Geneva", "Lucida Grande", "Arial Unicode MS"];
+    const CANDIDATES: &[&str] = &[
+        "Helvetica Neue",
+        "Geneva",
+        "Lucida Grande",
+        "Arial Unicode MS",
+    ];
     #[cfg(target_os = "windows")]
     const CANDIDATES: &[&str] = &["Segoe UI", "Arial", "Tahoma"];
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

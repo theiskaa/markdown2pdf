@@ -49,10 +49,8 @@ fn split_pages(bytes: &[u8], out_dir: &str) -> Vec<String> {
 fn render_full_showcase_and_split_pages() {
     let md = std::fs::read_to_string("/tmp/admonition_full_showcase.md")
         .expect("write /tmp/admonition_full_showcase.md first");
-    let bytes = parse_into_bytes(md, ConfigSource::Default, None)
-        .expect("render must succeed");
-    std::fs::write("/tmp/admonition_full_showcase.pdf", &bytes)
-        .expect("write showcase pdf");
+    let bytes = parse_into_bytes(md, ConfigSource::Default, None).expect("render must succeed");
+    std::fs::write("/tmp/admonition_full_showcase.pdf", &bytes).expect("write showcase pdf");
     let pages = split_pages(&bytes, "/tmp/admonition_pages");
     println!("MAIN SHOWCASE: {} pages", pages.len());
     for p in &pages {
@@ -86,12 +84,8 @@ fn render_full_showcase_and_split_pages() {
         "default", "github", "academic", "minimal", "compact", "modern",
     ] {
         let cfg = format!("theme = \"{theme}\"\n");
-        let bytes = parse_into_bytes(
-            snippet.to_string(),
-            ConfigSource::Embedded(&cfg),
-            None,
-        )
-        .expect("render must succeed");
+        let bytes = parse_into_bytes(snippet.to_string(), ConfigSource::Embedded(&cfg), None)
+            .expect("render must succeed");
         let path = format!("/tmp/admonition_theme_{theme}.pdf");
         std::fs::write(&path, &bytes).expect("write theme pdf");
         println!("THEME {theme}: {path}");

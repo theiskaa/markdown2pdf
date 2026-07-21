@@ -5,10 +5,8 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn first_heading_level(tokens: &[Token]) -> usize {
-    let Some(Token::Heading(_, level)) =
-        tokens.iter().find(|t| matches!(t, Token::Heading(_, _)))
+    let Some(Token::Heading(_, level)) = tokens.iter().find(|t| matches!(t, Token::Heading(_, _)))
     else {
         panic!("expected Heading, got {:?}", tokens);
     };

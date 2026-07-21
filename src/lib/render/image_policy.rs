@@ -213,10 +213,11 @@ mod tests {
             let dir = TempDir::new("dotdot");
             // A real file just outside `dir` so the escape attempt
             // would succeed with a naive (non-canonicalizing) guard.
-            let outside = dir.path().parent().unwrap().join(format!(
-                "m2p_outside_{}.png",
-                std::process::id()
-            ));
+            let outside = dir
+                .path()
+                .parent()
+                .unwrap()
+                .join(format!("m2p_outside_{}.png", std::process::id()));
             std::fs::write(&outside, b"fake").unwrap();
             let rel = std::path::Path::new("..").join(outside.file_name().unwrap());
             let result = resolve_image_path(&rel, Some(dir.path()), true);
@@ -227,13 +228,14 @@ mod tests {
         #[test]
         fn root_absolute_path_outside_root_refused() {
             let dir = TempDir::new("abs_outside");
-            let outside = std::env::temp_dir().join(format!(
-                "m2p_abs_outside_{}.png",
-                std::process::id()
-            ));
+            let outside =
+                std::env::temp_dir().join(format!("m2p_abs_outside_{}.png", std::process::id()));
             std::fs::write(&outside, b"fake").unwrap();
             let result = resolve_image_path(&outside, Some(dir.path()), true);
-            assert!(result.is_err(), "absolute path outside root must be refused");
+            assert!(
+                result.is_err(),
+                "absolute path outside root must be refused"
+            );
             let _ = std::fs::remove_file(&outside);
         }
 
@@ -255,10 +257,8 @@ mod tests {
         #[test]
         fn root_symlink_inside_root_pointing_outside_refused() {
             let dir = TempDir::new("symlink_escape");
-            let outside_target = std::env::temp_dir().join(format!(
-                "m2p_symlink_target_{}.png",
-                std::process::id()
-            ));
+            let outside_target =
+                std::env::temp_dir().join(format!("m2p_symlink_target_{}.png", std::process::id()));
             std::fs::write(&outside_target, b"fake").unwrap();
             let link = dir.path().join("evil_link.png");
             std::os::unix::fs::symlink(&outside_target, &link).expect("create symlink");

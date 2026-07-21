@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn emphasis_with_inner_spaces_does_not_open() {
     // `* foo *` — the opening `*` is followed by a space, so it can't
@@ -30,19 +29,31 @@ fn closer_preceded_by_space_no_emphasis() {
 #[test]
 fn valid_emphasis_with_no_inner_space() {
     let tokens = parse("a *foo* b");
-    assert!(tokens.iter().any(|t| matches!(t, Token::Emphasis { level: 1, .. })));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Emphasis { level: 1, .. }))
+    );
 }
 
 #[test]
 fn valid_strong_with_no_inner_space() {
     let tokens = parse("a **bold** b");
-    assert!(tokens.iter().any(|t| matches!(t, Token::Emphasis { level: 2, .. })));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Emphasis { level: 2, .. }))
+    );
 }
 
 #[test]
 fn underscore_emphasis_works_at_word_boundary() {
     let tokens = parse("a _foo_ b");
-    assert!(tokens.iter().any(|t| matches!(t, Token::Emphasis { level: 1, .. })));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Emphasis { level: 1, .. }))
+    );
 }
 
 #[test]
@@ -75,9 +86,7 @@ fn emphasis_does_not_cross_blank_line() {
     let input = "para with *unclosed opener\n\n## Heading after blank";
     let tokens = parse(input);
     // The `## Heading…` must parse as a real heading token.
-    let has_heading = tokens
-        .iter()
-        .any(|t| matches!(t, Token::Heading(_, 2)));
+    let has_heading = tokens.iter().any(|t| matches!(t, Token::Heading(_, 2)));
     assert!(
         has_heading,
         "expected H2 after blank line, got {:?}",
@@ -94,9 +103,7 @@ fn star_with_inner_space_does_not_eat_following_paragraph() {
     // gobble the next heading.
     let input = "Closer preceded: a *foo * — text.\n\n## Next heading";
     let tokens = parse(input);
-    let has_heading = tokens
-        .iter()
-        .any(|t| matches!(t, Token::Heading(_, 2)));
+    let has_heading = tokens.iter().any(|t| matches!(t, Token::Heading(_, 2)));
     assert!(
         has_heading,
         "expected H2 after the paragraph, got {:?}",

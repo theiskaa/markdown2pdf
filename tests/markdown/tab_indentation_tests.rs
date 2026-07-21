@@ -2,13 +2,14 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn leading_tab_is_indented_code_block() {
     // A leading tab expands to 4 columns → indented code block.
     let tokens = parse("\tfoo");
     assert!(
-        tokens.iter().any(|t| matches!(t, Token::Code { content: body, .. } if body.contains("foo"))),
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code { content: body, .. } if body.contains("foo"))),
         "expected indented code block, got {}",
         Token::slice_to_compact(&tokens)
     );
@@ -20,7 +21,9 @@ fn two_spaces_plus_tab_is_indented_code_block() {
     // total = 4 columns of indent → indented code block.
     let tokens = parse("  \tfoo");
     assert!(
-        tokens.iter().any(|t| matches!(t, Token::Code { content: body, .. } if body.contains("foo"))),
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code { content: body, .. } if body.contains("foo"))),
         "expected indented code block, got {}",
         Token::slice_to_compact(&tokens)
     );
@@ -31,7 +34,9 @@ fn three_spaces_plus_tab_is_indented_code_block() {
     // 3 spaces + tab → tab fills cols 3-4 → 4 columns → indented code.
     let tokens = parse("   \tfoo");
     assert!(
-        tokens.iter().any(|t| matches!(t, Token::Code { content: body, .. } if body.contains("foo"))),
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code { content: body, .. } if body.contains("foo"))),
         "expected indented code block, got {}",
         Token::slice_to_compact(&tokens)
     );
@@ -79,7 +84,10 @@ fn tab_after_blockquote_marker_is_content_padding() {
             Token::slice_to_compact(body)
         );
     } else {
-        panic!("expected BlockQuote, got {}", Token::slice_to_compact(&tokens));
+        panic!(
+            "expected BlockQuote, got {}",
+            Token::slice_to_compact(&tokens)
+        );
     }
 }
 
@@ -91,7 +99,10 @@ fn tab_after_list_marker_is_content_padding() {
         let text = Token::collect_all_text(content);
         assert!(text.contains("foo"), "got {:?}", text);
     } else {
-        panic!("expected ListItem, got {}", Token::slice_to_compact(&tokens));
+        panic!(
+            "expected ListItem, got {}",
+            Token::slice_to_compact(&tokens)
+        );
     }
 }
 
@@ -99,7 +110,9 @@ fn tab_after_list_marker_is_content_padding() {
 fn four_spaces_is_indented_code() {
     let tokens = parse("    foo");
     assert!(
-        tokens.iter().any(|t| matches!(t, Token::Code { content: body, .. } if body.contains("foo"))),
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code { content: body, .. } if body.contains("foo"))),
         "expected indented code, got {}",
         Token::slice_to_compact(&tokens)
     );
@@ -141,7 +154,10 @@ fn tab_as_unordered_list_marker_separator() {
 #[test]
 fn tab_as_ordered_list_marker_separator() {
     let tokens = parse("1.\titem");
-    if let Token::ListItem { ordered, number, .. } = &tokens[0] {
+    if let Token::ListItem {
+        ordered, number, ..
+    } = &tokens[0]
+    {
         assert!(*ordered);
         assert_eq!(*number, Some(1));
     } else {
@@ -174,7 +190,11 @@ fn lone_tab_indent_is_code_block() {
 fn mixed_tab_and_space_list_continuation() {
     // Must not error; the continuation line is folded into the item.
     let tokens = parse("- a\n \tb");
-    assert!(matches!(tokens[0], Token::ListItem { .. }), "got {:?}", tokens);
+    assert!(
+        matches!(tokens[0], Token::ListItem { .. }),
+        "got {:?}",
+        tokens
+    );
     let text = Token::collect_all_text(&tokens);
     assert!(text.contains("a") && text.contains("b"), "got {text:?}");
 }

@@ -21,14 +21,9 @@ fn render_must_not_panic(md: &str) -> Vec<u8> {
     // Identity-H glyph IDs instead).
     let md = md.to_string();
     let bytes = std::panic::catch_unwind(move || {
-        let cfg = markdown2pdf::fonts::FontConfig::new().with_default_font_source(
-            markdown2pdf::fonts::FontSource::Builtin("Helvetica"),
-        );
-        markdown2pdf::parse_into_bytes(
-            md,
-            markdown2pdf::config::ConfigSource::Default,
-            Some(&cfg),
-        )
+        let cfg = markdown2pdf::fonts::FontConfig::new()
+            .with_default_font_source(markdown2pdf::fonts::FontSource::Builtin("Helvetica"));
+        markdown2pdf::parse_into_bytes(md, markdown2pdf::config::ConfigSource::Default, Some(&cfg))
     });
     let bytes = bytes
         .expect("renderer panicked")
@@ -199,8 +194,7 @@ mod headings {
         let bytes = render_must_not_panic("####### too many hashes\n");
         // Body text "too many hashes" should still appear somewhere.
         assert!(
-            contains_text(&bytes, "too many hashes")
-                || contains(&bytes, b"too many hashes"),
+            contains_text(&bytes, "too many hashes") || contains(&bytes, b"too many hashes"),
             "text content lost for 7-hash 'heading'"
         );
     }
@@ -334,9 +328,7 @@ mod tables {
     }
 
     fn wide_table_md(cols: usize, rows: usize) -> String {
-        let join = |f: &dyn Fn(usize) -> String| {
-            (0..cols).map(f).collect::<Vec<_>>().join(" | ")
-        };
+        let join = |f: &dyn Fn(usize) -> String| (0..cols).map(f).collect::<Vec<_>>().join(" | ");
         let mut md = format!(
             "| {} |\n| {} |\n",
             join(&|i| format!("col {i} alpha")),
@@ -438,9 +430,7 @@ mod inline_html_edges {
 
     #[test]
     fn stacked_inline_tags() {
-        render_must_not_panic(
-            "<u><s><kbd><small><sup>stacked</sup></small></kbd></s></u>\n",
-        );
+        render_must_not_panic("<u><s><kbd><small><sup>stacked</sup></small></kbd></s></u>\n");
     }
 
     #[test]
@@ -475,9 +465,8 @@ mod inline_html_edges {
 
     #[test]
     fn html_comment_at_start_invisible() {
-        let bytes = render_must_not_panic(
-            "<!-- secret message that should not appear -->\nBody.\n",
-        );
+        let bytes =
+            render_must_not_panic("<!-- secret message that should not appear -->\nBody.\n");
         assert!(
             !contains_text(&bytes, "secret message"),
             "HTML comment payload leaked into output"
@@ -756,13 +745,11 @@ mod malformed_html_wrappers {
         let md = "# Heading before\n\nSome paragraph before.\n\n<p </p>\n\n## Heading after\n\nSome paragraph after.\n";
         let bytes = render_must_not_panic(md);
         assert!(
-            contains_text(&bytes, "Heading before")
-                || contains(&bytes, b"Heading before"),
+            contains_text(&bytes, "Heading before") || contains(&bytes, b"Heading before"),
             "content before the malformed wrapper was lost"
         );
         assert!(
-            contains_text(&bytes, "Heading after")
-                || contains(&bytes, b"Heading after"),
+            contains_text(&bytes, "Heading after") || contains(&bytes, b"Heading after"),
             "content after the malformed wrapper was lost"
         );
     }

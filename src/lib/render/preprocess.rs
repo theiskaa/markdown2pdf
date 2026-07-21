@@ -89,9 +89,7 @@ fn pair_anchors(tokens: Vec<Token>) -> Vec<Token> {
             // means the user split the supposed link body across
             // block boundaries. Bail rather than fold the next
             // paragraph into the link body.
-            if matches!(next, Token::Newline)
-                && matches!(iter.peek(), Some(Token::Newline))
-            {
+            if matches!(next, Token::Newline) && matches!(iter.peek(), Some(Token::Newline)) {
                 inner.push(next);
                 bail = true;
                 break;
@@ -285,7 +283,11 @@ mod tests {
         fn walk(tokens: &[Token], out: &mut Vec<(String, Option<String>)>) {
             for t in tokens {
                 match t {
-                    Token::Link { content, url, title } => {
+                    Token::Link {
+                        content,
+                        url,
+                        title,
+                    } => {
                         out.push((url.clone(), title.clone()));
                         walk(content, out);
                     }
@@ -345,8 +347,7 @@ mod tests {
 
     #[test]
     fn multiple_anchors_in_one_paragraph() {
-        let mut tokens =
-            lex("a <a href=\"u1\">one</a> b <a href=\"u2\" title=\"t\">two</a> c");
+        let mut tokens = lex("a <a href=\"u1\">one</a> b <a href=\"u2\" title=\"t\">two</a> c");
         rewrite_html_anchors(&mut tokens);
         let links = collect_links(&tokens);
         assert_eq!(links.len(), 2);
@@ -363,8 +364,14 @@ mod tests {
         // no Link tokens are emitted, every HTML tag survives as
         // HtmlInline so the user sees literal markup.
         assert!(collect_links(&tokens).is_empty());
-        let html_count = tokens.iter().filter(|t| matches!(t, Token::HtmlInline(_))).count();
-        assert!(html_count >= 2, "expected the original tags to survive: {tokens:?}");
+        let html_count = tokens
+            .iter()
+            .filter(|t| matches!(t, Token::HtmlInline(_)))
+            .count();
+        assert!(
+            html_count >= 2,
+            "expected the original tags to survive: {tokens:?}"
+        );
     }
 
     #[test]
@@ -372,9 +379,11 @@ mod tests {
         let mut tokens = lex("hello </a> world");
         rewrite_html_anchors(&mut tokens);
         assert!(collect_links(&tokens).is_empty());
-        assert!(tokens.iter().any(
-            |t| matches!(t, Token::HtmlInline(s) if s.eq_ignore_ascii_case("</a>"))
-        ));
+        assert!(
+            tokens
+                .iter()
+                .any(|t| matches!(t, Token::HtmlInline(s) if s.eq_ignore_ascii_case("</a>")))
+        );
     }
 
     #[test]
@@ -433,9 +442,7 @@ mod tests {
 
     #[test]
     fn anchor_inside_table_cell() {
-        let mut tokens = lex(
-            "| h1 | h2 |\n| --- | --- |\n| <a href=\"u\">link</a> | plain |\n",
-        );
+        let mut tokens = lex("| h1 | h2 |\n| --- | --- |\n| <a href=\"u\">link</a> | plain |\n");
         rewrite_html_anchors(&mut tokens);
         let links = collect_links(&tokens);
         assert_eq!(links.len(), 1);
@@ -451,9 +458,7 @@ mod tests {
 
     #[test]
     fn anchor_with_relative_url_and_fragment() {
-        let mut tokens = lex(
-            "to <a href=\"/path?q=1&r=2#anchor\">there</a> now",
-        );
+        let mut tokens = lex("to <a href=\"/path?q=1&r=2#anchor\">there</a> now");
         rewrite_html_anchors(&mut tokens);
         let links = collect_links(&tokens);
         assert_eq!(links.len(), 1);
@@ -475,8 +480,7 @@ mod tests {
 
     #[test]
     fn whitespace_around_attributes_is_tolerated() {
-        let mut tokens =
-            lex("hi <a   href = \"https://example.com\"   title  =  \"T\" >x</a>!");
+        let mut tokens = lex("hi <a   href = \"https://example.com\"   title  =  \"T\" >x</a>!");
         rewrite_html_anchors(&mut tokens);
         let links = collect_links(&tokens);
         assert_eq!(links.len(), 1);
@@ -509,10 +513,8 @@ mod tests {
         // used to scan past the OpenNoHref opener and pair with the
         // bookmark's `</a>`, swallowing the second paragraph into a
         // link. The OpenA-as-bail rule keeps them independent.
-        let mut tokens = lex(
-            "Unclosed: <a href=\"u\">no close here.\n\n\
-             Bookmark: <a name=\"x\">target</a> done.\n",
-        );
+        let mut tokens = lex("Unclosed: <a href=\"u\">no close here.\n\n\
+             Bookmark: <a name=\"x\">target</a> done.\n");
         rewrite_html_anchors(&mut tokens);
         assert!(
             collect_links(&tokens).is_empty(),
@@ -525,8 +527,7 @@ mod tests {
         // A `<a href="…">` opener whose `</a>` only appears after a
         // blank line is malformed in spirit — bail and leave both
         // tags literal so the user sees what they wrote.
-        let mut tokens =
-            lex("Open <a href=\"u\">begin\n\nmiddle</a> end.\n");
+        let mut tokens = lex("Open <a href=\"u\">begin\n\nmiddle</a> end.\n");
         rewrite_html_anchors(&mut tokens);
         assert!(collect_links(&tokens).is_empty());
     }
@@ -536,8 +537,7 @@ mod tests {
         // A single `\n` inside the supposed link body is a soft
         // line break within one paragraph — must NOT trigger the
         // paragraph-break bail.
-        let mut tokens =
-            lex("Open <a href=\"u\">begin\ncontinued</a> end.\n");
+        let mut tokens = lex("Open <a href=\"u\">begin\ncontinued</a> end.\n");
         rewrite_html_anchors(&mut tokens);
         let links = collect_links(&tokens);
         assert_eq!(links.len(), 1, "soft break should stay inside the link");

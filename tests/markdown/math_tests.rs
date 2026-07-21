@@ -62,10 +62,7 @@ fn inline_math_is_distinct_token_not_literal_dollars() {
 #[test]
 fn display_math_is_a_block_token() {
     let tokens = parse(r"$$\int_0^1 x\,dx$$");
-    assert_eq!(
-        maths(&tokens),
-        vec![(false, r"\int_0^1 x\,dx".to_string())]
-    );
+    assert_eq!(maths(&tokens), vec![(false, r"\int_0^1 x\,dx".to_string())]);
 }
 
 #[test]
@@ -268,7 +265,10 @@ fn adversarial_dollar_inputs_never_panic() {
         // Round-tripped text must always preserve every dollar's worth
         // of information one way or another (no silent total loss).
         let _ = Token::collect_all_text(&tokens);
-        assert!(!tokens.is_empty() || src.is_empty(), "{src:?} produced nothing");
+        assert!(
+            !tokens.is_empty() || src.is_empty(),
+            "{src:?} produced nothing"
+        );
     }
 }
 

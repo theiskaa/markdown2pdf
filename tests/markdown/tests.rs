@@ -71,11 +71,19 @@ fn test_code_blocks() {
     let tests = vec![
         (
             "`inline code`",
-            vec![Token::Code { language: "".to_string(), content: "inline code".to_string(), block: false }],
+            vec![Token::Code {
+                language: "".to_string(),
+                content: "inline code".to_string(),
+                block: false,
+            }],
         ),
         (
             "```rust\nfn main() {}\n```",
-            vec![Token::Code { language: "rust".to_string(), content: "fn main() {}".to_string(), block: true }],
+            vec![Token::Code {
+                language: "rust".to_string(),
+                content: "fn main() {}".to_string(),
+                block: true,
+            }],
         ),
     ];
 
@@ -108,7 +116,7 @@ fn test_lists() {
                     number: None,
                     marker: '-',
                     checked: None,
-            loose: false,
+                    loose: false,
                 },
                 Token::ListItem {
                     content: vec![Token::Text("Item 2".to_string())],
@@ -116,7 +124,7 @@ fn test_lists() {
                     number: None,
                     marker: '-',
                     checked: None,
-            loose: false,
+                    loose: false,
                 },
             ],
         ),
@@ -129,7 +137,7 @@ fn test_lists() {
                     number: Some(1),
                     marker: '.',
                     checked: None,
-            loose: false,
+                    loose: false,
                 },
                 Token::ListItem {
                     content: vec![Token::Text("Second".to_string())],
@@ -137,7 +145,7 @@ fn test_lists() {
                     number: Some(2),
                     marker: '.',
                     checked: None,
-            loose: false,
+                    loose: false,
                 },
             ],
         ),
@@ -195,11 +203,19 @@ fn test_links() {
     let tests = vec![
         (
             "[Link](https://example.com)",
-            vec![Token::Link { content: vec![Token::Text("Link".to_string())], url: "https://example.com".to_string(), title: None }],
+            vec![Token::Link {
+                content: vec![Token::Text("Link".to_string())],
+                url: "https://example.com".to_string(),
+                title: None,
+            }],
         ),
         (
             "![Image](image.jpg)",
-            vec![Token::Image { alt: vec![Token::Text("Image".to_string())], url: "image.jpg".to_string(), title: None }],
+            vec![Token::Image {
+                alt: vec![Token::Text("Image".to_string())],
+                url: "image.jpg".to_string(),
+                title: None,
+            }],
         ),
     ];
 
@@ -246,7 +262,9 @@ fn test_error_cases() {
     // an error up). The robustness contract is: lexer.parse() returns
     // Ok for any input that doesn't hit a hard panic.
     let mut lexer = Lexer::new("<!--never closes".to_string());
-    let tokens = lexer.parse().expect("partial HTML comment should not error");
+    let tokens = lexer
+        .parse()
+        .expect("partial HTML comment should not error");
     let dbg = format!("{:?}", tokens);
     assert!(
         dbg.contains("Text") && dbg.contains("<!--"),
@@ -276,7 +294,11 @@ fn test_code_block_edge_cases() {
         ),
         (
             "```rust\nfn main() {\n    println!(\"Hello\");\n}\n```",
-            vec![Token::Code { language: "rust".to_string(), content: "fn main() {\n    println!(\"Hello\");\n}".to_string(), block: true }],
+            vec![Token::Code {
+                language: "rust".to_string(),
+                content: "fn main() {\n    println!(\"Hello\");\n}".to_string(),
+                block: true,
+            }],
         ),
     ];
 
@@ -322,24 +344,15 @@ fn test_blockquote_variations() {
     // an Emphasis token, [link](url) becomes a Link, etc.).
     type BlockquoteCase<'a> = (&'a str, &'a dyn Fn(&[Token]));
     let cases: &[BlockquoteCase] = &[
-        (
-            "> Simple quote",
-            &|body| {
-                assert_eq!(Token::collect_all_text(body), "Simple quote");
-            },
-        ),
-        (
-            "> Quote with *emphasis*",
-            &|body| {
-                assert!(body.iter().any(|t| matches!(t, Token::Emphasis { .. })));
-            },
-        ),
-        (
-            "> Quote with [link](url)",
-            &|body| {
-                assert!(body.iter().any(|t| matches!(t, Token::Link { .. })));
-            },
-        ),
+        ("> Simple quote", &|body| {
+            assert_eq!(Token::collect_all_text(body), "Simple quote");
+        }),
+        ("> Quote with *emphasis*", &|body| {
+            assert!(body.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+        }),
+        ("> Quote with [link](url)", &|body| {
+            assert!(body.iter().any(|t| matches!(t, Token::Link { .. })));
+        }),
     ];
 
     for (input, check) in cases {
@@ -383,7 +396,11 @@ fn test_link_and_image_edge_cases() {
         ),
         (
             "[Empty]()",
-            vec![Token::Link { content: vec![Token::Text("Empty".to_string())], url: "".to_string(), title: None }],
+            vec![Token::Link {
+                content: vec![Token::Text("Empty".to_string())],
+                url: "".to_string(),
+                title: None,
+            }],
         ),
     ];
 
@@ -426,9 +443,11 @@ A paragraph with `code` and [link](url).
 
     // Verify first token is a heading with emphasis
     if let Token::Heading(content, 1) = &tokens[0] {
-        assert!(content
-            .iter()
-            .any(|token| matches!(token, Token::Emphasis { .. })));
+        assert!(
+            content
+                .iter()
+                .any(|token| matches!(token, Token::Emphasis { .. }))
+        );
     } else {
         panic!("Expected heading with emphasis");
     }
@@ -471,7 +490,11 @@ fn test_standalone_exclamation() {
     let tokens = parse("![Alt text](image.png)");
     assert_eq!(
         tokens,
-        vec![Token::Image { alt: vec![Token::Text("Alt text".to_string())], url: "image.png".to_string(), title: None }]
+        vec![Token::Image {
+            alt: vec![Token::Text("Alt text".to_string())],
+            url: "image.png".to_string(),
+            title: None
+        }]
     );
 }
 

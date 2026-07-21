@@ -5,9 +5,10 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn first_image(tokens: &[Token]) -> (&Vec<Token>, &str, &Option<String>) {
-    let Some(Token::Image { alt, url, title }) = tokens.iter().find(|t| matches!(t, Token::Image { .. })) else {
+    let Some(Token::Image { alt, url, title }) =
+        tokens.iter().find(|t| matches!(t, Token::Image { .. }))
+    else {
         panic!("expected Image, got {:?}", tokens);
     };
     (alt, url.as_str(), title)
@@ -54,7 +55,10 @@ fn inline_image_alt_with_emphasis() {
 fn inline_image_alt_with_code_span() {
     let tokens = parse("![`code` shot](p.png)");
     let (alt, _, _) = first_image(&tokens);
-    assert!(alt.iter().any(|t| matches!(t, Token::Code { block: false, .. })));
+    assert!(
+        alt.iter()
+            .any(|t| matches!(t, Token::Code { block: false, .. }))
+    );
 }
 
 #[test]

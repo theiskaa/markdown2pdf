@@ -8,7 +8,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn loose_flags(tokens: &[Token]) -> Vec<bool> {
     tokens
         .iter()
@@ -46,7 +45,11 @@ fn loose_from_internal_blank_in_single_item() {
     // A blank line inside an item's content also makes the list loose.
     let tokens = parse("- first para\n\n  second para\n- next item\n");
     let flags = loose_flags(&tokens);
-    assert!(flags.iter().all(|&f| f), "expected all-loose, got {:?}", flags);
+    assert!(
+        flags.iter().all(|&f| f),
+        "expected all-loose, got {:?}",
+        flags
+    );
 }
 
 #[test]

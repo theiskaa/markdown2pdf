@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn items(tokens: &[Token]) -> Vec<bool> {
     tokens
         .iter()
@@ -88,7 +87,10 @@ fn nested_list_blank_makes_both_levels_loose() {
             Token::slice_to_compact(content)
         );
     } else {
-        panic!("expected ListItem, got {}", Token::slice_to_compact(&tokens));
+        panic!(
+            "expected ListItem, got {}",
+            Token::slice_to_compact(&tokens)
+        );
     }
 }
 
@@ -117,7 +119,10 @@ fn list_in_blockquote_loose_detected() {
             Token::slice_to_compact(body)
         );
     } else {
-        panic!("expected BlockQuote, got {}", Token::slice_to_compact(&tokens));
+        panic!(
+            "expected BlockQuote, got {}",
+            Token::slice_to_compact(&tokens)
+        );
     }
 }
 

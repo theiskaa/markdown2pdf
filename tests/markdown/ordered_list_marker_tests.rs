@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn paren_marker_creates_ordered_list_item() {
     let tokens = parse("1) one\n2) two");
@@ -16,7 +15,10 @@ fn paren_marker_creates_ordered_list_item() {
 #[test]
 fn paren_marker_preserves_number() {
     let tokens = parse("5) five");
-    if let Token::ListItem { number, ordered, .. } = &tokens[0] {
+    if let Token::ListItem {
+        number, ordered, ..
+    } = &tokens[0]
+    {
         assert!(*ordered);
         assert_eq!(*number, Some(5));
     } else {
@@ -27,7 +29,10 @@ fn paren_marker_preserves_number() {
 #[test]
 fn dot_marker_still_works() {
     let tokens = parse("1. one");
-    if let Token::ListItem { ordered, number, .. } = &tokens[0] {
+    if let Token::ListItem {
+        ordered, number, ..
+    } = &tokens[0]
+    {
         assert!(*ordered);
         assert_eq!(*number, Some(1));
     } else {
@@ -40,7 +45,10 @@ fn dot_marker_still_works() {
 #[test]
 fn nine_digit_start_is_accepted() {
     let tokens = parse("999999999. item");
-    if let Token::ListItem { ordered, number, .. } = &tokens[0] {
+    if let Token::ListItem {
+        ordered, number, ..
+    } = &tokens[0]
+    {
         assert!(*ordered);
         assert_eq!(*number, Some(999_999_999));
     } else {

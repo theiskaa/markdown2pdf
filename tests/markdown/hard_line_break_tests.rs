@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn two_trailing_spaces_produce_hard_break() {
     let tokens = parse("first  \nsecond");

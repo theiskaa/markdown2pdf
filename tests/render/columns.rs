@@ -66,11 +66,12 @@ fn x_clusters(mut xs: Vec<f32>, bin_pt: f32) -> Vec<f32> {
     let mut clusters: Vec<(f32, usize)> = Vec::new(); // (sum, count)
     for x in xs {
         if let Some((sum, n)) = clusters.last_mut()
-            && (x - *sum / *n as f32).abs() < bin_pt {
-                *sum += x;
-                *n += 1;
-                continue;
-            }
+            && (x - *sum / *n as f32).abs() < bin_pt
+        {
+            *sum += x;
+            *n += 1;
+            continue;
+        }
         clusters.push((x, 1));
     }
     clusters.into_iter().map(|(s, n)| s / n as f32).collect()
@@ -408,10 +409,10 @@ More text.
     let xs = td_xs(&bytes);
     // 4 column ranges on Letter with 16mm margins, 4mm gaps.
     let col_ranges: &[(f32, f32)] = &[
-        (45.0, 168.0),   // col 0
-        (178.0, 301.0),  // col 1
-        (311.0, 434.0),  // col 2
-        (444.0, 567.0),  // col 3
+        (45.0, 168.0),  // col 0
+        (178.0, 301.0), // col 1
+        (311.0, 434.0), // col 2
+        (444.0, 567.0), // col 3
     ];
     for x in &xs {
         let in_any = col_ranges

@@ -107,9 +107,7 @@ fn validate(bytes: &[u8]) -> usize {
 
     let mut found_pages = 0usize;
     for kid in kids {
-        let kid_id = kid
-            .as_reference()
-            .expect("/Kids entry must be a reference");
+        let kid_id = kid.as_reference().expect("/Kids entry must be a reference");
         let kid_id = resolve_ref(&doc, kid_id);
         let kid_obj = doc
             .objects
@@ -584,8 +582,7 @@ mod page_metadata {
                 .and_then(|o| o.as_dict().ok())
                 .expect("page must be a dict");
             assert!(
-                dict.get(b"MediaBox").is_ok()
-                    || inherit_from_parent(&doc, pid, b"MediaBox"),
+                dict.get(b"MediaBox").is_ok() || inherit_from_parent(&doc, pid, b"MediaBox"),
                 "page {:?} missing /MediaBox (not inherited either)",
                 pid
             );
@@ -642,9 +639,7 @@ mod document_info {
         let bytes = render(md, "");
         let doc = parse(&bytes);
         let info_ref = doc.trailer.get(b"Info").expect("trailer needs /Info");
-        let info_id = info_ref
-            .as_reference()
-            .expect("/Info must be a reference");
+        let info_id = info_ref.as_reference().expect("/Info must be a reference");
         let info_id = resolve_ref(&doc, info_id);
         let info = doc
             .objects

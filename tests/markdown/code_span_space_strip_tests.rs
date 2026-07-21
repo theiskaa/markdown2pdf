@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn single_surrounding_space_stripped() {
     let tokens = parse("a ` foo ` b");
@@ -48,7 +47,11 @@ fn no_surrounding_space_unchanged() {
     let tokens = parse("`foo`");
     assert_eq!(
         tokens,
-        vec![Token::Code { language: "".to_string(), content: "foo".to_string(), block: false }]
+        vec![Token::Code {
+            language: "".to_string(),
+            content: "foo".to_string(),
+            block: false
+        }]
     );
 }
 

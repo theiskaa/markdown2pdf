@@ -390,8 +390,8 @@ fn unicode_combining_marks_in_emphasis() {
     let cases = [
         "*á*",
         "*a\u{0301}*",
-        "*a\u{200D}b*",     // ZWJ
-        "*\u{FE0F}*",        // variation selector only
+        "*a\u{200D}b*", // ZWJ
+        "*\u{FE0F}*",   // variation selector only
         "*test\u{0301}\u{0302}*",
     ];
     for c in &cases {
@@ -500,10 +500,7 @@ fn html_tag_scanner_no_redos() {
     // The tag matcher must stay linear on adversarial shapes — no
     // catastrophic backtracking. Each ≤ 2ms in release; well under
     // budget even unoptimized.
-    run_within_budget(
-        "html_equals_storm",
-        format!("<a {}>\n", "=".repeat(50_000)),
-    );
+    run_within_budget("html_equals_storm", format!("<a {}>\n", "=".repeat(50_000)));
     run_within_budget(
         "html_unquoted_value_boundaries",
         format!(
@@ -511,14 +508,8 @@ fn html_tag_scanner_no_redos() {
             (0..20_000).map(|i| format!(" x=y{i}")).collect::<String>()
         ),
     );
-    run_within_budget(
-        "html_bare_lt_storm",
-        "<".repeat(100_000) + "\n",
-    );
-    run_within_budget(
-        "html_nested_tag_openers",
-        "<a<a<a".repeat(20_000) + "\n",
-    );
+    run_within_budget("html_bare_lt_storm", "<".repeat(100_000) + "\n");
+    run_within_budget("html_nested_tag_openers", "<a<a<a".repeat(20_000) + "\n");
 }
 
 #[test]

@@ -46,7 +46,11 @@ fn render_blocks(tokens: &[Token], out: &mut String, in_loose_list_item: bool) {
                 out.push_str("<hr />\n");
                 i += 1;
             }
-            Token::Code { language, content, block: true } => {
+            Token::Code {
+                language,
+                content,
+                block: true,
+            } => {
                 out.push_str("<pre><code");
                 let lang_first = language.split_whitespace().next().unwrap_or("");
                 if !lang_first.is_empty() {
@@ -69,7 +73,11 @@ fn render_blocks(tokens: &[Token], out: &mut String, in_loose_list_item: bool) {
                 render_list(&tokens[i..group_end], *ordered, start_num, loose, out);
                 i = group_end;
             }
-            Token::Table { headers, aligns, rows } => {
+            Token::Table {
+                headers,
+                aligns,
+                rows,
+            } => {
                 render_table(headers, aligns, rows, out);
                 i += 1;
             }
@@ -129,16 +137,18 @@ fn scan_list_end(tokens: &[Token], start: usize) -> usize {
     // AND `marker` — a marker switch (`- foo\n+ bar`, `1. a\n1) b`) breaks
     // the run into two separate lists.
     let (first_ordered, first_marker) = match &tokens[start] {
-        Token::ListItem { ordered, marker, .. } => (*ordered, *marker),
+        Token::ListItem {
+            ordered, marker, ..
+        } => (*ordered, *marker),
         _ => return start + 1,
     };
     let mut i = start + 1;
     let mut last_item = start;
     while i < tokens.len() {
         match &tokens[i] {
-            Token::ListItem { ordered, marker, .. }
-                if *ordered == first_ordered && *marker == first_marker =>
-            {
+            Token::ListItem {
+                ordered, marker, ..
+            } if *ordered == first_ordered && *marker == first_marker => {
                 last_item = i;
                 i += 1;
             }
@@ -150,11 +160,18 @@ fn scan_list_end(tokens: &[Token], start: usize) -> usize {
 }
 
 fn group_has_loose_item(group: &[Token]) -> bool {
-    group.iter().any(|t| matches!(t, Token::ListItem { loose: true, .. }))
+    group
+        .iter()
+        .any(|t| matches!(t, Token::ListItem { loose: true, .. }))
 }
 
 fn list_start_number(tok: &Token) -> Option<usize> {
-    if let Token::ListItem { ordered: true, number, .. } = tok {
+    if let Token::ListItem {
+        ordered: true,
+        number,
+        ..
+    } = tok
+    {
         *number
     } else {
         None
@@ -177,25 +194,21 @@ fn render_list(
         out.push_str("<ul>\n");
     }
     for tok in items {
-        if let Token::ListItem { content, checked, .. } = tok {
+        if let Token::ListItem {
+            content, checked, ..
+        } = tok
+        {
             render_list_item(content, *checked, loose, out);
         }
     }
     out.push_str(if ordered { "</ol>\n" } else { "</ul>\n" });
 }
 
-fn render_list_item(
-    content: &[Token],
-    checked: Option<bool>,
-    loose: bool,
-    out: &mut String,
-) {
+fn render_list_item(content: &[Token], checked: Option<bool>, loose: bool, out: &mut String) {
     out.push_str("<li>");
     if let Some(c) = checked {
         let mark = if c { "checked=\"\" " } else { "" };
-        out.push_str(&format!(
-            "<input {mark}disabled=\"\" type=\"checkbox\" /> "
-        ));
+        out.push_str(&format!("<input {mark}disabled=\"\" type=\"checkbox\" /> "));
     }
     // Split content into: leading inline run + nested block content (nested
     // lists, etc.). Nested ListItems are passed back to render_blocks.
@@ -259,7 +272,11 @@ fn render_tight_blocks(tokens: &[Token], out: &mut String) {
                 out.push_str("<hr />\n");
                 i += 1;
             }
-            Token::Code { language, content, block: true } => {
+            Token::Code {
+                language,
+                content,
+                block: true,
+            } => {
                 out.push_str("<pre><code");
                 let lang_first = language.split_whitespace().next().unwrap_or("");
                 if !lang_first.is_empty() {
@@ -373,7 +390,10 @@ fn find_inline_run_end(tokens: &[Token], start: usize) -> usize {
 fn render_inlines(tokens: &[Token], out: &mut String) {
     // Strip leading/trailing Newlines from the inline run — they're paragraph
     // boundaries, not content.
-    let start = tokens.iter().position(|t| !matches!(t, Token::Newline)).unwrap_or(tokens.len());
+    let start = tokens
+        .iter()
+        .position(|t| !matches!(t, Token::Newline))
+        .unwrap_or(tokens.len());
     let end = tokens
         .iter()
         .rposition(|t| !matches!(t, Token::Newline))
@@ -429,7 +449,11 @@ fn render_inline_token(t: &Token, out: &mut String) {
             out.push_str(&escape_text(body));
             out.push_str("</code>");
         }
-        Token::Link { content, url, title } => {
+        Token::Link {
+            content,
+            url,
+            title,
+        } => {
             out.push_str("<a href=\"");
             out.push_str(&escape_url(url));
             out.push('"');
@@ -548,7 +572,10 @@ fn render_table(
         if cell.covered {
             continue;
         }
-        let align = aligns.get(i).copied().unwrap_or(markdown2pdf::markdown::TableAlignment::Left);
+        let align = aligns
+            .get(i)
+            .copied()
+            .unwrap_or(markdown2pdf::markdown::TableAlignment::Left);
         let style = match align {
             markdown2pdf::markdown::TableAlignment::Left => "",
             markdown2pdf::markdown::TableAlignment::Center => " style=\"text-align: center\"",
@@ -572,10 +599,15 @@ fn render_table(
                 if cell.covered {
                     continue;
                 }
-                let align = aligns.get(i).copied().unwrap_or(markdown2pdf::markdown::TableAlignment::Left);
+                let align = aligns
+                    .get(i)
+                    .copied()
+                    .unwrap_or(markdown2pdf::markdown::TableAlignment::Left);
                 let style = match align {
                     markdown2pdf::markdown::TableAlignment::Left => "",
-                    markdown2pdf::markdown::TableAlignment::Center => " style=\"text-align: center\"",
+                    markdown2pdf::markdown::TableAlignment::Center => {
+                        " style=\"text-align: center\""
+                    }
                     markdown2pdf::markdown::TableAlignment::Right => " style=\"text-align: right\"",
                 };
                 let mut span = String::new();
@@ -624,9 +656,26 @@ fn escape_url(s: &str) -> String {
         matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9')
             || matches!(
                 b,
-                b'-' | b'_' | b'.' | b'~' | b'!' | b'*' | b'\'' | b'('
-                | b')' | b';' | b':' | b'@' | b'&' | b'=' | b'+'
-                | b'$' | b',' | b'/' | b'?' | b'#' | b'%'
+                b'-' | b'_'
+                    | b'.'
+                    | b'~'
+                    | b'!'
+                    | b'*'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b';'
+                    | b':'
+                    | b'@'
+                    | b'&'
+                    | b'='
+                    | b'+'
+                    | b'$'
+                    | b','
+                    | b'/'
+                    | b'?'
+                    | b'#'
+                    | b'%'
             )
     }
     let mut percent = String::with_capacity(s.len());

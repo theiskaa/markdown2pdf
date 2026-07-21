@@ -8,7 +8,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn link_url_of(input: &str) -> String {
     let tokens = parse(input);
     let Some(Token::Link { url, .. }) = tokens.iter().find(|t| matches!(t, Token::Link { .. }))
@@ -67,7 +66,10 @@ fn cjk_left_alone() {
 
 #[test]
 fn mixed_case_with_unicode_punctuation() {
-    assert_eq!(link_url_of("[Hello, World!]\n\n[hello, world!]: /a\n"), "/a");
+    assert_eq!(
+        link_url_of("[Hello, World!]\n\n[hello, world!]: /a\n"),
+        "/a"
+    );
 }
 
 #[test]

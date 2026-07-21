@@ -2,8 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
-
 #[test]
 fn lone_asterisk_in_paragraph_is_text() {
     let tokens = parse("Use * for bullets.");
@@ -41,7 +39,6 @@ fn stray_underscore_at_eof() {
     assert!(text.contains("_"), "got {:?}", text);
 }
 
-
 #[test]
 fn stray_then_valid_emphasis() {
     // The first * is unmatched -> literal; the *real* pair is emphasis.
@@ -65,7 +62,6 @@ fn valid_then_stray_emphasis() {
     assert!(text.contains("*"), "got {:?}", text);
 }
 
-
 #[test]
 fn stray_in_heading() {
     let tokens = parse("# heading with * stray");
@@ -82,7 +78,6 @@ fn stray_in_list_item() {
     assert!(text.contains("*"), "got {:?}", text);
 }
 
-
 #[test]
 fn triple_asterisk_no_close() {
     let tokens = parse("***boldital with no closer");
@@ -90,7 +85,6 @@ fn triple_asterisk_no_close() {
     assert!(text.contains("***"), "got {:?}", text);
     assert!(text.contains("boldital"), "got {:?}", text);
 }
-
 
 #[test]
 fn regression_basic_italic() {
@@ -122,7 +116,6 @@ fn regression_intra_word_underscore_still_text() {
         vec![Token::Text("phpmyadmin/localized_docs".to_string())]
     );
 }
-
 
 #[test]
 fn document_with_stray_does_not_lose_other_tokens() {

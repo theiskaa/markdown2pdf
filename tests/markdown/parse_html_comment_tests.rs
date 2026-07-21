@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn simple_inline_comment() {
     // INLINE comments need a non-comment prefix on the same line —

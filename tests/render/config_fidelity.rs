@@ -53,11 +53,7 @@ fn normalize_pdf(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if i + 32 <= bytes.len()
-            && bytes[i..i + 32]
-                .iter()
-                .all(|b| (b'A'..=b'J').contains(b))
-        {
+        if i + 32 <= bytes.len() && bytes[i..i + 32].iter().all(|b| (b'A'..=b'J').contains(b)) {
             out.extend_from_slice(b"<FONTID>");
             i += 32;
         } else {
@@ -207,8 +203,8 @@ fn code_block_bold_with_builtin_courier_uses_courier_bold_handle() {
     // must still route through builtin CourierBold; pre-existing
     // behavior, regression-guarded here.
     let bytes = render("```\nx\n```", "[code_block]\nfont_weight = \"bold\"");
-    let has_bold_courier = contains_text(&bytes, "Courier-Bold")
-        || contains_text(&bytes, "CourierBold");
+    let has_bold_courier =
+        contains_text(&bytes, "Courier-Bold") || contains_text(&bytes, "CourierBold");
     assert!(
         has_bold_courier,
         "bold code block did not pick a builtin Courier-Bold variant"
@@ -418,9 +414,7 @@ fn code_inline_font_family_routes_through_a_distinct_font_handle() {
     // collapse onto the same handle.
     let bytes = parse_into_bytes(
         "plain `code` here\n\n```\nblock body\n```\n".to_string(),
-        ConfigSource::Embedded(&format!(
-            "[code_inline]\nfont_family = \"{other}\""
-        )),
+        ConfigSource::Embedded(&format!("[code_inline]\nfont_family = \"{other}\"")),
         Some(&FontConfig::new().with_code_font(mono)),
     )
     .expect("render");
@@ -430,17 +424,16 @@ fn code_inline_font_family_routes_through_a_distinct_font_handle() {
     for line in s.lines() {
         let line = line.trim();
         if let Some(stripped) = line.strip_prefix('/')
-            && line.ends_with(" Tf") {
-                let name: String = stripped
-                    .chars()
-                    .take_while(|c| !c.is_whitespace())
-                    .collect();
-                if name.len() == 32
-                    && name.chars().all(|c| ('A'..='J').contains(&c))
-                {
-                    handles.insert(name);
-                }
+            && line.ends_with(" Tf")
+        {
+            let name: String = stripped
+                .chars()
+                .take_while(|c| !c.is_whitespace())
+                .collect();
+            if name.len() == 32 && name.chars().all(|c| ('A'..='J').contains(&c)) {
+                handles.insert(name);
             }
+        }
     }
     assert!(
         handles.len() >= 2,
@@ -573,8 +566,7 @@ fn code_inline_padding_only_at_span_boundaries_not_per_word() {
         padding = 4.0
     "##,
     );
-    let extra = count_substr(&scan(&padded), b" TJ")
-        - count_substr(&scan(&baseline), b" TJ");
+    let extra = count_substr(&scan(&padded), b" TJ") - count_substr(&scan(&baseline), b" TJ");
     assert_eq!(
         extra, 2,
         "expected 2 boundary offsets for one multi-word inline-code \
@@ -593,8 +585,7 @@ fn two_separate_inline_code_spans_each_get_their_own_boundary_pair() {
         padding = 3.0
     "##,
     );
-    let extra = count_substr(&scan(&padded), b" TJ")
-        - count_substr(&scan(&baseline), b" TJ");
+    let extra = count_substr(&scan(&padded), b" TJ") - count_substr(&scan(&baseline), b" TJ");
     assert_eq!(
         extra, 4,
         "expected 4 offsets total (2 spans × 2 boundaries); got {}",
@@ -686,9 +677,12 @@ fn code_inline_padding_at_paragraph_start_still_emits_left_offset() {
         padding = 4.0
     "##,
     );
-    let extra = count_substr(&scan(&padded), b" TJ")
-        - count_substr(&scan(&baseline), b" TJ");
-    assert_eq!(extra, 2, "expected 2 boundary offsets at-start; got {}", extra);
+    let extra = count_substr(&scan(&padded), b" TJ") - count_substr(&scan(&baseline), b" TJ");
+    assert_eq!(
+        extra, 2,
+        "expected 2 boundary offsets at-start; got {}",
+        extra
+    );
 }
 
 #[test]
@@ -701,9 +695,12 @@ fn code_inline_padding_at_paragraph_end_still_emits_right_offset() {
         padding = 4.0
     "##,
     );
-    let extra = count_substr(&scan(&padded), b" TJ")
-        - count_substr(&scan(&baseline), b" TJ");
-    assert_eq!(extra, 2, "expected 2 boundary offsets at-end; got {}", extra);
+    let extra = count_substr(&scan(&padded), b" TJ") - count_substr(&scan(&baseline), b" TJ");
+    assert_eq!(
+        extra, 2,
+        "expected 2 boundary offsets at-end; got {}",
+        extra
+    );
 }
 
 #[test]
@@ -727,8 +724,7 @@ fn code_inline_padding_in_justified_paragraph_emits_both_tj_offsets() {
         padding = 5.0
     "##,
     );
-    let extra = count_substr(&scan(&padded), b" TJ")
-        - count_substr(&scan(&baseline), b" TJ");
+    let extra = count_substr(&scan(&padded), b" TJ") - count_substr(&scan(&baseline), b" TJ");
     assert_eq!(
         extra, 2,
         "justified paragraph + padded inline code should still emit \
@@ -786,10 +782,7 @@ fn inline_code_in_heading_routes_through_code_inline_font_family() {
 
 #[test]
 fn inline_code_in_table_cell_picks_up_padding() {
-    let baseline = render(
-        "| h1 | h2 |\n| -- | -- |\n| a  | `x` |\n",
-        "",
-    );
+    let baseline = render("| h1 | h2 |\n| -- | -- |\n| a  | `x` |\n", "");
     let padded = render(
         "| h1 | h2 |\n| -- | -- |\n| a  | `x` |\n",
         r##"
@@ -878,8 +871,7 @@ fn code_inline_padding_works_inside_blockquote() {
         padding = 5.0
     "##,
     );
-    let extra = count_substr(&scan(&padded), b" TJ")
-        - count_substr(&scan(&baseline), b" TJ");
+    let extra = count_substr(&scan(&padded), b" TJ") - count_substr(&scan(&baseline), b" TJ");
     assert_eq!(
         extra, 2,
         "inline code inside blockquote should emit 2 boundary offsets; got {}",
@@ -927,8 +919,7 @@ fn many_consecutive_inline_code_spans_each_get_their_own_boundary_pair() {
         "a `1` b `2` c `3` d `4` e `5` f",
         "[code_inline]\npadding = 3.0",
     );
-    let extra = count_substr(&scan(&padded), b" TJ")
-        - count_substr(&scan(&baseline), b" TJ");
+    let extra = count_substr(&scan(&padded), b" TJ") - count_substr(&scan(&baseline), b" TJ");
     assert_eq!(
         extra, 10,
         "expected 10 boundary offsets (5 spans × 2); got {}",

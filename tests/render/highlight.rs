@@ -74,7 +74,9 @@ background_color = "#00FF00"
 fn multipage_document_with_highlights_is_well_formed() {
     let mut md = String::new();
     for i in 0..60 {
-        md.push_str(&format!("Paragraph {i} with a ==marked span== inside it.\n\n"));
+        md.push_str(&format!(
+            "Paragraph {i} with a ==marked span== inside it.\n\n"
+        ));
     }
     let bytes = render(&md, "");
     assert!(pdf_well_formed(&bytes));

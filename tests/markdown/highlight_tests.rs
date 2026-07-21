@@ -86,7 +86,10 @@ fn nested_emphasis_inside_highlight() {
 
 #[test]
 fn highlight_inside_emphasis() {
-    assert_eq!(highlights(&parse("*see ==this==*")), vec!["this".to_string()]);
+    assert_eq!(
+        highlights(&parse("*see ==this==*")),
+        vec!["this".to_string()]
+    );
 }
 
 #[test]

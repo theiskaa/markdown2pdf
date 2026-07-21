@@ -439,7 +439,10 @@ impl Serialize for PageSize {
             PageSize::Legal => s.serialize_str("Legal"),
             PageSize::A3 => s.serialize_str("A3"),
             PageSize::A5 => s.serialize_str("A5"),
-            PageSize::Custom { width_mm, height_mm } => {
+            PageSize::Custom {
+                width_mm,
+                height_mm,
+            } => {
                 let mut m = s.serialize_map(Some(2))?;
                 m.serialize_entry("width_mm", width_mm)?;
                 m.serialize_entry("height_mm", height_mm)?;
@@ -484,9 +487,10 @@ impl<'de> Deserialize<'de> for PageSize {
                     }
                 }
                 match (w, h) {
-                    (Some(width_mm), Some(height_mm)) => {
-                        Ok(PageSize::Custom { width_mm, height_mm })
-                    }
+                    (Some(width_mm), Some(height_mm)) => Ok(PageSize::Custom {
+                        width_mm,
+                        height_mm,
+                    }),
                     _ => Err(M::Error::custom(
                         "custom page size requires both width_mm and height_mm",
                     )),
@@ -667,9 +671,7 @@ where
                         bottom: b,
                         left: l,
                     }),
-                    _ => Err(S::Error::custom(
-                        "side array must have 1, 2, or 4 elements",
-                    )),
+                    _ => Err(S::Error::custom("side array must have 1, 2, or 4 elements")),
                 }
             }
             fn visit_map<M: MapAccess<'de>>(self, mut m: M) -> Result<Sides<T>, M::Error> {
@@ -702,13 +704,13 @@ where
                 // Build a one-element seq using the value as a number.
                 // toml passes integers and floats through visit_i64/f64;
                 // we forward to T's own deserializer via a tiny shim.
-                let v: T = T::deserialize(serde::de::value::I64Deserializer::new(n))
-                    .map_err(|e: E| e)?;
+                let v: T =
+                    T::deserialize(serde::de::value::I64Deserializer::new(n)).map_err(|e: E| e)?;
                 Ok(Sides::uniform(v))
             }
             fn visit_f64<E: Error>(self, n: f64) -> Result<Sides<T>, E> {
-                let v: T = T::deserialize(serde::de::value::F64Deserializer::new(n))
-                    .map_err(|e: E| e)?;
+                let v: T =
+                    T::deserialize(serde::de::value::F64Deserializer::new(n)).map_err(|e: E| e)?;
                 Ok(Sides::uniform(v))
             }
             fn visit_u64<E: Error>(self, n: u64) -> Result<Sides<T>, E> {

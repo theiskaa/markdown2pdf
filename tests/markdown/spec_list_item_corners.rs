@@ -5,7 +5,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn count_items(input: &str) -> usize {
     parse(input)
         .iter()
@@ -24,8 +23,17 @@ fn bullet_markers_recognized() {
 #[test]
 fn ordered_marker_with_dot() {
     let tokens = parse("1. a\n");
-    let item = tokens.iter().find(|t| matches!(t, Token::ListItem { .. })).unwrap();
-    if let Token::ListItem { number, ordered, marker, .. } = item {
+    let item = tokens
+        .iter()
+        .find(|t| matches!(t, Token::ListItem { .. }))
+        .unwrap();
+    if let Token::ListItem {
+        number,
+        ordered,
+        marker,
+        ..
+    } = item
+    {
         assert_eq!(*number, Some(1));
         assert!(ordered);
         assert_eq!(*marker, '.');
@@ -35,7 +43,10 @@ fn ordered_marker_with_dot() {
 #[test]
 fn ordered_marker_with_paren() {
     let tokens = parse("1) a\n");
-    let item = tokens.iter().find(|t| matches!(t, Token::ListItem { .. })).unwrap();
+    let item = tokens
+        .iter()
+        .find(|t| matches!(t, Token::ListItem { .. }))
+        .unwrap();
     if let Token::ListItem { marker, .. } = item {
         assert_eq!(*marker, ')');
     }
@@ -44,7 +55,10 @@ fn ordered_marker_with_paren() {
 #[test]
 fn ordered_list_starting_at_zero() {
     let tokens = parse("0. a\n");
-    let item = tokens.iter().find(|t| matches!(t, Token::ListItem { .. })).unwrap();
+    let item = tokens
+        .iter()
+        .find(|t| matches!(t, Token::ListItem { .. }))
+        .unwrap();
     if let Token::ListItem { number, .. } = item {
         assert_eq!(*number, Some(0));
     }
@@ -78,7 +92,10 @@ fn ten_digit_ordered_marker_is_paragraph() {
 #[test]
 fn item_with_marker_then_blockquote() {
     let tokens = parse("- > inner quote\n");
-    let item = tokens.iter().find(|t| matches!(t, Token::ListItem { .. })).unwrap();
+    let item = tokens
+        .iter()
+        .find(|t| matches!(t, Token::ListItem { .. }))
+        .unwrap();
     if let Token::ListItem { content, .. } = item {
         assert!(content.iter().any(|t| matches!(t, Token::BlockQuote(_))));
     }
@@ -87,7 +104,10 @@ fn item_with_marker_then_blockquote() {
 #[test]
 fn item_with_indented_continuation() {
     let tokens = parse("- first\n  continued\n");
-    let item = tokens.iter().find(|t| matches!(t, Token::ListItem { .. })).unwrap();
+    let item = tokens
+        .iter()
+        .find(|t| matches!(t, Token::ListItem { .. }))
+        .unwrap();
     if let Token::ListItem { content, .. } = item {
         let text = Token::collect_all_text(content);
         assert!(text.contains("first"));
@@ -98,7 +118,10 @@ fn item_with_indented_continuation() {
 #[test]
 fn task_list_item_basic() {
     let tokens = parse("- [ ] task\n");
-    let item = tokens.iter().find(|t| matches!(t, Token::ListItem { .. })).unwrap();
+    let item = tokens
+        .iter()
+        .find(|t| matches!(t, Token::ListItem { .. }))
+        .unwrap();
     if let Token::ListItem { checked, .. } = item {
         assert_eq!(*checked, Some(false));
     }

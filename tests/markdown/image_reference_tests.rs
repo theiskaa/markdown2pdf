@@ -5,7 +5,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn first_image_url_title(tokens: &[Token]) -> Option<(String, Option<String>)> {
     tokens.iter().find_map(|t| {
         if let Token::Image { url, title, .. } = t {

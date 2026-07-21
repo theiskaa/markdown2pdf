@@ -270,10 +270,7 @@ fn anchor_inside_emphasis_links_within_styling() {
 
 #[test]
 fn link_annotation_has_nonempty_clickable_rect() {
-    let bytes = render(
-        "Click <a href=\"https://example.com\">here</a>.\n",
-        "",
-    );
+    let bytes = render("Click <a href=\"https://example.com\">here</a>.\n", "");
     let rects = collect_link_rects(&bytes);
     assert_eq!(rects.len(), 1);
     let [llx, lly, urx, ury] = rects[0];
@@ -533,10 +530,7 @@ fn inline_tags_with_attributes_classify_by_name() {
 
 #[test]
 fn empty_anchor_body_still_emits_annotation() {
-    let bytes = render(
-        "Trailing <a href=\"https://example.com\"></a> link.\n",
-        "",
-    );
+    let bytes = render("Trailing <a href=\"https://example.com\"></a> link.\n", "");
     assert!(pdf_well_formed(&bytes));
     // An anchor with no visible text still produces an annotation,
     // but its rect can be zero-width — accept either 0 or 1 here so

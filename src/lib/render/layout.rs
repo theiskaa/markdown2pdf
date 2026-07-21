@@ -6,22 +6,22 @@
 //! would dip below the bottom margin.
 
 use printpdf::{
-    Actions, BorderArray, ColorArray, Destination, LineDashPattern, LinePoint, LinkAnnotation,
-    Mm, Op, PaintMode, PdfDocument, PdfPage, Point, Polygon, PolygonRing, Pt, RawImage, Rect, Rgb,
+    Actions, BorderArray, ColorArray, Destination, LineDashPattern, LinePoint, LinkAnnotation, Mm,
+    Op, PaintMode, PdfDocument, PdfPage, Point, Polygon, PolygonRing, Pt, RawImage, Rect, Rgb,
     TextItem, WindingOrder, XObjectId, XObjectTransform,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::styling::{
     BorderStyle, ImageAlign, Orientation, PageSize, ResolvedBlock, ResolvedBorder,
-    ResolvedBorderSide, ResolvedList,
-    ResolvedPage, ResolvedPageFurniture, ResolvedStyle, ResolvedToc, TextAlignment,
+    ResolvedBorderSide, ResolvedList, ResolvedPage, ResolvedPageFurniture, ResolvedStyle,
+    ResolvedToc, TextAlignment,
 };
 
-use crate::markdown::{slugify, TableCell};
+use crate::markdown::{TableCell, slugify};
 
 use super::font::FontSet;
-use super::image_policy::{is_http_url, resolve_image_path, ImagePathRefusal};
+use super::image_policy::{ImagePathRefusal, is_http_url, resolve_image_path};
 use super::ir::{Block, InlineRun, ListBullet, ListEntry, RunFlags};
 use super::math::layout::GlyphFont;
 
@@ -43,7 +43,10 @@ pub(crate) fn page_dimensions_mm(page: &ResolvedPage) -> (f32, f32) {
         PageSize::Legal => (216.0, 355.6),
         PageSize::A3 => (297.0, 420.0),
         PageSize::A5 => (148.0, 210.0),
-        PageSize::Custom { width_mm, height_mm } => {
+        PageSize::Custom {
+            width_mm,
+            height_mm,
+        } => {
             // A hostile config can set a custom size to 0, negative,
             // NaN, inf, or an absurd magnitude. NaN is the worst: it
             // makes every downstream page-break comparison false (the
@@ -51,11 +54,7 @@ pub(crate) fn page_dimensions_mm(page: &ResolvedPage) -> (f32, f32) {
             // rather than propagate. A valid-but-extreme size is
             // clamped into PDF's renderable range (~10mm .. 5080mm,
             // the spec's 200in maximum) so page math can't overflow.
-            if width_mm.is_finite()
-                && height_mm.is_finite()
-                && width_mm > 0.0
-                && height_mm > 0.0
-            {
+            if width_mm.is_finite() && height_mm.is_finite() && width_mm > 0.0 && height_mm > 0.0 {
                 (width_mm.clamp(10.0, 5080.0), height_mm.clamp(10.0, 5080.0))
             } else {
                 (210.0, 297.0)
@@ -488,10 +487,7 @@ impl<'a> Engine<'a> {
             };
             let internal_link_ops = deferred_per_page.remove(&idx).unwrap_or_default();
             let mut all = Vec::with_capacity(
-                header_ops.len()
-                    + content_ops.len()
-                    + footer_ops.len()
-                    + internal_link_ops.len(),
+                header_ops.len() + content_ops.len() + footer_ops.len() + internal_link_ops.len(),
             );
             all.extend(header_ops);
             all.extend(content_ops);
@@ -532,8 +528,7 @@ impl<'a> Engine<'a> {
 
         let page_width_pt = self.page_width_pt();
         self.indent_left_pt = mm_to_pt(self.style.page.margins_mm.left.max(1.0));
-        self.indent_right_pt =
-            page_width_pt - mm_to_pt(self.style.page.margins_mm.right.max(1.0));
+        self.indent_right_pt = page_width_pt - mm_to_pt(self.style.page.margins_mm.right.max(1.0));
         self.in_text_section = false;
 
         let base_size = tp.style.font_size_pt.max(8.0);
@@ -573,9 +568,7 @@ impl<'a> Engine<'a> {
             .map(|raw| {
                 let nat_w = raw.width as f32 / 300.0 * 72.0;
                 let nat_h = raw.height as f32 / 300.0 * 72.0;
-                let scale = (content_w / nat_w)
-                    .min((usable_h * 0.45) / nat_h)
-                    .min(1.0);
+                let scale = (content_w / nat_w).min((usable_h * 0.45) / nat_h).min(1.0);
                 (raw, nat_w * scale, nat_h * scale, scale)
             });
         if let Some((_, _, cover_h, _)) = &cover {
@@ -606,12 +599,7 @@ impl<'a> Engine<'a> {
             self.y_from_top_pt += cover_h + line_gap;
         }
 
-        self.render_title_page_text(
-            &tp.title,
-            title_size,
-            &tp.style,
-            true,
-        );
+        self.render_title_page_text(&tp.title, title_size, &tp.style, true);
         self.advance_y(small_gap);
 
         if let Some(sub) = tp.subtitle.as_deref() {
@@ -692,7 +680,11 @@ impl<'a> Engine<'a> {
     /// headings will sit at after concatenation. Caller iterates
     /// until the returned page count matches the estimate.
     fn lay_out_toc(&mut self, toc_offset_estimate: usize) -> Vec<Vec<Op>> {
-        let toc = self.style.toc.clone().expect("toc must be Some when this is called");
+        let toc = self
+            .style
+            .toc
+            .clone()
+            .expect("toc must be Some when this is called");
 
         // Snapshot the engine's geometric state. raw_pages was already
         // drained by finish() before this call; page_ops is empty too
@@ -709,8 +701,7 @@ impl<'a> Engine<'a> {
         self.y_from_top_pt = mm_to_pt(self.style.page.margins_mm.top.max(1.0));
         let page_width_pt = self.page_width_pt();
         self.indent_left_pt = mm_to_pt(self.style.page.margins_mm.left.max(1.0));
-        self.indent_right_pt =
-            page_width_pt - mm_to_pt(self.style.page.margins_mm.right.max(1.0));
+        self.indent_right_pt = page_width_pt - mm_to_pt(self.style.page.margins_mm.right.max(1.0));
         self.in_text_section = false;
 
         self.render_toc_title(&toc);
@@ -748,7 +739,8 @@ impl<'a> Engine<'a> {
         // and is overridable by `[headings.h1]`. The toc-specific
         // `[toc.style]` block governs entry rows only.
         let s = self.style.headings[0].clone();
-        let runs = vec![InlineRun { math: None,
+        let runs = vec![InlineRun {
+            math: None,
             text: toc.title.clone(),
             flags: RunFlags::default(),
             link: None,
@@ -772,12 +764,7 @@ impl<'a> Engine<'a> {
         self.end_block(ctx);
     }
 
-    fn render_toc_entry(
-        &mut self,
-        anchor: &HeadingAnchor,
-        page_num: usize,
-        toc: &ResolvedToc,
-    ) {
+    fn render_toc_entry(&mut self, anchor: &HeadingAnchor, page_num: usize, toc: &ResolvedToc) {
         let style = toc.style.clone();
         let entry_indent = (anchor.level.saturating_sub(1) as f32) * 12.0;
         let flags = RunFlags::default();
@@ -957,7 +944,9 @@ impl<'a> Engine<'a> {
     /// "unresolved" by this check.
     fn is_unresolved_internal_link(&self, link: &Option<String>) -> bool {
         let Some(url) = link else { return false };
-        let Some(slug) = url.strip_prefix('#') else { return false };
+        let Some(slug) = url.strip_prefix('#') else {
+            return false;
+        };
         !self.known_heading_slugs.contains(slug)
     }
 
@@ -998,7 +987,8 @@ impl<'a> Engine<'a> {
                 if buf_lower.is_some() && buf_lower != Some(is_lower) {
                     let mut f = run.flags;
                     f.small_caps = buf_lower == Some(true);
-                    out.push(InlineRun { math: None,
+                    out.push(InlineRun {
+                        math: None,
                         text: std::mem::take(&mut buf),
                         flags: f,
                         link: run.link.clone(),
@@ -1016,7 +1006,8 @@ impl<'a> Engine<'a> {
             if !buf.is_empty() {
                 let mut f = run.flags;
                 f.small_caps = buf_lower == Some(true);
-                out.push(InlineRun { math: None,
+                out.push(InlineRun {
+                    math: None,
                     text: buf,
                     flags: f,
                     link: run.link.clone(),
@@ -1070,7 +1061,11 @@ impl<'a> Engine<'a> {
                     .filter_map(|(i, c)| {
                         if matches!(c, '/' | '?' | '&' | '#') {
                             let next = i + c.len_utf8();
-                            if next < word.text.len() { Some(next) } else { None }
+                            if next < word.text.len() {
+                                Some(next)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
@@ -1101,7 +1096,8 @@ impl<'a> Engine<'a> {
                 }
                 if let Some(b) = soft_break {
                     let chunk_text = word.text[chunk_start_byte..b].to_string();
-                    out.push(InlineRun { math: None,
+                    out.push(InlineRun {
+                        math: None,
                         text: chunk_text,
                         flags: word.flags,
                         link: word.link.clone(),
@@ -1132,7 +1128,8 @@ impl<'a> Engine<'a> {
                 if let Some(b) = hyphen_break {
                     let mut chunk_text = word.text[chunk_start_byte..b].to_string();
                     chunk_text.push('-');
-                    out.push(InlineRun { math: None,
+                    out.push(InlineRun {
+                        math: None,
                         text: chunk_text,
                         flags: word.flags,
                         link: word.link.clone(),
@@ -1149,10 +1146,7 @@ impl<'a> Engine<'a> {
                 let mut last_fit = chunk_start_char;
                 let mut j = chunk_start_char;
                 while j < chars.len() {
-                    let end_byte = chars
-                        .get(j + 1)
-                        .map(|c| c.0)
-                        .unwrap_or(word.text.len());
+                    let end_byte = chars.get(j + 1).map(|c| c.0).unwrap_or(word.text.len());
                     let prefix = &word.text[chunk_start_byte..end_byte];
                     let w = self.measure_text(word.flags, prefix, size_pt);
                     if w > max_width {
@@ -1169,7 +1163,8 @@ impl<'a> Engine<'a> {
                     .map(|c| c.0)
                     .unwrap_or(word.text.len());
                 let chunk_text = word.text[chunk_start_byte..end_byte].to_string();
-                out.push(InlineRun { math: None,
+                out.push(InlineRun {
+                    math: None,
                     text: chunk_text,
                     flags: word.flags,
                     link: word.link.clone(),
@@ -1498,20 +1493,21 @@ impl<'a> Engine<'a> {
             // the *final* fragment regardless of how many pages the
             // block crossed.
             if let Some(ob) = self.open_bg.pop()
-                && outer_y_bottom > ob.top_y {
-                    let mut bg_ops: Vec<Op> = Vec::new();
-                    draw_filled_rect(
-                        &mut bg_ops,
-                        ob.x_left,
-                        ob.top_y,
-                        ob.x_right,
-                        outer_y_bottom,
-                        rgb_color(ob.color),
-                        page_h,
-                    );
-                    let insert_at = ob.marker.min(self.page_ops.len());
-                    self.page_ops.splice(insert_at..insert_at, bg_ops);
-                }
+                && outer_y_bottom > ob.top_y
+            {
+                let mut bg_ops: Vec<Op> = Vec::new();
+                draw_filled_rect(
+                    &mut bg_ops,
+                    ob.x_left,
+                    ob.top_y,
+                    ob.x_right,
+                    outer_y_bottom,
+                    rgb_color(ob.color),
+                    page_h,
+                );
+                let insert_at = ob.marker.min(self.page_ops.len());
+                self.page_ops.splice(insert_at..insert_at, bg_ops);
+            }
         }
 
         if has_any_border(&ctx.border) && !spanned_page {
@@ -1668,14 +1664,10 @@ impl<'a> Engine<'a> {
                 aligns,
                 rows,
             } => self.render_table(headers, aligns, rows),
-            Block::Image { path, alt, caption } => {
-                self.render_image(path, alt, caption.as_deref())
-            }
+            Block::Image { path, alt, caption } => self.render_image(path, alt, caption.as_deref()),
             Block::Html { content } => self.render_html_block(content),
             Block::PageBreak => self.start_new_page(),
-            Block::FootnoteDefinitions { entries } => {
-                self.render_footnote_definitions(entries)
-            }
+            Block::FootnoteDefinitions { entries } => self.render_footnote_definitions(entries),
             Block::DefinitionList { entries } => self.render_definition_list(entries),
             Block::Math { content } => self.render_math_block(content),
         }
@@ -1699,8 +1691,7 @@ impl<'a> Engine<'a> {
                     .chain(font_set.fallbacks.iter())
                     .filter(|f| !f.source_bytes().is_empty());
                 for f in chain.take(super::math::layout::MAX_TEXT_FONTS) {
-                    if let Some(tf) =
-                        super::math::font::MathTextFont::from_bytes(f.source_bytes())
+                    if let Some(tf) = super::math::font::MathTextFont::from_bytes(f.source_bytes())
                     {
                         text_fonts.push(tf);
                     }
@@ -1731,7 +1722,14 @@ impl<'a> Engine<'a> {
         }
         let frag = {
             let ms = self.math.as_ref().unwrap().as_ref().unwrap();
-            super::math::typeset(&ms.font, &ms.text_fonts, &ms.warned, content, false, size_pt)
+            super::math::typeset(
+                &ms.font,
+                &ms.text_fonts,
+                &ms.warned,
+                content,
+                false,
+                size_pt,
+            )
         };
         if let Some(f) = &frag {
             self.math_inline_cache.insert(key, f.clone());
@@ -1865,8 +1863,7 @@ impl<'a> Engine<'a> {
         // pairs (each `q`/`Q` preserves it) instead of re-emitting it
         // per glyph.
         if !glyphs.is_empty() {
-            self.page_ops
-                .push(Op::SetFillColor { col: color.clone() });
+            self.page_ops.push(Op::SetFillColor { col: color.clone() });
         }
         for (sel, gid, ox, oy, size) in glyphs {
             let Some(id) = self.math_glyph_xobject(sel, gid) else {
@@ -1936,9 +1933,14 @@ impl<'a> Engine<'a> {
         if frag.w > avail_w && avail_w > 0.0 {
             let scaled_pt = (base_pt * (avail_w / frag.w)).max(4.0);
             let ms = self.math.as_ref().unwrap().as_ref().unwrap();
-            if let Some(f) =
-                super::math::typeset(&ms.font, &ms.text_fonts, &ms.warned, content, true, scaled_pt)
-            {
+            if let Some(f) = super::math::typeset(
+                &ms.font,
+                &ms.text_fonts,
+                &ms.warned,
+                content,
+                true,
+                scaled_pt,
+            ) {
                 frag = f;
             }
         }
@@ -1947,10 +1949,8 @@ impl<'a> Engine<'a> {
         // multi-column layout this means "in the same column" — push
         // to the next column (or page) rather than splitting the
         // equation across columns.
-        if self.y_from_top_pt + total_h + self.bottom_margin_pt()
-            > self.page_height_pt()
-            && total_h + self.top_margin_pt() + self.bottom_margin_pt()
-                < self.page_height_pt()
+        if self.y_from_top_pt + total_h + self.bottom_margin_pt() > self.page_height_pt()
+            && total_h + self.top_margin_pt() + self.bottom_margin_pt() < self.page_height_pt()
         {
             self.advance_column();
         }
@@ -1982,7 +1982,8 @@ impl<'a> Engine<'a> {
             if line.trim().is_empty() {
                 continue;
             }
-            let run = InlineRun { math: None,
+            let run = InlineRun {
+                math: None,
                 text: line.to_string(),
                 flags: base,
                 link: None,
@@ -2060,14 +2061,18 @@ impl<'a> Engine<'a> {
             return;
         }
         let h2 = self.style.headings[1].clone();
-        let title_runs = vec![InlineRun { math: None,
+        let title_runs = vec![InlineRun {
+            math: None,
             text: "Footnotes".to_string(),
             flags: RunFlags::default(),
             link: None,
         }];
         let header_h = {
-            let lines = self
-                .estimate_wrapped_lines(&title_runs, h2.font_size_pt, base_flags_from_block(&h2));
+            let lines = self.estimate_wrapped_lines(
+                &title_runs,
+                h2.font_size_pt,
+                base_flags_from_block(&h2),
+            );
             h2.margin_before_pt
                 + h2.padding.top
                 + lines as f32 * h2.font_size_pt * h2.line_height.max(0.5)
@@ -2109,12 +2114,14 @@ impl<'a> Engine<'a> {
                 y_pt: self.y_from_top_pt,
             });
             let mut runs: Vec<InlineRun> = Vec::with_capacity(entry.runs.len() + 2);
-            runs.push(InlineRun { math: None,
+            runs.push(InlineRun {
+                math: None,
                 text: format!("{}", entry.number),
                 flags: RunFlags::default().with_superscript(),
                 link: None,
             });
-            runs.push(InlineRun { math: None,
+            runs.push(InlineRun {
+                math: None,
                 text: "  ".to_string(),
                 flags: RunFlags::default(),
                 link: None,
@@ -2156,7 +2163,11 @@ impl<'a> Engine<'a> {
             let bytes = super::net_guard::fetch_url(url)?;
             self.url_image_cache.insert(url.to_string(), bytes);
         }
-        Ok(self.url_image_cache.get(url).expect("just inserted").clone())
+        Ok(self
+            .url_image_cache
+            .get(url)
+            .expect("just inserted")
+            .clone())
     }
 
     #[cfg(not(feature = "fetch"))]
@@ -2174,7 +2185,8 @@ impl<'a> Engine<'a> {
         if alt.trim().is_empty() {
             return;
         }
-        self.render_paragraph(&[InlineRun { math: None,
+        self.render_paragraph(&[InlineRun {
+            math: None,
             text: format!("[image: {}]", alt),
             flags: RunFlags::default().with_italic(),
             link: None,
@@ -2366,13 +2378,7 @@ impl<'a> Engine<'a> {
             let color = Some(rgb_color(cap.text_color_rgb()));
             let saved_align = self.current_text_align;
             self.current_text_align = cap.text_align;
-            self.write_wrapped_runs(
-                &runs,
-                cap.font_size_pt,
-                cap.line_height,
-                base_flags,
-                color,
-            );
+            self.write_wrapped_runs(&runs, cap.font_size_pt, cap.line_height, base_flags, color);
             self.current_text_align = saved_align;
             let (l, r) = self.rebase_indents(saved_left, saved_right, saved_column);
             self.indent_left_pt = l;
@@ -2501,15 +2507,16 @@ impl<'a> Engine<'a> {
             // Zebra striping: tint alternate data rows (every other
             // row, first data row left untinted) when configured.
             if let Some(bg) = self.style.table.alternating_row_background
-                && row_idx % 2 == 1 {
-                    self.draw_table_row_background(
-                        group_top,
-                        group_height,
-                        col_width,
-                        col_count,
-                        (bg.r, bg.g, bg.b),
-                    );
-                }
+                && row_idx % 2 == 1
+            {
+                self.draw_table_row_background(
+                    group_top,
+                    group_height,
+                    col_width,
+                    col_count,
+                    (bg.r, bg.g, bg.b),
+                );
+            }
             let group_heights = &row_heights[row_idx..group_end];
             for local_idx in 0..(group_end - row_idx) {
                 self.y_from_top_pt = group_top + group_heights[..local_idx].iter().sum::<f32>();
@@ -2724,8 +2731,7 @@ impl<'a> Engine<'a> {
                     false,
                     self.letter_spacing_pt,
                 );
-                let content_height =
-                    content_lines as f32 * font_size * line_height_mult.max(0.5);
+                let content_height = content_lines as f32 * font_size * line_height_mult.max(0.5);
                 row_top + ((region_height - content_height) / 2.0).max(pad.top)
             } else {
                 row_top + pad.top
@@ -2797,9 +2803,7 @@ impl<'a> Engine<'a> {
             let mut list_style: ResolvedList = match entry.bullet {
                 ListBullet::Unordered(_) => self.style.list_unordered.clone(),
                 ListBullet::Ordered(_) => self.style.list_ordered.clone(),
-                ListBullet::TaskChecked | ListBullet::TaskUnchecked => {
-                    self.style.list_task.clone()
-                }
+                ListBullet::TaskChecked | ListBullet::TaskUnchecked => self.style.list_task.clone(),
             };
             // Inside a blockquote / admonition, list text inherits the
             // container typography (the same fields a body paragraph
@@ -2845,9 +2849,7 @@ impl<'a> Engine<'a> {
             // top (already maximum room).
             if (self.y_from_top_pt - self.top_margin_pt()).abs() >= 0.01 {
                 let line_h = size_pt * line_height.max(0.5);
-                if self.y_from_top_pt + line_h + self.bottom_margin_pt()
-                    > self.page_height_pt()
-                {
+                if self.y_from_top_pt + line_h + self.bottom_margin_pt() > self.page_height_pt() {
                     self.advance_column();
                 }
             }
@@ -2861,8 +2863,7 @@ impl<'a> Engine<'a> {
             // text, so user config is respected. Task items always
             // get a real checkbox rather than literal `[ ]`/`[x]`.
             let needs_xlit = self.font_set.needs_transliteration(bullet_flags);
-            let glyph_unrepresentable =
-                needs_xlit && to_win1252(&bullet_text) != bullet_text;
+            let glyph_unrepresentable = needs_xlit && to_win1252(&bullet_text) != bullet_text;
             let bullet_col = rgb_color(s.text_color_rgb());
             let page_h = self.page_height_pt();
             // Vertical centre of the lowercase text the bullet sits
@@ -2947,8 +2948,8 @@ impl<'a> Engine<'a> {
             // A nested list steps in by `indent_per_level_pt` from this
             // list's bullet column; an item's other children (e.g.
             // continuation paragraphs) stay aligned with the item text.
-            let nested_indent = (saved_left + list_style.indent_per_level_pt)
-                .min(self.indent_right_pt - 10.0);
+            let nested_indent =
+                (saved_left + list_style.indent_per_level_pt).min(self.indent_right_pt - 10.0);
             let mut child_it = entry.children.iter().peekable();
             while let Some(child) = child_it.next() {
                 self.indent_left_pt = if matches!(child, Block::List { .. }) {
@@ -3141,7 +3142,11 @@ impl<'a> Engine<'a> {
         let text = collect_heading_text(runs);
         let base_slug = {
             let s = slugify(&text);
-            if s.is_empty() { "section".to_string() } else { s }
+            if s.is_empty() {
+                "section".to_string()
+            } else {
+                s
+            }
         };
         let mut slug = base_slug.clone();
         let mut n = 2usize;
@@ -3220,7 +3225,8 @@ impl<'a> Engine<'a> {
         self.current_text_align = s.text_align;
         self.first_line_indent_pt = s.indent_pt;
         for line in lines {
-            let run = InlineRun { math: None,
+            let run = InlineRun {
+                math: None,
                 text: line.clone(),
                 flags: base,
                 link: None,
@@ -3343,9 +3349,8 @@ impl<'a> Engine<'a> {
         // up no per-word overhead.
         let ci_pad_l = self.style.code_inline.padding.left;
         let ci_pad_r = self.style.code_inline.padding.right;
-        let is_inline_code_word = |w: &InlineRun| {
-            w.math.is_none() && w.flags.inline_code && !self.in_code_block
-        };
+        let is_inline_code_word =
+            |w: &InlineRun| w.math.is_none() && w.flags.inline_code && !self.in_code_block;
         let word_pads: Vec<(f32, f32)> = if ci_pad_l == 0.0 && ci_pad_r == 0.0 {
             vec![(0.0, 0.0); words.len()]
         } else {
@@ -3491,7 +3496,11 @@ impl<'a> Engine<'a> {
             }
             // The first line is shifted right and narrowed by the
             // first-line indent; later lines use the full column.
-            let line_indent = if line_idx == 0 { first_line_indent_pt } else { 0.0 };
+            let line_indent = if line_idx == 0 {
+                first_line_indent_pt
+            } else {
+                0.0
+            };
             let eff_left = self.indent_left_pt + line_indent;
             let eff_max_width = (max_width - line_indent).max(0.0);
             let slack_pt = (eff_max_width - natural_w_pt).max(0.0);
@@ -3507,9 +3516,8 @@ impl<'a> Engine<'a> {
                     // would stretch spaces beyond ~30% of the column
                     // (a sign the wrap had no good fit, like an isolated
                     // short word).
-                    let stretch_ok = space_count > 0
-                        && slack_pt > 0.0
-                        && slack_pt < eff_max_width * 0.30;
+                    let stretch_ok =
+                        space_count > 0 && slack_pt > 0.0 && slack_pt < eff_max_width * 0.30;
                     let tw = if !is_last_line && stretch_ok {
                         (slack_pt / space_count as f32).min(size_pt * 0.5)
                     } else {
@@ -3518,10 +3526,7 @@ impl<'a> Engine<'a> {
                     (eff_left, tw)
                 }
             };
-            let needs_absolute_td = !matches!(
-                align,
-                TextAlignment::Left | TextAlignment::Justify
-            );
+            let needs_absolute_td = !matches!(align, TextAlignment::Left | TextAlignment::Justify);
 
             if opened_now {
                 self.move_cursor_to(line_x_start, baseline_y_pt);
@@ -3566,9 +3571,7 @@ impl<'a> Engine<'a> {
                 // BT/ET is closed and the next text segment re-opens.
                 if let Some(tex) = seg.math.clone() {
                     if let Some(frag) = self.inline_math_frag(&tex, size_pt) {
-                        let mc = color
-                            .clone()
-                            .unwrap_or_else(|| rgb_color((0, 0, 0)));
+                        let mc = color.clone().unwrap_or_else(|| rgb_color((0, 0, 0)));
                         self.emit_math_frag(&frag, x_cursor_pt, baseline_y_pt, mc);
                         x_cursor_pt += frag.w;
                         cursor_needs_reset = true;
@@ -3608,8 +3611,7 @@ impl<'a> Engine<'a> {
                     + if seg.flags.superscript || seg.flags.subscript {
                         0.0
                     } else {
-                        word_spacing_pt
-                            * seg.text.chars().filter(|&c| c == ' ').count() as f32
+                        word_spacing_pt * seg.text.chars().filter(|&c| c == ' ').count() as f32
                     };
                 let seg_advance = pad_before_pt + glyph_advance + pad_after_pt;
 
@@ -3829,7 +3831,9 @@ impl<'a> Engine<'a> {
                     // clearly as the glyph stems; links keep link
                     // colour. (Was (80,80,80) @ 0.6pt — barely
                     // visible next to the text.)
-                    let col = link_color.clone().unwrap_or_else(|| rgb_color((45, 45, 45)));
+                    let col = link_color
+                        .clone()
+                        .unwrap_or_else(|| rgb_color((45, 45, 45)));
                     draw_horizontal_line(
                         &mut self.page_ops,
                         d.x0_pt,
@@ -3874,8 +3878,7 @@ impl<'a> Engine<'a> {
                         Some(ColorArray::Transparent),
                         None,
                     );
-                    self.page_ops
-                        .push(Op::LinkAnnotation { link: annotation });
+                    self.page_ops.push(Op::LinkAnnotation { link: annotation });
                 }
             }
         }
@@ -4039,8 +4042,7 @@ fn count_wrapped_lines(
     }
     let size_pt = font_size;
     let measure = |flags: RunFlags, text: &str| {
-        font_set.measure(flags, text, size_pt)
-            + letter_spacing_pt * text.chars().count() as f32
+        font_set.measure(flags, text, size_pt) + letter_spacing_pt * text.chars().count() as f32
     };
     let mut current = 0.0f32;
     let mut lines = 1usize;
@@ -4150,10 +4152,7 @@ fn draw_filled_rect(
     let y_bottom = page_height_pt - y_bot_pt;
     let y_top = page_height_pt - y_top_pt;
     let corner = |x: f32, y: f32| LinePoint {
-        p: Point {
-            x: Pt(x),
-            y: Pt(y),
-        },
+        p: Point { x: Pt(x), y: Pt(y) },
         bezier: false,
     };
     let polygon = Polygon {
@@ -4691,7 +4690,8 @@ fn words_from_runs(runs: &[InlineRun]) -> Vec<InlineRun> {
             };
             let slice = &run.text[chars[i].0..end_byte];
             if !slice.is_empty() {
-                out.push(InlineRun { math: None,
+                out.push(InlineRun {
+                    math: None,
                     text: slice.to_string(),
                     flags: run.flags,
                     link: run.link.clone(),
@@ -4723,7 +4723,6 @@ fn mm_to_pt(mm: f32) -> f32 {
 fn pt_to_mm(pt: f32) -> f32 {
     pt / MM_TO_PT
 }
-
 
 /// Block-level style → base run flags. Weight, slant, and the
 /// underline / strikethrough decorations are set on the style block
@@ -4923,33 +4922,66 @@ mod tests {
 
     #[test]
     fn empty_block_list_produces_no_pages() {
-        let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
+        let font_set = FontSet::load(
+            None,
+            &[],
+            crate::render::ir::VariantUsage::default(),
+            &mut PdfDocument::new("test"),
+        );
         let style = ResolvedStyle::default();
-        let pages = lay_out_pages(&[], &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(
+            &[],
+            &style,
+            &font_set,
+            &HashSet::new(),
+            &mut PdfDocument::new("test"),
+        );
         assert!(pages.is_empty());
     }
 
     #[test]
     fn one_paragraph_produces_one_page() {
-        let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
+        let font_set = FontSet::load(
+            None,
+            &[],
+            crate::render::ir::VariantUsage::default(),
+            &mut PdfDocument::new("test"),
+        );
         let style = ResolvedStyle::default();
         let blocks = vec![Block::Paragraph {
             runs: vec![InlineRun::new("hello world")],
         }];
-        let pages = lay_out_pages(&blocks, &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(
+            &blocks,
+            &style,
+            &font_set,
+            &HashSet::new(),
+            &mut PdfDocument::new("test"),
+        );
         assert_eq!(pages.len(), 1);
     }
 
     #[test]
     fn many_paragraphs_split_across_pages() {
-        let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
+        let font_set = FontSet::load(
+            None,
+            &[],
+            crate::render::ir::VariantUsage::default(),
+            &mut PdfDocument::new("test"),
+        );
         let style = ResolvedStyle::default();
         let blocks: Vec<_> = (0..200)
             .map(|i| Block::Paragraph {
                 runs: vec![InlineRun::new(format!("paragraph {}", i))],
             })
             .collect();
-        let pages = lay_out_pages(&blocks, &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(
+            &blocks,
+            &style,
+            &font_set,
+            &HashSet::new(),
+            &mut PdfDocument::new("test"),
+        );
         assert!(pages.len() >= 2, "expected page split, got {}", pages.len());
     }
 
@@ -4959,13 +4991,24 @@ mod tests {
 
     #[test]
     fn very_long_paragraph_wraps_to_multiple_lines() {
-        let font_set = FontSet::load(None, &[], crate::render::ir::VariantUsage::default(), &mut PdfDocument::new("test"));
+        let font_set = FontSet::load(
+            None,
+            &[],
+            crate::render::ir::VariantUsage::default(),
+            &mut PdfDocument::new("test"),
+        );
         let style = ResolvedStyle::default();
         let long_text = "word ".repeat(200);
         let blocks = vec![Block::Paragraph {
             runs: vec![InlineRun::new(long_text)],
         }];
-        let pages = lay_out_pages(&blocks, &style, &font_set, &HashSet::new(), &mut PdfDocument::new("test"));
+        let pages = lay_out_pages(
+            &blocks,
+            &style,
+            &font_set,
+            &HashSet::new(),
+            &mut PdfDocument::new("test"),
+        );
         assert!(!pages.is_empty());
     }
 }

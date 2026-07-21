@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn single_intra_word_underscore() {
     let tokens = parse("foo_bar");
@@ -65,7 +64,9 @@ fn heading_with_intra_word_underscore() {
     assert_eq!(
         tokens,
         vec![Token::Heading(
-            vec![Token::Text("phpmyadmin/localized_docs (GitHub)".to_string())],
+            vec![Token::Text(
+                "phpmyadmin/localized_docs (GitHub)".to_string()
+            )],
             2
         )]
     );
@@ -175,10 +176,7 @@ fn blockquote_with_intra_word_underscore() {
     let tokens = parse("> Quote with foo_bar inside");
     assert_eq!(tokens.len(), 1);
     if let Token::BlockQuote(body) = &tokens[0] {
-        assert_eq!(
-            Token::collect_all_text(body),
-            "Quote with foo_bar inside"
-        );
+        assert_eq!(Token::collect_all_text(body), "Quote with foo_bar inside");
         // intra-word `_` must not produce emphasis here either
         assert!(!body.iter().any(|t| matches!(t, Token::Emphasis { .. })));
     } else {
@@ -191,7 +189,11 @@ fn link_with_intra_word_underscore() {
     let tokens = parse("[link_text](https://example.com)");
     assert_eq!(
         tokens,
-        vec![Token::Link { content: vec![Token::Text("link_text".to_string())], url: "https://example.com".to_string(), title: None }]
+        vec![Token::Link {
+            content: vec![Token::Text("link_text".to_string())],
+            url: "https://example.com".to_string(),
+            title: None
+        }]
     );
 }
 
@@ -200,7 +202,11 @@ fn code_with_underscore() {
     let tokens = parse("`foo_bar`");
     assert_eq!(
         tokens,
-        vec![Token::Code { language: "".to_string(), content: "foo_bar".to_string(), block: false }]
+        vec![Token::Code {
+            language: "".to_string(),
+            content: "foo_bar".to_string(),
+            block: false
+        }]
     );
 }
 
@@ -209,7 +215,11 @@ fn image_alt_with_underscore() {
     let tokens = parse("![alt_text](img.png)");
     assert_eq!(
         tokens,
-        vec![Token::Image { alt: vec![Token::Text("alt_text".to_string())], url: "img.png".to_string(), title: None }]
+        vec![Token::Image {
+            alt: vec![Token::Text("alt_text".to_string())],
+            url: "img.png".to_string(),
+            title: None
+        }]
     );
 }
 

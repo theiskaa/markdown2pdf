@@ -87,10 +87,7 @@ mod non_breaking_space {
 
     #[test]
     fn nbsp_pair_does_not_break_where_a_space_would() {
-        let space_lines = show_text_lines(
-            "AAAAAAAAA BBBBBBBBB CCCCCCCCC DDDDDDDDD",
-            NARROW,
-        );
+        let space_lines = show_text_lines("AAAAAAAAA BBBBBBBBB CCCCCCCCC DDDDDDDDD", NARROW);
         let nbsp_lines = show_text_lines(
             "AAAAAAAAA\u{00A0}BBBBBBBBB CCCCCCCCC\u{00A0}DDDDDDDDD",
             NARROW,
@@ -192,10 +189,7 @@ mod control_whitespace {
     fn crlf_line_endings_treated_like_lf() {
         let crlf = show_text_lines("para one\r\n\r\npara two", "");
         let lf = show_text_lines("para one\n\npara two", "");
-        assert_eq!(
-            crlf, lf,
-            "CRLF should produce the same layout as LF"
-        );
+        assert_eq!(crlf, lf, "CRLF should produce the same layout as LF");
     }
 
     #[test]

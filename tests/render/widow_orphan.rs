@@ -71,7 +71,8 @@ fn heading_lands_on_same_page_as_its_body() {
             .unwrap_or_else(|| panic!("body '{body_needle}' not found in any page"));
 
         assert_eq!(
-            heading_page, body_page,
+            heading_page,
+            body_page,
             "Section {i} orphaned: heading on page {} but body on page {}",
             heading_page + 1,
             body_page + 1
@@ -121,11 +122,14 @@ page as the wrapped heading above.\n\n";
         let h_page = streams
             .iter()
             .position(|s| page_contains(s, "A long heading"));
-        let b_page = streams.iter().position(|s| page_contains(s, "MULTILINEBODY"));
+        let b_page = streams
+            .iter()
+            .position(|s| page_contains(s, "MULTILINEBODY"));
         if let (Some(h), Some(b)) = (h_page, b_page) {
             checked += 1;
             assert_eq!(
-                h, b,
+                h,
+                b,
                 "multi-line heading orphaned at filler={n}: heading on \
 page {} but body on page {}",
                 h + 1,
@@ -164,7 +168,8 @@ fn heading_followed_by_admonition_not_orphaned() {
         if let (Some(h), Some(b)) = (h_page, b_page) {
             checked += 1;
             assert_eq!(
-                h, b,
+                h,
+                b,
                 "heading→admonition orphaned at filler={n}: heading on \
 page {} but admonition on page {}",
                 h + 1,
@@ -172,7 +177,10 @@ page {} but admonition on page {}",
             );
         }
     }
-    assert!(checked > 0, "no fixture in the sweep landed both heading and admonition body");
+    assert!(
+        checked > 0,
+        "no fixture in the sweep landed both heading and admonition body"
+    );
 }
 
 /// Heading immediately followed by a code block: code blocks have
@@ -200,7 +208,8 @@ let x = 1;\n\
         if let (Some(h), Some(b)) = (h_page, b_page) {
             checked += 1;
             assert_eq!(
-                h, b,
+                h,
+                b,
                 "heading→code orphaned at filler={n}: heading on page {} \
 but code on page {}",
                 h + 1,
@@ -208,7 +217,10 @@ but code on page {}",
             );
         }
     }
-    assert!(checked > 0, "no fixture landed both heading and code marker");
+    assert!(
+        checked > 0,
+        "no fixture landed both heading and code marker"
+    );
 }
 
 /// Heading immediately followed by a list: first list item carries
@@ -235,7 +247,8 @@ fn heading_followed_by_list_not_orphaned() {
         if let (Some(h), Some(b)) = (h_page, b_page) {
             checked += 1;
             assert_eq!(
-                h, b,
+                h,
+                b,
                 "heading→list orphaned at filler={n}: heading on page {} \
 but first bullet on page {}",
                 h + 1,
@@ -243,7 +256,10 @@ but first bullet on page {}",
             );
         }
     }
-    assert!(checked > 0, "no fixture landed both heading and first bullet");
+    assert!(
+        checked > 0,
+        "no fixture landed both heading and first bullet"
+    );
 }
 
 /// Bullet-orphan smoke: a long list spans multiple pages without
@@ -314,7 +330,8 @@ stay glued to its auto-emitted heading.\n",
         .position(|s| page_contains(s, "FOOTNOTEDEFMARK"))
         .expect("footnote definition marker not found");
     assert_eq!(
-        h_page, b_page,
+        h_page,
+        b_page,
         "Footnotes heading on page {} orphaned from its definition on \
 page {}",
         h_page + 1,
@@ -350,7 +367,8 @@ labore et dolore magna aliqua.\n",
         if let (Some(l), Some(b)) = (label_page, body_page) {
             checked += 1;
             assert_eq!(
-                l, b,
+                l,
+                b,
                 "admonition orphaned at filler={n}: label on page {} but \
 body on page {}",
                 l + 1,
@@ -364,4 +382,3 @@ body on page {}",
 silently pass on a broken renderer"
     );
 }
-

@@ -243,7 +243,11 @@ fn collect_heading_slugs(blocks: &[ir::Block]) -> std::collections::HashSet<Stri
                     let text: String = runs.iter().map(|r| r.text.as_str()).collect();
                     let base = {
                         let s = slugify(&text);
-                        if s.is_empty() { "section".to_string() } else { s }
+                        if s.is_empty() {
+                            "section".to_string()
+                        } else {
+                            s
+                        }
                     };
                     let mut slug = base.clone();
                     let mut n = 2usize;
@@ -292,8 +296,14 @@ fn collect_style_codepoints(style: &ResolvedStyle, out: &mut Vec<char>) {
             out.extend(d.chars());
         }
     }
-    for f in [style.header.as_ref(), style.footer.as_ref()].into_iter().flatten() {
-        for t in [f.left.as_ref(), f.center.as_ref(), f.right.as_ref()].into_iter().flatten() {
+    for f in [style.header.as_ref(), style.footer.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        for t in [f.left.as_ref(), f.center.as_ref(), f.right.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             out.extend(t.chars());
         }
     }
@@ -310,7 +320,12 @@ fn collect_synthesized_codepoints(
 ) {
     for block in blocks {
         match block {
-            ir::Block::Admonition { kind, raw_label, title, body } => {
+            ir::Block::Admonition {
+                kind,
+                raw_label,
+                title,
+                body,
+            } => {
                 // The renderer uses raw_label.to_ascii_uppercase() when
                 // no user title is set; fall back to the per-kind label
                 // when raw_label is empty.

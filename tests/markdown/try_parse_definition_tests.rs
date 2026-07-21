@@ -6,7 +6,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn link_of(tokens: &[Token]) -> (&str, &Option<String>) {
     let Some(Token::Link { url, title, .. }) =
         tokens.iter().find(|t| matches!(t, Token::Link { .. }))

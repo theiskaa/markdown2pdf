@@ -2,8 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
-
 #[test]
 fn escape_asterisk_blocks_emphasis() {
     let tokens = parse(r"\*not emphasis\*");
@@ -71,8 +69,8 @@ fn escape_all_punctuation_chars() {
     // Sweep every CommonMark-recognized punctuation char.
     // Each escape pair must collapse to the punctuation char alone.
     let punct = [
-        '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', ':', ';',
-        '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~',
+        '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<',
+        '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~',
     ];
     for c in punct {
         let input = format!("a\\{}b", c);
@@ -87,7 +85,6 @@ fn escape_all_punctuation_chars() {
         );
     }
 }
-
 
 #[test]
 fn backslash_before_letter_is_literal() {
@@ -107,7 +104,6 @@ fn trailing_backslash_at_eof_is_literal() {
     let tokens = parse(r"foo\");
     assert_eq!(tokens, vec![Token::Text("foo\\".to_string())]);
 }
-
 
 #[test]
 fn escape_inside_emphasis_run() {
@@ -135,7 +131,6 @@ fn escape_underscore_inside_emphasis() {
     }
 }
 
-
 #[test]
 fn escape_inside_heading() {
     let tokens = parse(r"# Header with \*literal asterisks\*");
@@ -146,14 +141,17 @@ fn escape_inside_heading() {
     }
 }
 
-
 #[test]
 fn escape_not_active_in_inline_code() {
     // Inside code, \\ and \* are literal — \ stays \.
     let tokens = parse(r"`\*literal\*`");
     assert_eq!(
         tokens,
-        vec![Token::Code { language: "".to_string(), content: r"\*literal\*".to_string(), block: false }]
+        vec![Token::Code {
+            language: "".to_string(),
+            content: r"\*literal\*".to_string(),
+            block: false
+        }]
     );
 }
 
@@ -167,7 +165,6 @@ fn escape_not_active_in_fenced_code() {
         panic!("expected code block, got {:?}", tokens);
     }
 }
-
 
 #[test]
 fn escape_blocks_thematic_rule() {
@@ -188,7 +185,6 @@ fn escape_blocks_list_marker() {
     let tokens = parse(r"\- not a list item");
     assert_eq!(tokens, vec![Token::Text("- not a list item".to_string())]);
 }
-
 
 #[test]
 fn mixed_paragraph_with_multiple_escapes() {
@@ -219,7 +215,11 @@ fn escape_does_not_consume_newline() {
     let tokens = parse("foo\\\nbar");
     assert!(matches!(&tokens[0], Token::Text(s) if s == "foo"));
     assert!(tokens.iter().any(|t| matches!(t, Token::HardBreak)));
-    assert!(tokens.iter().any(|t| matches!(t, Token::Text(s) if s == "bar")));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Text(s) if s == "bar"))
+    );
 }
 
 #[test]
@@ -229,7 +229,11 @@ fn escape_inside_inline_code_span_is_literal() {
     let tokens = parse(r"`\*not emphasis\*`");
     assert_eq!(
         tokens,
-        vec![Token::Code { language: "".to_string(), content: r"\*not emphasis\*".to_string(), block: false }]
+        vec![Token::Code {
+            language: "".to_string(),
+            content: r"\*not emphasis\*".to_string(),
+            block: false
+        }]
     );
 }
 
@@ -238,7 +242,11 @@ fn escape_inside_multi_backtick_code_span_is_literal() {
     let tokens = parse(r"``a \` b``");
     assert_eq!(
         tokens,
-        vec![Token::Code { language: "".to_string(), content: r"a \` b".to_string(), block: false }]
+        vec![Token::Code {
+            language: "".to_string(),
+            content: r"a \` b".to_string(),
+            block: false
+        }]
     );
 }
 
@@ -247,7 +255,13 @@ fn escape_inside_fenced_code_block_is_literal() {
     let tokens = parse("```\n\\*not emphasis\\*\n```");
     let code = tokens
         .iter()
-        .find_map(|t| if let Token::Code { content: body, .. } = t { Some(body) } else { None })
+        .find_map(|t| {
+            if let Token::Code { content: body, .. } = t {
+                Some(body)
+            } else {
+                None
+            }
+        })
         .expect("expected Code token");
     assert!(
         code.contains(r"\*not emphasis\*"),
@@ -261,7 +275,13 @@ fn escape_inside_tilde_fenced_code_block_is_literal() {
     let tokens = parse("~~~\n\\*not emphasis\\*\n~~~");
     let code = tokens
         .iter()
-        .find_map(|t| if let Token::Code { content: body, .. } = t { Some(body) } else { None })
+        .find_map(|t| {
+            if let Token::Code { content: body, .. } = t {
+                Some(body)
+            } else {
+                None
+            }
+        })
         .expect("expected Code token");
     assert!(
         code.contains(r"\*not emphasis\*"),
@@ -277,7 +297,13 @@ fn escape_inside_autolink_url_is_literal() {
     let tokens = parse(r"<http://example.com/\bar>");
     let link = tokens
         .iter()
-        .find_map(|t| if let Token::Link { url, .. } = t { Some(url) } else { None })
+        .find_map(|t| {
+            if let Token::Link { url, .. } = t {
+                Some(url)
+            } else {
+                None
+            }
+        })
         .expect("expected autolink Link token");
     assert!(
         link.contains(r"/\bar"),
@@ -293,7 +319,11 @@ fn escape_in_link_url_inside_parens() {
     let tokens = parse(r"[t](http://x\)y)");
     assert_eq!(
         tokens,
-        vec![Token::Link { content: vec![Token::Text("t".to_string())], url: "http://x)y".to_string(), title: None }]
+        vec![Token::Link {
+            content: vec![Token::Text("t".to_string())],
+            url: "http://x)y".to_string(),
+            title: None
+        }]
     );
 }
 
@@ -303,7 +333,11 @@ fn escape_in_link_text() {
     let tokens = parse(r"[a\]b](u)");
     assert_eq!(
         tokens,
-        vec![Token::Link { content: vec![Token::Text("a]b".to_string())], url: "u".to_string(), title: None }]
+        vec![Token::Link {
+            content: vec![Token::Text("a]b".to_string())],
+            url: "u".to_string(),
+            title: None
+        }]
     );
 }
 
@@ -330,7 +364,10 @@ fn escape_propagates_through_blockquote() {
         assert!(text.contains("foo * bar"), "got {:?}", text);
         assert!(!body.iter().any(|t| matches!(t, Token::Emphasis { .. })));
     } else {
-        panic!("expected BlockQuote, got {}", Token::slice_to_compact(&tokens));
+        panic!(
+            "expected BlockQuote, got {}",
+            Token::slice_to_compact(&tokens)
+        );
     }
 }
 
@@ -342,7 +379,10 @@ fn escape_propagates_through_list_item() {
         assert!(text.contains("foo * bar"), "got {:?}", text);
         assert!(!content.iter().any(|t| matches!(t, Token::Emphasis { .. })));
     } else {
-        panic!("expected ListItem, got {}", Token::slice_to_compact(&tokens));
+        panic!(
+            "expected ListItem, got {}",
+            Token::slice_to_compact(&tokens)
+        );
     }
 }
 
@@ -355,6 +395,9 @@ fn escape_inside_emphasis_run_keeps_punctuation_literal() {
         assert!(text.starts_with('*'), "got {:?}", text);
         assert!(text.contains("foo"), "got {:?}", text);
     } else {
-        panic!("expected Emphasis, got {}", Token::slice_to_compact(&tokens));
+        panic!(
+            "expected Emphasis, got {}",
+            Token::slice_to_compact(&tokens)
+        );
     }
 }

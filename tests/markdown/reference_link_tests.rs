@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn full_reference_link() {
     let input = "[CommonMark][cm]\n\n[cm]: https://commonmark.org";
@@ -23,27 +22,39 @@ fn full_reference_link() {
 fn collapsed_reference_link() {
     let input = "[CommonMark][]\n\n[CommonMark]: https://commonmark.org";
     let tokens = parse(input);
-    assert!(tokens.iter().any(
-        |t| matches!(t, Token::Link { url, .. } if url == "https://commonmark.org")
-    ), "got {:?}", tokens);
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Link { url, .. } if url == "https://commonmark.org")),
+        "got {:?}",
+        tokens
+    );
 }
 
 #[test]
 fn shortcut_reference_link() {
     let input = "[CommonMark]\n\n[CommonMark]: https://commonmark.org";
     let tokens = parse(input);
-    assert!(tokens.iter().any(
-        |t| matches!(t, Token::Link { url, .. } if url == "https://commonmark.org")
-    ), "got {:?}", tokens);
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Link { url, .. } if url == "https://commonmark.org")),
+        "got {:?}",
+        tokens
+    );
 }
 
 #[test]
 fn label_matching_is_case_insensitive() {
     let input = "[CommonMark][CM]\n\n[cm]: https://commonmark.org";
     let tokens = parse(input);
-    assert!(tokens.iter().any(
-        |t| matches!(t, Token::Link { url, .. } if url == "https://commonmark.org")
-    ), "got {:?}", tokens);
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Link { url, .. } if url == "https://commonmark.org")),
+        "got {:?}",
+        tokens
+    );
 }
 
 #[test]
@@ -75,27 +86,37 @@ fn unresolved_shortcut_falls_back_to_text() {
 fn reference_image() {
     let input = "![alt][img]\n\n[img]: pic.png";
     let tokens = parse(input);
-    assert!(tokens.iter().any(
-        |t| matches!(t, Token::Image { url, .. } if url == "pic.png")
-    ), "got {:?}", tokens);
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Image { url, .. } if url == "pic.png")),
+        "got {:?}",
+        tokens
+    );
 }
 
 #[test]
 fn definition_with_title_is_parsed_url_clean() {
     let input = "[a][r]\n\n[r]: https://example.com \"Example\"";
     let tokens = parse(input);
-    assert!(tokens.iter().any(
-        |t| matches!(t, Token::Link { url, .. } if url == "https://example.com")
-    ), "URL should be clean (no title baked in), got {:?}", tokens);
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Link { url, .. } if url == "https://example.com")),
+        "URL should be clean (no title baked in), got {:?}",
+        tokens
+    );
 }
 
 #[test]
 fn inline_link_still_takes_priority_over_reference() {
     // [text](url) is inline — must NOT be confused with a reference.
     let tokens = parse("[text](https://example.com)\n\n[text]: should-not-apply");
-    assert!(tokens.iter().any(
-        |t| matches!(t, Token::Link { url, .. } if url == "https://example.com")
-    ));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Link { url, .. } if url == "https://example.com"))
+    );
 }
 
 #[test]

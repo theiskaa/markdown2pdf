@@ -21,7 +21,11 @@ Jump to the [[Introduction]].
 ";
     let bytes = render(md, "");
     assert!(pdf_well_formed(&bytes));
-    assert_eq!(goto_count(&bytes), 1, "matching heading should yield one GoTo");
+    assert_eq!(
+        goto_count(&bytes),
+        1,
+        "matching heading should yield one GoTo"
+    );
 }
 
 #[test]
@@ -42,7 +46,11 @@ See [[introduction|see the intro]] for context.
 fn missing_target_degrades_without_panic() {
     let bytes = render("A link to [[Missing Page]] that has no heading.", "");
     assert!(pdf_well_formed(&bytes));
-    assert_eq!(goto_count(&bytes), 0, "unresolved wikilink must not emit a GoTo");
+    assert_eq!(
+        goto_count(&bytes),
+        0,
+        "unresolved wikilink must not emit a GoTo"
+    );
 }
 
 #[test]
@@ -70,7 +78,11 @@ The end.
 ";
     let bytes = render(md, "");
     assert!(pdf_well_formed(&bytes));
-    assert_eq!(goto_count(&bytes), 1, "a link before its heading must still resolve");
+    assert_eq!(
+        goto_count(&bytes),
+        1,
+        "a link before its heading must still resolve"
+    );
 }
 
 #[test]

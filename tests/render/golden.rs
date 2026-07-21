@@ -92,7 +92,10 @@ text_align = "justify"
         contains_text(&bytes, "/S/GoTo") || contains_text(&bytes, "/S /GoTo"),
         "cross-ref + TOC should emit GoTo actions"
     );
-    assert!(contains_text(&bytes, " Tw"), "justified body should emit Tw");
+    assert!(
+        contains_text(&bytes, " Tw"),
+        "justified body should emit Tw"
+    );
     assert!(
         page_count(&bytes) >= 3,
         "expected ≥3 pages, got {}",
@@ -260,7 +263,11 @@ fn long_word_in_narrow_blockquote() {
 fn empty_document() {
     let bytes = render("", "");
     pdf_ok(&bytes);
-    assert_eq!(page_count(&bytes), 1, "empty markdown still produces 1 page");
+    assert_eq!(
+        page_count(&bytes),
+        1,
+        "empty markdown still produces 1 page"
+    );
 }
 
 #[test]

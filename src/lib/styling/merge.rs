@@ -198,7 +198,9 @@ fn merge_table(base: TableConfig, overlay: TableConfig) -> TableConfig {
         header: merge_optional(base.header, overlay.header, merge_block),
         cell: merge_optional(base.cell, overlay.cell, merge_block),
         border: merge_optional(base.border, overlay.border, merge_border),
-        alternating_row_background: overlay.alternating_row_background.or(base.alternating_row_background),
+        alternating_row_background: overlay
+            .alternating_row_background
+            .or(base.alternating_row_background),
         cell_padding: overlay.cell_padding.or(base.cell_padding),
         row_gap_pt: overlay.row_gap_pt.or(base.row_gap_pt),
         margin_before_pt: overlay.margin_before_pt.or(base.margin_before_pt),
@@ -316,31 +318,108 @@ fn lower(theme: &str, cfg: DocumentConfig) -> Result<ResolvedStyle, ResolveError
         column_gap_mm: page_cfg.column_gap_mm.unwrap_or(0.0),
     };
 
-    let paragraph = lower_block(theme, "paragraph", &defaults, cfg.paragraph.unwrap_or_default())?;
-    let h1 = lower_block(theme, "headings.h1", &defaults, headings_cfg.h1.unwrap_or_default())?;
-    let h2 = lower_block(theme, "headings.h2", &defaults, headings_cfg.h2.unwrap_or_default())?;
-    let h3 = lower_block(theme, "headings.h3", &defaults, headings_cfg.h3.unwrap_or_default())?;
-    let h4 = lower_block(theme, "headings.h4", &defaults, headings_cfg.h4.unwrap_or_default())?;
-    let h5 = lower_block(theme, "headings.h5", &defaults, headings_cfg.h5.unwrap_or_default())?;
-    let h6 = lower_block(theme, "headings.h6", &defaults, headings_cfg.h6.unwrap_or_default())?;
-    let code_block = lower_block(theme, "code_block", &defaults, cfg.code_block.unwrap_or_default())?;
-    let code_inline = lower_inline(theme, "code_inline", &defaults, cfg.code_inline.unwrap_or_default())?;
-    let blockquote = lower_block(theme, "blockquote", &defaults, cfg.blockquote.unwrap_or_default())?;
-    let admonition =
-        lower_admonition(theme, &defaults, cfg.admonition.unwrap_or_default())?;
+    let paragraph = lower_block(
+        theme,
+        "paragraph",
+        &defaults,
+        cfg.paragraph.unwrap_or_default(),
+    )?;
+    let h1 = lower_block(
+        theme,
+        "headings.h1",
+        &defaults,
+        headings_cfg.h1.unwrap_or_default(),
+    )?;
+    let h2 = lower_block(
+        theme,
+        "headings.h2",
+        &defaults,
+        headings_cfg.h2.unwrap_or_default(),
+    )?;
+    let h3 = lower_block(
+        theme,
+        "headings.h3",
+        &defaults,
+        headings_cfg.h3.unwrap_or_default(),
+    )?;
+    let h4 = lower_block(
+        theme,
+        "headings.h4",
+        &defaults,
+        headings_cfg.h4.unwrap_or_default(),
+    )?;
+    let h5 = lower_block(
+        theme,
+        "headings.h5",
+        &defaults,
+        headings_cfg.h5.unwrap_or_default(),
+    )?;
+    let h6 = lower_block(
+        theme,
+        "headings.h6",
+        &defaults,
+        headings_cfg.h6.unwrap_or_default(),
+    )?;
+    let code_block = lower_block(
+        theme,
+        "code_block",
+        &defaults,
+        cfg.code_block.unwrap_or_default(),
+    )?;
+    let code_inline = lower_inline(
+        theme,
+        "code_inline",
+        &defaults,
+        cfg.code_inline.unwrap_or_default(),
+    )?;
+    let blockquote = lower_block(
+        theme,
+        "blockquote",
+        &defaults,
+        cfg.blockquote.unwrap_or_default(),
+    )?;
+    let admonition = lower_admonition(theme, &defaults, cfg.admonition.unwrap_or_default())?;
     let link = lower_inline(theme, "link", &defaults, cfg.link.unwrap_or_default())?;
     let mark = lower_inline(theme, "mark", &defaults, cfg.mark.unwrap_or_default())?;
 
     let list_cfg = cfg.list.unwrap_or_default();
     let list_common = list_cfg.common.unwrap_or_default();
-    let list_unordered = lower_list(theme, "list.unordered", &defaults, &list_common, list_cfg.unordered.unwrap_or_default())?;
-    let list_ordered = lower_list(theme, "list.ordered", &defaults, &list_common, list_cfg.ordered.unwrap_or_default())?;
-    let list_task = lower_list(theme, "list.task", &defaults, &list_common, list_cfg.task.unwrap_or_default())?;
+    let list_unordered = lower_list(
+        theme,
+        "list.unordered",
+        &defaults,
+        &list_common,
+        list_cfg.unordered.unwrap_or_default(),
+    )?;
+    let list_ordered = lower_list(
+        theme,
+        "list.ordered",
+        &defaults,
+        &list_common,
+        list_cfg.ordered.unwrap_or_default(),
+    )?;
+    let list_task = lower_list(
+        theme,
+        "list.task",
+        &defaults,
+        &list_common,
+        list_cfg.task.unwrap_or_default(),
+    )?;
 
     let table_cfg = cfg.table.unwrap_or_default();
     let table = ResolvedTable {
-        header: lower_block(theme, "table.header", &defaults, table_cfg.header.unwrap_or_default())?,
-        cell: lower_block(theme, "table.cell", &defaults, table_cfg.cell.unwrap_or_default())?,
+        header: lower_block(
+            theme,
+            "table.header",
+            &defaults,
+            table_cfg.header.unwrap_or_default(),
+        )?,
+        cell: lower_block(
+            theme,
+            "table.cell",
+            &defaults,
+            table_cfg.cell.unwrap_or_default(),
+        )?,
         border: lower_border(table_cfg.border.unwrap_or_default()),
         alternating_row_background: table_cfg.alternating_row_background,
         cell_padding: table_cfg
@@ -634,7 +713,10 @@ fn lower_list(
     raw: ListStyleConfig,
 ) -> Result<ResolvedList, ResolveError> {
     // common is the inner-list default that cascades to every flavor.
-    let merged_block = merge_block(defaults.clone(), merge_block(common.block.clone(), raw.block));
+    let merged_block = merge_block(
+        defaults.clone(),
+        merge_block(common.block.clone(), raw.block),
+    );
     let block = lower_block(theme, where_, &BlockConfig::default(), merged_block)?;
     Ok(ResolvedList {
         block,
@@ -654,10 +736,7 @@ fn lower_list(
             .item_spacing_loose_pt
             .or(common.item_spacing_loose_pt)
             .unwrap_or(2.0),
-        bullet_gap_pt: raw
-            .bullet_gap_pt
-            .or(common.bullet_gap_pt)
-            .unwrap_or(5.67),
+        bullet_gap_pt: raw.bullet_gap_pt.or(common.bullet_gap_pt).unwrap_or(5.67),
     })
 }
 
@@ -703,7 +782,9 @@ fn lower_title_page(
     raw: Option<TitlePageConfig>,
 ) -> Result<Option<ResolvedTitlePage>, ResolveError> {
     let Some(raw) = raw else { return Ok(None) };
-    let Some(title) = raw.title else { return Ok(None) };
+    let Some(title) = raw.title else {
+        return Ok(None);
+    };
     let style = lower_block(theme, "title_page", defaults, raw.style.unwrap_or_default())?;
     Ok(Some(ResolvedTitlePage {
         title,

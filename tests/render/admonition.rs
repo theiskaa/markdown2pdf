@@ -218,8 +218,7 @@ fn inline_anchor_inside_admonition_body_becomes_clickable_link() {
     // The preprocess pass that rewrites inline `<a>` into a real
     // Token::Link must recurse into admonition body — otherwise
     // anchors inside callouts silently lose their click target.
-    let src =
-        "!!! note\n    Click <a href=\"https://example.com\">here</a> for docs.\n";
+    let src = "!!! note\n    Click <a href=\"https://example.com\">here</a> for docs.\n";
     let bytes = render(src, "");
     assert!(pdf_well_formed(&bytes));
     assert_eq!(
@@ -289,10 +288,7 @@ fn all_themes_render_admonition_without_panic() {
 
 #[test]
 fn admonition_does_not_consume_following_paragraph() {
-    let bytes = render(
-        "!!! note\n    inside\n\nafter paragraph here.\n",
-        "",
-    );
+    let bytes = render("!!! note\n    inside\n\nafter paragraph here.\n", "");
     assert!(pdf_well_formed(&bytes));
     assert!(contains_text(&bytes, "inside"));
     assert!(contains_text(&bytes, "after paragraph here"));
@@ -313,10 +309,7 @@ fn back_to_back_admonitions_produce_two_boxes() {
 
 #[test]
 fn body_with_strong_emphasis_renders() {
-    let bytes = render(
-        "!!! info\n    body with **bold** and *italic* spans.\n",
-        "",
-    );
+    let bytes = render("!!! info\n    body with **bold** and *italic* spans.\n", "");
     assert!(pdf_well_formed(&bytes));
     assert!(contains_text(&bytes, "bold"));
     assert!(contains_text(&bytes, "italic"));

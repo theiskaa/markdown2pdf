@@ -12,7 +12,7 @@
 //! this whole file.
 #![cfg(feature = "fetch")]
 
-use super::net_read::{read_capped_with_deadline, MAX_FETCH_BYTES};
+use super::net_read::{MAX_FETCH_BYTES, read_capped_with_deadline};
 
 /// Is this IPv4 address one we refuse to let the renderer connect to?
 /// Loopback, private (RFC 1918), link-local, unspecified, broadcast,
@@ -54,7 +54,12 @@ fn ipv6_blocked(ip: &std::net::Ipv6Addr) -> bool {
         return ipv4_blocked(&v4);
     }
     let seg = ip.segments();
-    if seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2] == 0 && seg[3] == 0 && seg[4] == 0 && seg[5] == 0
+    if seg[0] == 0x0064
+        && seg[1] == 0xff9b
+        && seg[2] == 0
+        && seg[3] == 0
+        && seg[4] == 0
+        && seg[5] == 0
     {
         let v4 = std::net::Ipv4Addr::new(
             (seg[6] >> 8) as u8,
@@ -136,8 +141,7 @@ fn check_url_host(url: &str) -> Result<HostDecision, String> {
         .host_str()
         .ok_or_else(|| format!("url {} has no host", url))?;
 
-    if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost")
-    {
+    if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost") {
         return Err(format!("host `{}` is blocked (loopback)", host));
     }
 
@@ -250,7 +254,9 @@ pub(crate) fn fetch_url(url: &str) -> Result<Vec<u8>, String> {
     if let HostDecision::Pinned { host, addr } = &decision {
         builder = builder.resolve(host, *addr);
     }
-    let client = builder.build().map_err(|e| format!("http client init: {}", e))?;
+    let client = builder
+        .build()
+        .map_err(|e| format!("http client init: {}", e))?;
     let resp = client.get(url).send().map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
@@ -354,7 +360,10 @@ mod tests {
     #[test]
     fn ipv6_nat64_embedding_of_public_ip_is_allowed() {
         let ip: std::net::Ipv6Addr = "64:ff9b::5808:d822".parse().unwrap();
-        assert!(!ipv6_blocked(&ip), "NAT64-embedded public ip should be allowed");
+        assert!(
+            !ipv6_blocked(&ip),
+            "NAT64-embedded public ip should be allowed"
+        );
     }
 
     #[test]

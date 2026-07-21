@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn block_body(t: &Token) -> &Vec<Token> {
     if let Token::BlockQuote(body) = t {
         body

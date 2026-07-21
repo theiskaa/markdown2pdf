@@ -23,9 +23,8 @@ use markdown2pdf::parse_into_bytes;
 /// `parse_into_bytes` directly with `None`.
 pub fn render(md: &str, cfg_toml: &str) -> Vec<u8> {
     let cfg = FontConfig::new().with_default_font_source(FontSource::Builtin("Helvetica"));
-    let bytes =
-        parse_into_bytes(md.to_string(), ConfigSource::Embedded(cfg_toml), Some(&cfg))
-            .expect("render must succeed");
+    let bytes = parse_into_bytes(md.to_string(), ConfigSource::Embedded(cfg_toml), Some(&cfg))
+        .expect("render must succeed");
     // The renderer Flate-compresses streams (printpdf 0.9 never does,
     // so we deflate in post-process). Tests inspect drawing operators
     // and visible text in the byte stream, so expand it back to the
@@ -89,10 +88,7 @@ pub fn count_rect_ops(bytes: &[u8]) -> usize {
         let prev = bytes[i];
         let mid = bytes[i + 1];
         let next = bytes[i + 2];
-        if matches!(prev, b'\n' | b'\r')
-            && mid == b'f'
-            && matches!(next, b'\n' | b'\r')
-        {
+        if matches!(prev, b'\n' | b'\r') && mid == b'f' && matches!(next, b'\n' | b'\r') {
             hits += 1;
             i += 2;
         } else {
@@ -246,11 +242,7 @@ pub fn temp_jpeg_path() -> String {
     // are wrap-constrained to the rendered image width, so a narrow
     // fixture would split `(This is a caption)` across multiple `Tj`
     // operands and break caption tests.
-    let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
-        1400,
-        900,
-        image::Rgb([88, 110, 150]),
-    ));
+    let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(1400, 900, image::Rgb([88, 110, 150])));
     let mut buf = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Jpeg)
         .expect("encode fixture jpeg");

@@ -69,10 +69,13 @@ fn blank_line_separates_two_standalone_blocks() {
     // becomes two separate HTML blocks plus a paragraph between them.
     let input = "<del>\n\n*foo*\n\n</del>\n";
     let tokens = parse(input);
-    let blocks: Vec<&String> = tokens.iter().filter_map(|t| match t {
-        Token::HtmlBlock(s) => Some(s),
-        _ => None,
-    }).collect();
+    let blocks: Vec<&String> = tokens
+        .iter()
+        .filter_map(|t| match t {
+            Token::HtmlBlock(s) => Some(s),
+            _ => None,
+        })
+        .collect();
     assert_eq!(blocks.len(), 2, "expected 2 HtmlBlocks, got {:?}", blocks);
     assert!(blocks[0].contains("<del>"));
     assert!(blocks[1].contains("</del>"));
@@ -159,7 +162,11 @@ fn block_with_three_space_indent() {
 fn four_space_indent_is_code_block_not_html() {
     let tokens = parse("    <a href=\"x\">\nbody\n</a>\n");
     assert!(first_html_block(&tokens).is_none());
-    assert!(tokens.iter().any(|t| matches!(t, Token::Code { block: true, .. })));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code { block: true, .. }))
+    );
 }
 
 #[test]

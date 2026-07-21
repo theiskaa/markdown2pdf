@@ -63,9 +63,7 @@ fn dump_showcase_annotations() {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        println!(
-            "LINK #{count} uri={uri:<45} tip={tip:?} rect={rect:?}"
-        );
+        println!("LINK #{count} uri={uri:<45} tip={tip:?} rect={rect:?}");
     };
 
     for (_, obj) in doc.objects.iter() {

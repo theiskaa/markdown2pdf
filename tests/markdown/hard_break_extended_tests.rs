@@ -4,7 +4,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn count_hard_breaks(tokens: &[Token]) -> usize {
     let mut n = 0;
     fn walk(tokens: &[Token], n: &mut usize) {

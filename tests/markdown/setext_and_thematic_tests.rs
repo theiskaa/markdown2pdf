@@ -2,8 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
-
 #[test]
 fn setext_h1_basic() {
     let tokens = parse("Title\n===");
@@ -32,7 +30,6 @@ fn setext_h1_with_inline_emphasis() {
     }
 }
 
-
 #[test]
 fn setext_h2_basic() {
     let tokens = parse("Title\n---");
@@ -51,7 +48,6 @@ fn setext_h2_long_underline() {
     let tokens = parse("Title\n----------");
     assert!(matches!(tokens[0], Token::Heading(_, 2)));
 }
-
 
 #[test]
 fn thematic_break_dashes() {
@@ -74,10 +70,14 @@ fn thematic_break_underscores() {
 #[test]
 fn thematic_break_long_runs() {
     for input in ["-------", "*******", "_______"] {
-        assert_eq!(parse(input), vec![Token::HorizontalRule], "input {:?}", input);
+        assert_eq!(
+            parse(input),
+            vec![Token::HorizontalRule],
+            "input {:?}",
+            input
+        );
     }
 }
-
 
 #[test]
 fn paragraph_followed_by_dashes_is_setext_h2_not_hr() {
@@ -94,7 +94,6 @@ fn lone_dashes_after_blank_line_is_hr() {
     // Blank line means dashes are a true HR, not a setext underline.
     assert!(tokens.iter().any(|t| matches!(t, Token::HorizontalRule)));
 }
-
 
 #[test]
 fn regression_atx_h1_still_works() {
@@ -116,15 +115,18 @@ fn regression_list_item_after_paragraph() {
     assert!(has_li, "expected list item, got {:?}", tokens);
 }
 
-
 #[test]
 fn display_math_opener_skips_setext_walker() {
     // `$$` starts a display-math block — setext detection must not
     // fold the math body into an H1 just because an `=` line appears
     // inside it (common in matrix-multiplication equations).
-    let tokens = parse("$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n\\begin{pmatrix} x \\\\ y \\end{pmatrix}\n=\n\\begin{pmatrix} ax+by \\\\ cx+dy \\end{pmatrix}\n$$\n");
+    let tokens = parse(
+        "$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n\\begin{pmatrix} x \\\\ y \\end{pmatrix}\n=\n\\begin{pmatrix} ax+by \\\\ cx+dy \\end{pmatrix}\n$$\n",
+    );
     assert!(
-        tokens.iter().any(|t| matches!(t, Token::Math { inline: false, .. })),
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Math { inline: false, .. })),
         "expected display math token, got {tokens:?}"
     );
     assert!(

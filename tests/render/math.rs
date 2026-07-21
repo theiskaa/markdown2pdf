@@ -111,7 +111,10 @@ fn display_math_is_not_selectable_text() {
 
 #[test]
 fn inline_math_inside_emphasis_and_heading_renders() {
-    let bytes = render("# The $E=mc^2$ result\n\nText with *the $a+b$ term* inside.", "");
+    let bytes = render(
+        "# The $E=mc^2$ result\n\nText with *the $a+b$ term* inside.",
+        "",
+    );
     let plain = render("# The  result\n\nText with *the  term* inside.", "");
     assert!(pdf_well_formed(&bytes));
     // Surrounding heading / emphasis text is unaffected; the two

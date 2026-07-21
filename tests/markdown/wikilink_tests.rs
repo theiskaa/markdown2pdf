@@ -65,7 +65,10 @@ fn bare_target_links_to_its_slug() {
 
 #[test]
 fn spaced_target_slugifies() {
-    assert_eq!(links(&parse("[[Page Name]]")), vec![("#page-name".to_string(), "Page Name".to_string())]);
+    assert_eq!(
+        links(&parse("[[Page Name]]")),
+        vec![("#page-name".to_string(), "Page Name".to_string())]
+    );
 }
 
 #[test]
@@ -116,22 +119,34 @@ fn back_to_back_wikilinks_are_two_links() {
 
 #[test]
 fn wikilink_inside_emphasis() {
-    assert_eq!(links(&parse("*[[X]]*")), vec![("#x".to_string(), "X".to_string())]);
+    assert_eq!(
+        links(&parse("*[[X]]*")),
+        vec![("#x".to_string(), "X".to_string())]
+    );
 }
 
 #[test]
 fn wikilink_inside_list_item() {
-    assert_eq!(links(&parse("- see [[X]]")), vec![("#x".to_string(), "X".to_string())]);
+    assert_eq!(
+        links(&parse("- see [[X]]")),
+        vec![("#x".to_string(), "X".to_string())]
+    );
 }
 
 #[test]
 fn wikilink_inside_blockquote() {
-    assert_eq!(links(&parse("> jump to [[X]]")), vec![("#x".to_string(), "X".to_string())]);
+    assert_eq!(
+        links(&parse("> jump to [[X]]")),
+        vec![("#x".to_string(), "X".to_string())]
+    );
 }
 
 #[test]
 fn wikilink_inside_heading() {
-    assert_eq!(links(&parse("# A [[X]] heading")), vec![("#x".to_string(), "X".to_string())]);
+    assert_eq!(
+        links(&parse("# A [[X]] heading")),
+        vec![("#x".to_string(), "X".to_string())]
+    );
 }
 
 #[test]
@@ -190,6 +205,9 @@ fn escaped_brackets_render_literally() {
 fn target_slug_matches_heading_slug_rule() {
     assert_eq!(
         links(&parse("[[Foo Bar_Baz (v2)!]]")),
-        vec![("#foo-bar-baz-v2".to_string(), "Foo Bar_Baz (v2)!".to_string())]
+        vec![(
+            "#foo-bar-baz-v2".to_string(),
+            "Foo Bar_Baz (v2)!".to_string()
+        )]
     );
 }

@@ -38,9 +38,10 @@ fn extract_named_numbers(bytes: &[u8], key: &[u8]) -> Vec<i32> {
         }
         if end > start
             && let Ok(s) = std::str::from_utf8(&bytes[start..end])
-                && let Ok(n) = s.parse::<i32>() {
-                    out.push(n);
-                }
+            && let Ok(n) = s.parse::<i32>()
+        {
+            out.push(n);
+        }
         pos = end.max(start + 1);
     }
     out
@@ -137,10 +138,7 @@ fn renderer_works_without_any_external_font_config() {
     // built-in Helvetica/Courier path.
     let md = "Plain paragraph with `inline code` and **bold**.".to_string();
     let bytes = parse_into_bytes(md, ConfigSource::Default, None).expect("render");
-    assert!(
-        bytes.starts_with(b"%PDF-"),
-        "rendered output is not a PDF"
-    );
+    assert!(bytes.starts_with(b"%PDF-"), "rendered output is not a PDF");
 }
 
 #[test]
@@ -187,24 +185,16 @@ fn garbage_font_bytes_fall_back_to_builtin() {
 #[test]
 fn empty_font_bytes_fall_back_to_builtin() {
     let cfg = FontConfig::new().with_default_font_source(FontSource::bytes(&[]));
-    let bytes = parse_into_bytes(
-        "Body text.".to_string(),
-        ConfigSource::Default,
-        Some(&cfg),
-    )
-    .expect("empty font must fall back, not error");
+    let bytes = parse_into_bytes("Body text.".to_string(), ConfigSource::Default, Some(&cfg))
+        .expect("empty font must fall back, not error");
     assert!(bytes.starts_with(b"%PDF-"));
 }
 
 #[test]
 fn nonexistent_font_path_falls_back_to_builtin() {
     let cfg = FontConfig::new().with_default_font("/no/such/font-file.ttf");
-    let bytes = parse_into_bytes(
-        "Body text.".to_string(),
-        ConfigSource::Default,
-        Some(&cfg),
-    )
-    .expect("missing font path must fall back, not error");
+    let bytes = parse_into_bytes("Body text.".to_string(), ConfigSource::Default, Some(&cfg))
+        .expect("missing font path must fall back, not error");
     assert!(bytes.starts_with(b"%PDF-"));
 }
 
@@ -213,8 +203,7 @@ fn non_ascii_with_builtin_font_does_not_panic() {
     // Built-in Helvetica can't cover CJK/emoji/RTL; the win1252
     // fallback must keep it a valid PDF rather than panic or empty.
     let md = "# 日本語 タイトル\n\nemoji 😀 Ω, مرحبا بالعالم.".to_string();
-    let bytes =
-        parse_into_bytes(md, ConfigSource::Default, None).expect("render must not error");
+    let bytes = parse_into_bytes(md, ConfigSource::Default, None).expect("render must not error");
     assert!(bytes.starts_with(b"%PDF-"));
 }
 
@@ -246,8 +235,7 @@ fn unicode_text_without_font_config_takes_auto_detected_external_path() {
         return;
     }
     let md = "Hello café — naïve “quoted” word.".to_string();
-    let bytes = parse_into_bytes(md, ConfigSource::Default, None)
-        .expect("render must succeed");
+    let bytes = parse_into_bytes(md, ConfigSource::Default, None).expect("render must succeed");
     assert!(bytes.starts_with(b"%PDF-"));
 
     // External Identity-H embedding writes one `/Ascent` per loaded
@@ -274,8 +262,8 @@ fn unresolved_builtin_alias_falls_through_to_auto_detect() {
     }
     let md = "Body with café and — dashes.".to_string();
     let cfg = FontConfig::new().with_default_font("Helvetica");
-    let bytes = parse_into_bytes(md, ConfigSource::Default, Some(&cfg))
-        .expect("render must succeed");
+    let bytes =
+        parse_into_bytes(md, ConfigSource::Default, Some(&cfg)).expect("render must succeed");
     assert!(bytes.starts_with(b"%PDF-"));
     let asc = ascents(&bytes);
     assert!(
@@ -296,12 +284,9 @@ fn fallback_font_loads_when_system_font_available() {
         return;
     };
     let md = "Body text with Greek Ω and Latin Aé.".to_string();
-    let cfg_toml = format!(
-        "[defaults]\nfallback_fonts = [\"{}\"]\n",
-        name
-    );
-    let bytes = parse_into_bytes(md, ConfigSource::Embedded(&cfg_toml), None)
-        .expect("render must succeed");
+    let cfg_toml = format!("[defaults]\nfallback_fonts = [\"{}\"]\n", name);
+    let bytes =
+        parse_into_bytes(md, ConfigSource::Embedded(&cfg_toml), None).expect("render must succeed");
     assert!(bytes.starts_with(b"%PDF-"));
     let asc = ascents(&bytes);
     assert!(

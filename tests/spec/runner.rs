@@ -132,9 +132,10 @@ fn parse_string(chars: &[char], i: &mut usize) -> String {
                     let hex: String = chars[*i..*i + 4].iter().collect();
                     *i += 3; // we'll +1 below
                     if let Ok(code) = u32::from_str_radix(&hex, 16)
-                        && let Some(c) = char::from_u32(code) {
-                            out.push(c);
-                        }
+                        && let Some(c) = char::from_u32(code)
+                    {
+                        out.push(c);
+                    }
                 }
                 c => out.push(c),
             }
@@ -196,11 +197,7 @@ fn skip_value(chars: &[char], i: &mut usize) {
             }
         }
         _ => {
-            while *i < chars.len()
-                && chars[*i] != ','
-                && chars[*i] != '}'
-                && chars[*i] != ']'
-            {
+            while *i < chars.len() && chars[*i] != ',' && chars[*i] != '}' && chars[*i] != ']' {
                 *i += 1;
             }
         }
@@ -281,14 +278,8 @@ pub fn run() -> SuiteResult {
                 format!("<<lexer error: {}>>", e),
                 format!("<lexer error: {}>", e),
             ),
-            ParseOutcome::Panic(_) => (
-                String::from("<<panic>>"),
-                String::from("<panic>"),
-            ),
-            ParseOutcome::Timeout => (
-                String::from("<<timeout>>"),
-                String::from("<timeout>"),
-            ),
+            ParseOutcome::Panic(_) => (String::from("<<panic>>"), String::from("<panic>")),
+            ParseOutcome::Timeout => (String::from("<<timeout>>"), String::from("<timeout>")),
         };
         let expected = normalize(&ex.html);
         let entry = result.per_section.entry(ex.section.clone()).or_default();
@@ -321,11 +312,18 @@ pub fn print_report(result: &SuiteResult) {
     println!();
     println!("=== CommonMark spec coverage ===");
     println!();
-    println!("{:<48} {:>8} {:>8} {:>8}", "Section", "Pass", "Fail", "Total");
+    println!(
+        "{:<48} {:>8} {:>8} {:>8}",
+        "Section", "Pass", "Fail", "Total"
+    );
     println!("{}", "-".repeat(76));
     for (section, (pass, fail)) in &result.per_section {
         let total = pass + fail;
-        let pct = if total > 0 { 100.0 * (*pass as f64) / (total as f64) } else { 0.0 };
+        let pct = if total > 0 {
+            100.0 * (*pass as f64) / (total as f64)
+        } else {
+            0.0
+        };
         println!(
             "{:<48} {:>8} {:>8} {:>5}/{:<3} ({:>3.0}%)",
             section, pass, fail, pass, total, pct

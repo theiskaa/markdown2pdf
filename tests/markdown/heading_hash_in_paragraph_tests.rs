@@ -2,11 +2,13 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn csharp_in_paragraph_is_text() {
     let tokens = parse("This uses C# heavily");
-    assert_eq!(tokens, vec![Token::Text("This uses C# heavily".to_string())]);
+    assert_eq!(
+        tokens,
+        vec![Token::Text("This uses C# heavily".to_string())]
+    );
 }
 
 #[test]

@@ -7,7 +7,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn link_parts(input: &str) -> (String, Option<String>) {
     let tokens = parse(input);
     let Some(Token::Link { url, title, .. }) =

@@ -97,7 +97,9 @@ pub fn inject_link_tooltips(bytes: Vec<u8>, tooltips: &HashMap<String, String>) 
             continue;
         }
         let Some(uri) = link_uri(d) else { continue };
-        let Some(tip) = tooltips.get(&uri) else { continue };
+        let Some(tip) = tooltips.get(&uri) else {
+            continue;
+        };
         d.set("Contents", Object::string_literal(tip.clone()));
         changed = true;
     }
@@ -121,10 +123,11 @@ pub fn inject_link_tooltips(bytes: Vec<u8>, tooltips: &HashMap<String, String>) 
                     continue;
                 }
                 if let Some(uri) = link_uri(d)
-                    && let Some(tip) = tooltips.get(&uri) {
-                        d.set("Contents", Object::string_literal(tip.clone()));
-                        changed = true;
-                    }
+                    && let Some(tip) = tooltips.get(&uri)
+                {
+                    d.set("Contents", Object::string_literal(tip.clone()));
+                    changed = true;
+                }
             }
         }
     }
@@ -217,7 +220,9 @@ pub fn compress(bytes: Vec<u8>) -> Vec<u8> {
 /// `/FormType`. Without `/BBox`, conformant viewers drop the form.
 fn fix_form_xobjects(doc: &mut Document) {
     for obj in doc.objects.values_mut() {
-        let Object::Stream(stream) = obj else { continue };
+        let Object::Stream(stream) = obj else {
+            continue;
+        };
         let is_form = matches!(
             stream.dict.get(b"Subtype"),
             Ok(Object::Name(n)) if n == b"Form"
@@ -251,9 +256,8 @@ fn is_link_annotation(d: &Dictionary) -> bool {
         return false;
     }
     // `Type` is optional on annotations per spec but printpdf emits it.
-    
-    d
-        .get(b"Type")
+
+    d.get(b"Type")
         .ok()
         .and_then(|o| o.as_name().ok())
         .map(|n| n == b"Annot")

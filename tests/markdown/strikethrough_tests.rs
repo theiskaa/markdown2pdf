@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn basic_double_tilde() {
     let tokens = parse("~~gone~~");
@@ -42,7 +41,11 @@ fn strikethrough_with_code_inside() {
     let Token::Strikethrough(content) = &tokens[0] else {
         panic!("expected Strikethrough, got {:?}", tokens);
     };
-    assert!(content.iter().any(|t| matches!(t, Token::Code { block: false, .. })));
+    assert!(
+        content
+            .iter()
+            .any(|t| matches!(t, Token::Code { block: false, .. }))
+    );
 }
 
 #[test]

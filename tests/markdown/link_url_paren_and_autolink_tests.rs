@@ -2,14 +2,16 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
-
 #[test]
 fn url_with_single_balanced_paren_pair() {
     let tokens = parse("[Wiki](https://en.wikipedia.org/wiki/Foo_(bar))");
     assert_eq!(
         tokens,
-        vec![Token::Link { content: vec![Token::Text("Wiki".to_string())], url: "https://en.wikipedia.org/wiki/Foo_(bar)".to_string(), title: None }]
+        vec![Token::Link {
+            content: vec![Token::Text("Wiki".to_string())],
+            url: "https://en.wikipedia.org/wiki/Foo_(bar)".to_string(),
+            title: None
+        }]
     );
 }
 
@@ -18,7 +20,11 @@ fn url_with_nested_balanced_parens() {
     let tokens = parse("[X](http://a.b/((c)d))");
     assert_eq!(
         tokens,
-        vec![Token::Link { content: vec![Token::Text("X".to_string())], url: "http://a.b/((c)d)".to_string(), title: None }]
+        vec![Token::Link {
+            content: vec![Token::Text("X".to_string())],
+            url: "http://a.b/((c)d)".to_string(),
+            title: None
+        }]
     );
 }
 
@@ -27,7 +33,11 @@ fn image_url_with_paren_pair() {
     let tokens = parse("![alt](pic_(small).png)");
     assert_eq!(
         tokens,
-        vec![Token::Image { alt: vec![Token::Text("alt".to_string())], url: "pic_(small).png".to_string(), title: None }]
+        vec![Token::Image {
+            alt: vec![Token::Text("alt".to_string())],
+            url: "pic_(small).png".to_string(),
+            title: None
+        }]
     );
 }
 
@@ -42,13 +52,16 @@ fn url_with_unbalanced_close_paren_truncates() {
     }
 }
 
-
 #[test]
 fn autolink_https() {
     let tokens = parse("<https://example.com>");
     assert_eq!(
         tokens,
-        vec![Token::Link { content: vec![Token::Text("https://example.com".to_string())], url: "https://example.com".to_string(), title: None }]
+        vec![Token::Link {
+            content: vec![Token::Text("https://example.com".to_string())],
+            url: "https://example.com".to_string(),
+            title: None
+        }]
     );
 }
 
@@ -57,7 +70,11 @@ fn autolink_http() {
     let tokens = parse("<http://example.org/path>");
     assert_eq!(
         tokens,
-        vec![Token::Link { content: vec![Token::Text("http://example.org/path".to_string())], url: "http://example.org/path".to_string(), title: None }]
+        vec![Token::Link {
+            content: vec![Token::Text("http://example.org/path".to_string())],
+            url: "http://example.org/path".to_string(),
+            title: None
+        }]
     );
 }
 
@@ -66,7 +83,11 @@ fn autolink_email() {
     let tokens = parse("<user@example.com>");
     assert_eq!(
         tokens,
-        vec![Token::Link { content: vec![Token::Text("user@example.com".to_string())], url: "mailto:user@example.com".to_string(), title: None }]
+        vec![Token::Link {
+            content: vec![Token::Text("user@example.com".to_string())],
+            url: "mailto:user@example.com".to_string(),
+            title: None
+        }]
     );
 }
 
@@ -89,7 +110,6 @@ fn invalid_autolink_falls_through_as_text() {
     assert!(text.contains("<not an autolink>"), "got {:?}", text);
 }
 
-
 #[test]
 fn html_comment_still_parsed() {
     // `<!--` at line start is now a block-level HtmlBlock (CommonMark
@@ -105,7 +125,11 @@ fn regression_simple_link() {
     let tokens = parse("[example](https://example.com)");
     assert_eq!(
         tokens,
-        vec![Token::Link { content: vec![Token::Text("example".to_string())], url: "https://example.com".to_string(), title: None }]
+        vec![Token::Link {
+            content: vec![Token::Text("example".to_string())],
+            url: "https://example.com".to_string(),
+            title: None
+        }]
     );
 }
 
@@ -114,6 +138,10 @@ fn regression_simple_image() {
     let tokens = parse("![alt](image.png)");
     assert_eq!(
         tokens,
-        vec![Token::Image { alt: vec![Token::Text("alt".to_string())], url: "image.png".to_string(), title: None }]
+        vec![Token::Image {
+            alt: vec![Token::Text("alt".to_string())],
+            url: "image.png".to_string(),
+            title: None
+        }]
     );
 }

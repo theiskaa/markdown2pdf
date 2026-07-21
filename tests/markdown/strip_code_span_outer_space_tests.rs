@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn code_body(tokens: &[Token]) -> &str {
     match &tokens[0] {
         Token::Code { content, .. } => content,

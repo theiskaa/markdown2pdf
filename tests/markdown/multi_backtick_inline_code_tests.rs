@@ -2,13 +2,16 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn double_backtick_inline_with_single_backtick_inside() {
     let tokens = parse("``code with ` inside``");
     assert_eq!(
         tokens,
-        vec![Token::Code { language: "".to_string(), content: "code with ` inside".to_string(), block: false }]
+        vec![Token::Code {
+            language: "".to_string(),
+            content: "code with ` inside".to_string(),
+            block: false
+        }]
     );
 }
 
@@ -26,7 +29,11 @@ fn double_backtick_with_count_mismatch_inside() {
     let tokens = parse("``a`b``");
     assert_eq!(
         tokens,
-        vec![Token::Code { language: "".to_string(), content: "a`b".to_string(), block: false }]
+        vec![Token::Code {
+            language: "".to_string(),
+            content: "a`b".to_string(),
+            block: false
+        }]
     );
 }
 
@@ -36,7 +43,11 @@ fn fenced_block_still_works() {
     let tokens = parse(input);
     assert_eq!(
         tokens,
-        vec![Token::Code { language: "rust".to_string(), content: "fn main() {}".to_string(), block: true }]
+        vec![Token::Code {
+            language: "rust".to_string(),
+            content: "fn main() {}".to_string(),
+            block: true
+        }]
     );
 }
 
@@ -80,7 +91,11 @@ fn double_backtick_at_line_start_with_content_is_inline() {
     // same line beyond the closing run.
     let tokens = parse("``inline`` plus text");
     assert!(matches!(tokens[0], Token::Code { ref content, .. } if content == "inline"));
-    assert!(tokens.iter().any(|t| matches!(t, Token::Text(s) if s.contains("plus text"))));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Text(s) if s.contains("plus text")))
+    );
 }
 
 #[test]
@@ -118,6 +133,10 @@ fn single_backtick_unchanged() {
     let tokens = parse("`simple`");
     assert_eq!(
         tokens,
-        vec![Token::Code { language: "".to_string(), content: "simple".to_string(), block: false }]
+        vec![Token::Code {
+            language: "".to_string(),
+            content: "simple".to_string(),
+            block: false
+        }]
     );
 }

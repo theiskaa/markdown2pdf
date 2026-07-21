@@ -5,7 +5,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn heading_level_and_text(tokens: &[Token]) -> (usize, String) {
     let Some(Token::Heading(body, level)) =
         tokens.iter().find(|t| matches!(t, Token::Heading(_, _)))
@@ -65,7 +64,11 @@ fn escaped_hash_does_not_start_heading() {
 fn one_to_three_space_indent_allowed() {
     for indent in 1..=3 {
         let input = format!("{}# Heading\n", " ".repeat(indent));
-        assert!(parse(&input).iter().any(|t| matches!(t, Token::Heading(_, _))));
+        assert!(
+            parse(&input)
+                .iter()
+                .any(|t| matches!(t, Token::Heading(_, _)))
+        );
     }
 }
 

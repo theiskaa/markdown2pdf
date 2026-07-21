@@ -6,7 +6,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 fn body(input: &str) -> String {
     Token::collect_all_text(&parse(input))
 }

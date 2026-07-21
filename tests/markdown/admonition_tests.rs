@@ -563,8 +563,8 @@ fn mkdocs_admonition_inside_list_item() {
     // Some lexers would put the admonition in the list item's content.
     // Others put it after. Either is acceptable as long as the
     // admonition is recognised somewhere in the document tree.
-    let document_has_admonition = first_admonition(&tokens).is_some()
-        || first_admonition(list_item_body).is_some();
+    let document_has_admonition =
+        first_admonition(&tokens).is_some() || first_admonition(list_item_body).is_some();
     assert!(
         document_has_admonition,
         "admonition lost in list-item context: {tokens:?}"
@@ -678,8 +678,8 @@ fn raw_label_is_always_lowercased() {
         "> [!Warning]\n> body\n",
     ] {
         let tokens = parse(src);
-        let (_, raw, _, _) = first_admonition(&tokens)
-            .unwrap_or_else(|| panic!("Admonition expected for {src:?}"));
+        let (_, raw, _, _) =
+            first_admonition(&tokens).unwrap_or_else(|| panic!("Admonition expected for {src:?}"));
         assert_eq!(raw, "warning", "raw_label not lowercased for {src:?}");
     }
 }
@@ -691,9 +691,12 @@ fn canonicalisation_round_trip_through_first_class_kinds() {
     for kind in ["note", "info", "tip", "warning", "danger"] {
         let src = format!("!!! {}\n    body\n", kind);
         let tokens = parse(&src);
-        let (canonical, raw, _, _) = first_admonition(&tokens)
-            .unwrap_or_else(|| panic!("Admonition expected for {src:?}"));
-        assert_eq!(canonical, kind, "first-class kind not round-tripping: {src:?}");
+        let (canonical, raw, _, _) =
+            first_admonition(&tokens).unwrap_or_else(|| panic!("Admonition expected for {src:?}"));
+        assert_eq!(
+            canonical, kind,
+            "first-class kind not round-tripping: {src:?}"
+        );
         assert_eq!(raw, kind);
     }
 }

@@ -51,7 +51,10 @@ fn simple_inline_footnote_emits_token() {
     assert_eq!(notes[0].1, "and here is the note");
     // Surrounding text is preserved on both sides of the marker.
     let all = Token::collect_all_text(&tokens);
-    assert!(all.contains("Here is a statement"), "lead text lost: {all:?}");
+    assert!(
+        all.contains("Here is a statement"),
+        "lead text lost: {all:?}"
+    );
     assert!(all.contains('.'), "trailing punctuation lost: {all:?}");
 }
 
@@ -85,7 +88,10 @@ fn nested_brackets_in_body_are_balanced() {
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].1, "see [1] in the list");
     let all = Token::collect_all_text(&tokens);
-    assert!(all.contains("done"), "text after the note was eaten: {all:?}");
+    assert!(
+        all.contains("done"),
+        "text after the note was eaten: {all:?}"
+    );
 }
 
 #[test]
@@ -144,14 +150,20 @@ fn empty_body_degrades_to_literal_text() {
     let tokens = parse("x^[] y");
     assert!(inline_notes(&tokens).is_empty());
     let all = Token::collect_all_text(&tokens);
-    assert!(all.contains("^[]"), "empty body should stay literal: {all:?}");
+    assert!(
+        all.contains("^[]"),
+        "empty body should stay literal: {all:?}"
+    );
 }
 
 #[test]
 fn bare_caret_is_literal() {
     for src in ["2^3 is eight", "a ^ b", "x^y"] {
         let tokens = parse(src);
-        assert!(inline_notes(&tokens).is_empty(), "false positive for {src:?}");
+        assert!(
+            inline_notes(&tokens).is_empty(),
+            "false positive for {src:?}"
+        );
         assert_eq!(
             Token::collect_all_text(&tokens),
             src,
@@ -169,9 +181,7 @@ fn regular_footnote_reference_unaffected() {
         fn any_ref(t: &Token) -> bool {
             match t {
                 Token::FootnoteReference(_) => true,
-                Token::Heading(i, _) | Token::ListItem { content: i, .. } => {
-                    i.iter().any(any_ref)
-                }
+                Token::Heading(i, _) | Token::ListItem { content: i, .. } => i.iter().any(any_ref),
                 _ => false,
             }
         }

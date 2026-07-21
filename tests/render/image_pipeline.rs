@@ -32,11 +32,7 @@ mod valid_images {
 
     #[test]
     fn small_rgb_png_renders() {
-        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
-            32,
-            32,
-            image::Rgb([10, 120, 200]),
-        ));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(32, 32, image::Rgb([10, 120, 200])));
         let p = write_temp(&img, ImageFormat::Png, "small_rgb");
         let bytes = render_md(&format!("![blue square]({})\n", p));
         assert!(pdf_well_formed(&bytes));
@@ -51,11 +47,7 @@ mod valid_images {
 
     #[test]
     fn small_jpeg_renders() {
-        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
-            48,
-            24,
-            image::Rgb([200, 30, 30]),
-        ));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(48, 24, image::Rgb([200, 30, 30])));
         let p = write_temp(&img, ImageFormat::Jpeg, "small_jpeg");
         let bytes = render_md(&format!("![red]({})\n", p));
         assert!(pdf_well_formed(&bytes));
@@ -86,11 +78,8 @@ mod valid_images {
 
     #[test]
     fn grayscale_png_does_not_crash() {
-        let img = DynamicImage::ImageLuma8(image::GrayImage::from_pixel(
-            30,
-            30,
-            image::Luma([128]),
-        ));
+        let img =
+            DynamicImage::ImageLuma8(image::GrayImage::from_pixel(30, 30, image::Luma([128])));
         let p = write_temp(&img, ImageFormat::Png, "gray");
         let bytes = render_md(&format!("![gray]({})\n", p));
         assert!(pdf_well_formed(&bytes));
@@ -103,11 +92,7 @@ mod degenerate_and_hostile {
 
     #[test]
     fn one_by_one_pixel_image() {
-        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
-            1,
-            1,
-            image::Rgb([255, 255, 255]),
-        ));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(1, 1, image::Rgb([255, 255, 255])));
         let p = write_temp(&img, ImageFormat::Png, "one_px");
         let bytes = render_md(&format!("![dot]({})\n", p));
         assert!(pdf_well_formed(&bytes));
@@ -122,10 +107,7 @@ mod degenerate_and_hostile {
         let mut bytes = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         bytes.extend(std::iter::repeat_n(0xAB, 200));
         std::fs::write(&path, &bytes).unwrap();
-        let pdf = render_md(&format!(
-            "![broken image]({})\n",
-            path.to_string_lossy()
-        ));
+        let pdf = render_md(&format!("![broken image]({})\n", path.to_string_lossy()));
         assert!(pdf_well_formed(&pdf));
         assert!(
             contains(&pdf, b"broken image") || contains_text(&pdf, "broken image"),
@@ -136,11 +118,7 @@ mod degenerate_and_hostile {
 
     #[test]
     fn truncated_jpeg_does_not_crash() {
-        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
-            64,
-            64,
-            image::Rgb([1, 2, 3]),
-        ));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(64, 64, image::Rgb([1, 2, 3])));
         let mut buf = Vec::new();
         img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)
             .unwrap();
@@ -156,10 +134,7 @@ mod degenerate_and_hostile {
     fn zero_byte_file_falls_back() {
         let path = std::env::temp_dir().join("m2p_w7e_empty.png");
         std::fs::write(&path, []).unwrap();
-        let pdf = render_md(&format!(
-            "![empty file]({})\n",
-            path.to_string_lossy()
-        ));
+        let pdf = render_md(&format!("![empty file]({})\n", path.to_string_lossy()));
         assert!(pdf_well_formed(&pdf));
         assert!(
             contains(&pdf, b"empty file") || contains_text(&pdf, "empty file"),
@@ -178,11 +153,8 @@ mod dimension_bounding {
         // (downscaled), NOT fall back to alt text, and the resulting
         // PDF must stay bounded — well under what a 6000px-wide raw
         // raster would produce.
-        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
-            6000,
-            100,
-            image::Rgb([90, 90, 90]),
-        ));
+        let img =
+            DynamicImage::ImageRgb8(RgbImage::from_pixel(6000, 100, image::Rgb([90, 90, 90])));
         let p = write_temp(&img, ImageFormat::Png, "wide");
         let bytes = render_md(&format!("![huge]({})\n", p));
         assert!(pdf_well_formed(&bytes));
@@ -203,11 +175,7 @@ mod dimension_bounding {
 
     #[test]
     fn tall_oversized_image_downscaled() {
-        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
-            80,
-            5000,
-            image::Rgb([12, 34, 56]),
-        ));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(80, 5000, image::Rgb([12, 34, 56])));
         let p = write_temp(&img, ImageFormat::Png, "tall");
         let bytes = render_md(&format!("![tall]({})\n", p));
         assert!(pdf_well_formed(&bytes));
@@ -217,11 +185,7 @@ mod dimension_bounding {
 
     #[test]
     fn image_exactly_at_ceiling_renders() {
-        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
-            4000,
-            10,
-            image::Rgb([7, 7, 7]),
-        ));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(4000, 10, image::Rgb([7, 7, 7])));
         let p = write_temp(&img, ImageFormat::Png, "at_ceiling");
         let bytes = render_md(&format!("![edge]({})\n", p));
         assert!(pdf_well_formed(&bytes));
@@ -234,11 +198,7 @@ mod html_img_paths {
 
     #[test]
     fn html_img_with_real_local_file_renders() {
-        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
-            20,
-            20,
-            image::Rgb([0, 0, 0]),
-        ));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(20, 20, image::Rgb([0, 0, 0])));
         let p = write_temp(&img, ImageFormat::Png, "html_local");
         let bytes = render_md(&format!("<img src=\"{}\" alt=\"x\">\n", p));
         assert!(pdf_well_formed(&bytes));
@@ -263,19 +223,12 @@ mod security_image_confinement {
     fn absolute_path_outside_image_root_falls_back_to_alt_text() {
         // A real PNG that decodes fine on its own, but lives outside
         // the configured root.
-        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
-            16,
-            16,
-            image::Rgb([50, 60, 70]),
-        ));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(16, 16, image::Rgb([50, 60, 70])));
         let outside = write_temp(&img, ImageFormat::Png, "sec_outside");
 
         // Root is an unrelated, empty temp directory that does not
         // contain `outside`.
-        let root = std::env::temp_dir().join(format!(
-            "m2p_sec_root_{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("m2p_sec_root_{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
 
         let cfg = format!(
@@ -308,11 +261,7 @@ mod security_image_confinement {
         // No `[security]` block at all — proves the defaults preserve
         // historical (unconfined) behavior. Same shape as the
         // pre-existing `valid_images::small_rgb_png_renders` test.
-        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(
-            16,
-            16,
-            image::Rgb([10, 20, 30]),
-        ));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(16, 16, image::Rgb([10, 20, 30])));
         let p = write_temp(&img, ImageFormat::Png, "sec_default_ok");
         let bytes = render_md(&format!("![sec default]({})\n", p));
         assert!(pdf_well_formed(&bytes));

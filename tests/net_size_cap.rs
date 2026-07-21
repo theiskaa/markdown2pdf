@@ -28,9 +28,9 @@ use common::*;
 
 use std::io::Write;
 use std::net::TcpListener;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Prove the size cap actually bounds the download: a server that

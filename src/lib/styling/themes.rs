@@ -40,15 +40,17 @@ fn load_with_chain(name: &str, chain: &mut Vec<String>) -> Result<DocumentConfig
 
     let raw = preset_source(name).ok_or_else(|| ResolveError::UnknownTheme {
         name: name.to_string(),
-        suggestion: closest_match(name, PRESETS.iter().map(|(n, _)| *n), 3)
-            .map(|s| s.to_string()),
+        suggestion: closest_match(name, PRESETS.iter().map(|(n, _)| *n), 3).map(|s| s.to_string()),
     })?;
 
     let cfg: DocumentConfig = toml::from_str(raw).map_err(|e| ResolveError::BadToml {
         source: Box::new(e),
         input: raw.to_string(),
         file: None,
-        suggestion: Some(format!("bundled theme `{}` failed to parse — this is a bug, please file an issue", name)),
+        suggestion: Some(format!(
+            "bundled theme `{}` failed to parse — this is a bug, please file an issue",
+            name
+        )),
     })?;
 
     if let Some(parent_name) = cfg.inherits.as_deref() {
@@ -67,6 +69,8 @@ fn preset_source(name: &str) -> Option<&'static str> {
 /// All bundled theme names. Used for error messages and the CLI's
 /// `--theme` arg help text.
 pub fn available_theme_names() -> &'static [&'static str] {
-    static NAMES: &[&str] = &["default", "github", "academic", "minimal", "compact", "modern"];
+    static NAMES: &[&str] = &[
+        "default", "github", "academic", "minimal", "compact", "modern",
+    ];
     NAMES
 }

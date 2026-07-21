@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn link_with_double_quote_title_strips_title_from_url() {
     let tokens = parse(r#"[text](url "title here")"#);
@@ -88,7 +87,11 @@ fn link_with_only_whitespace_after_url_no_title() {
     let tokens = parse("[text](url   )");
     assert_eq!(
         tokens,
-        vec![Token::Link { content: vec![Token::Text("text".to_string())], url: "url".to_string(), title: None }]
+        vec![Token::Link {
+            content: vec![Token::Text("text".to_string())],
+            url: "url".to_string(),
+            title: None
+        }]
     );
 }
 
@@ -98,7 +101,11 @@ fn link_url_with_no_space_then_quote_is_url_only() {
     // The whole `url"foo"` is the URL.
     let tokens = parse("[text](url\"foo\")");
     if let Token::Link { url, .. } = &tokens[0] {
-        assert!(url.contains("\""), "expected url to contain quote, got {:?}", url);
+        assert!(
+            url.contains("\""),
+            "expected url to contain quote, got {:?}",
+            url
+        );
     } else {
         panic!("expected link, got {:?}", tokens);
     }

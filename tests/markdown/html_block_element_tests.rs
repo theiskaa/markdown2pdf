@@ -181,7 +181,11 @@ fn block_with_two_space_indent_then_body_blank_then_indented_code() {
     let blocks = html_blocks(&tokens);
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0], "  <div>\n");
-    assert!(tokens.iter().any(|t| matches!(t, Token::Code { block: true, .. })));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code { block: true, .. }))
+    );
 }
 
 #[test]
@@ -190,7 +194,11 @@ fn four_space_indent_opener_is_code_block() {
     // The subsequent `</div>` (no indent) at line start IS detected by
     // the Type 6 arm; both can coexist in one document.
     let tokens = parse("    <div>\nbody\n</div>\n");
-    assert!(tokens.iter().any(|t| matches!(t, Token::Code { block: true, .. })));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(t, Token::Code { block: true, .. }))
+    );
     // And the unindented closer line opens its own Type 6 block.
     let blocks = html_blocks(&tokens);
     assert_eq!(blocks.len(), 1);

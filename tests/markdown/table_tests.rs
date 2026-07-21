@@ -6,7 +6,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 /// `(headers, aligns, rows)` borrowed from a parsed `Token::Table`.
 type TableParts<'a> = (
     &'a Vec<TableCell<Token>>,
@@ -15,8 +14,11 @@ type TableParts<'a> = (
 );
 
 fn first_table(tokens: &[Token]) -> TableParts<'_> {
-    let Some(Token::Table { headers, aligns, rows }) =
-        tokens.iter().find(|t| matches!(t, Token::Table { .. }))
+    let Some(Token::Table {
+        headers,
+        aligns,
+        rows,
+    }) = tokens.iter().find(|t| matches!(t, Token::Table { .. }))
     else {
         panic!("expected Table, got {:?}", tokens);
     };
@@ -53,21 +55,30 @@ fn single_column_table() {
 fn alignment_left() {
     let tokens = parse("| a |\n| :--- |\n| x |\n");
     let (_, aligns, _) = first_table(&tokens);
-    assert!(matches!(aligns[0], markdown2pdf::markdown::TableAlignment::Left));
+    assert!(matches!(
+        aligns[0],
+        markdown2pdf::markdown::TableAlignment::Left
+    ));
 }
 
 #[test]
 fn alignment_right() {
     let tokens = parse("| a |\n| ---: |\n| x |\n");
     let (_, aligns, _) = first_table(&tokens);
-    assert!(matches!(aligns[0], markdown2pdf::markdown::TableAlignment::Right));
+    assert!(matches!(
+        aligns[0],
+        markdown2pdf::markdown::TableAlignment::Right
+    ));
 }
 
 #[test]
 fn alignment_center() {
     let tokens = parse("| a |\n| :---: |\n| x |\n");
     let (_, aligns, _) = first_table(&tokens);
-    assert!(matches!(aligns[0], markdown2pdf::markdown::TableAlignment::Center));
+    assert!(matches!(
+        aligns[0],
+        markdown2pdf::markdown::TableAlignment::Center
+    ));
 }
 
 #[test]
@@ -111,10 +122,12 @@ fn escaped_pipe_currently_still_splits_known_gap() {
     // Pin current behavior: `\|` does NOT yet prevent column splitting in
     // this lexer (a known GFM gap). When the gap is closed, flip this
     // assertion to `rows[0].len() == 2`.
-    let tokens = parse(r"| a | b |
+    let tokens = parse(
+        r"| a | b |
 | --- | --- |
 | x \| y | z |
-");
+",
+    );
     let (_, _, rows) = first_table(&tokens);
     assert_eq!(rows[0].len(), 3, "got {:?}", rows[0]);
 }
@@ -123,28 +136,48 @@ fn escaped_pipe_currently_still_splits_known_gap() {
 fn cell_with_emphasis() {
     let tokens = parse("| a |\n| --- |\n| *x* |\n");
     let (_, _, rows) = first_table(&tokens);
-    assert!(rows[0][0].content.iter().any(|t| matches!(t, Token::Emphasis { .. })));
+    assert!(
+        rows[0][0]
+            .content
+            .iter()
+            .any(|t| matches!(t, Token::Emphasis { .. }))
+    );
 }
 
 #[test]
 fn cell_with_inline_code() {
     let tokens = parse("| a |\n| --- |\n| `x` |\n");
     let (_, _, rows) = first_table(&tokens);
-    assert!(rows[0][0].content.iter().any(|t| matches!(t, Token::Code { block: false, .. })));
+    assert!(
+        rows[0][0]
+            .content
+            .iter()
+            .any(|t| matches!(t, Token::Code { block: false, .. }))
+    );
 }
 
 #[test]
 fn cell_with_link() {
     let tokens = parse("| a |\n| --- |\n| [t](u) |\n");
     let (_, _, rows) = first_table(&tokens);
-    assert!(rows[0][0].content.iter().any(|t| matches!(t, Token::Link { .. })));
+    assert!(
+        rows[0][0]
+            .content
+            .iter()
+            .any(|t| matches!(t, Token::Link { .. }))
+    );
 }
 
 #[test]
 fn cell_with_strikethrough() {
     let tokens = parse("| a |\n| --- |\n| ~~x~~ |\n");
     let (_, _, rows) = first_table(&tokens);
-    assert!(rows[0][0].content.iter().any(|t| matches!(t, Token::Strikethrough(_))));
+    assert!(
+        rows[0][0]
+            .content
+            .iter()
+            .any(|t| matches!(t, Token::Strikethrough(_)))
+    );
 }
 
 #[test]
@@ -155,10 +188,11 @@ fn missing_alignment_row_is_not_a_table() {
 
 #[test]
 fn two_back_to_back_tables() {
-    let tokens = parse(
-        "| a |\n| --- |\n| 1 |\n\n| b |\n| --- |\n| 2 |\n"
-    );
-    let tables: Vec<_> = tokens.iter().filter(|t| matches!(t, Token::Table { .. })).collect();
+    let tokens = parse("| a |\n| --- |\n| 1 |\n\n| b |\n| --- |\n| 2 |\n");
+    let tables: Vec<_> = tokens
+        .iter()
+        .filter(|t| matches!(t, Token::Table { .. }))
+        .collect();
     assert_eq!(tables.len(), 2, "expected two tables, got {:?}", tokens);
 }
 
@@ -203,8 +237,7 @@ fn caret_cell_extends_rowspan_from_cell_above() {
 
 #[test]
 fn rowspan_chains_across_three_rows() {
-    let tokens =
-        parse("| Key | Value |\n| --- | --- |\n| A | 1 |\n| ^ | 2 |\n| ^ | 3 |\n");
+    let tokens = parse("| Key | Value |\n| --- | --- |\n| A | 1 |\n| ^ | 2 |\n| ^ | 3 |\n");
     let (_, _, rows) = first_table(&tokens);
     assert_eq!(Token::collect_all_text(&rows[0][0].content), "A");
     assert_eq!(rows[0][0].rowspan, 3);
@@ -217,8 +250,7 @@ fn rowspan_chains_across_three_rows() {
 fn rowspan_binds_to_nearest_cell_above_not_topmost() {
     // The `^` continues the cell directly above (B), not the one two
     // rows up (A).
-    let tokens =
-        parse("| K | V |\n| --- | --- |\n| A | x |\n| B | y |\n| ^ | z |\n");
+    let tokens = parse("| K | V |\n| --- | --- |\n| A | x |\n| B | y |\n| ^ | z |\n");
     let (_, _, rows) = first_table(&tokens);
     assert_eq!(rows[0][0].rowspan, 1, "A should not span");
     assert_eq!(Token::collect_all_text(&rows[1][0].content), "B");
@@ -231,9 +263,8 @@ fn colspan_and_rowspan_combine_without_misbinding() {
     // Header spans cols 0..2; the `^` in the second body row sits in
     // physical column 0, which must resolve to the col-spanning origin
     // above it (the regression the logical-column walk got wrong).
-    let tokens = parse(
-        "| Span | > | Tail |\n| --- | --- | --- |\n| Merged | > | a |\n| ^ | > | b |\n",
-    );
+    let tokens =
+        parse("| Span | > | Tail |\n| --- | --- | --- |\n| Merged | > | a |\n| ^ | > | b |\n");
     let (headers, _, rows) = first_table(&tokens);
     assert_eq!(headers[0].colspan, 2);
     assert!(headers[1].covered);
@@ -252,8 +283,7 @@ fn colspan_and_rowspan_combine_without_misbinding() {
 
 #[test]
 fn escaped_gt_is_literal_not_a_colspan_marker() {
-    let tokens =
-        parse("| a | \\> | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n");
+    let tokens = parse("| a | \\> | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n");
     let (headers, _, _) = first_table(&tokens);
     assert_eq!(headers.len(), 3);
     assert_eq!(headers[0].colspan, 1, "escaped marker must not extend");
@@ -263,8 +293,7 @@ fn escaped_gt_is_literal_not_a_colspan_marker() {
 
 #[test]
 fn escaped_caret_is_literal_not_a_rowspan_marker() {
-    let tokens =
-        parse("| K | V |\n| --- | --- |\n| A | one |\n| \\^ | two |\n");
+    let tokens = parse("| K | V |\n| --- | --- |\n| A | one |\n| \\^ | two |\n");
     let (_, _, rows) = first_table(&tokens);
     assert_eq!(rows[0][0].rowspan, 1, "escaped marker must not extend");
     assert!(!rows[1][0].covered);

@@ -50,8 +50,25 @@ fn strip_block_boundary_whitespace(s: &str) -> String {
     // tags (`<p> foo </p>` → `<p>foo</p>`). Leave inner text intact.
     // Implementation: regex-free string scan over byte slice.
     let block_tags = [
-        "p", "li", "blockquote", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "div",
-        "table", "thead", "tbody", "tr", "th", "td", "pre",
+        "p",
+        "li",
+        "blockquote",
+        "ul",
+        "ol",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "div",
+        "table",
+        "thead",
+        "tbody",
+        "tr",
+        "th",
+        "td",
+        "pre",
     ];
     let mut out = s.to_string();
     for tag in &block_tags {

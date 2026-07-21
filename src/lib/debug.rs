@@ -89,11 +89,23 @@ impl Token {
                 result
             }
 
-            Token::Code { language, content, block } => {
-                format!("{}{{\n{}\"type\": \"Code\",\n{}\"block\": {},\n{}\"language\": \"{}\",\n{}\"content\": \"{}\"\n{}}}",
-                    indent, inner_indent, inner_indent, block, inner_indent,
-                    language.replace("\"", "\\\""), inner_indent,
-                    content.replace("\"", "\\\"").replace("\n", "\\n"), indent)
+            Token::Code {
+                language,
+                content,
+                block,
+            } => {
+                format!(
+                    "{}{{\n{}\"type\": \"Code\",\n{}\"block\": {},\n{}\"language\": \"{}\",\n{}\"content\": \"{}\"\n{}}}",
+                    indent,
+                    inner_indent,
+                    inner_indent,
+                    block,
+                    inner_indent,
+                    language.replace("\"", "\\\""),
+                    inner_indent,
+                    content.replace("\"", "\\\"").replace("\n", "\\n"),
+                    indent
+                )
             }
 
             Token::BlockQuote(body) => {
@@ -169,12 +181,11 @@ impl Token {
                 }
 
                 match checked {
-                    Some(true) => result
-                        .push_str(&format!("{}\"checked\": true,\n", inner_indent)),
-                    Some(false) => result
-                        .push_str(&format!("{}\"checked\": false,\n", inner_indent)),
-                    None => result
-                        .push_str(&format!("{}\"checked\": null,\n", inner_indent)),
+                    Some(true) => result.push_str(&format!("{}\"checked\": true,\n", inner_indent)),
+                    Some(false) => {
+                        result.push_str(&format!("{}\"checked\": false,\n", inner_indent))
+                    }
+                    None => result.push_str(&format!("{}\"checked\": null,\n", inner_indent)),
                 }
 
                 result.push_str(&format!("{}\"content\": [\n", inner_indent));
@@ -192,7 +203,11 @@ impl Token {
                 result
             }
 
-            Token::Link { content, url, title } => {
+            Token::Link {
+                content,
+                url,
+                title,
+            } => {
                 let mut result = format!("{}{{\n", indent);
                 result.push_str(&format!("{}\"type\": \"Link\",\n", inner_indent));
                 result.push_str(&format!(
@@ -444,10 +459,7 @@ impl Token {
                     "FootnoteDefinition"
                 };
                 let mut result = format!("{}{{\n", indent);
-                result.push_str(&format!(
-                    "{}\"type\": \"{}\",\n",
-                    inner_indent, type_name
-                ));
+                result.push_str(&format!("{}\"type\": \"{}\",\n", inner_indent, type_name));
                 result.push_str(&format!(
                     "{}\"label\": \"{}\",\n",
                     inner_indent,
@@ -533,7 +545,10 @@ impl Token {
                     inner_indent,
                     inline,
                     inner_indent,
-                    content.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n"),
+                    content
+                        .replace("\\", "\\\\")
+                        .replace("\"", "\\\"")
+                        .replace("\n", "\\n"),
                     indent
                 )
             }
@@ -574,7 +589,11 @@ impl Token {
                 format!("Emphasis({}, {})", level, list(content))
             }
             Token::StrongEmphasis(content) => format!("StrongEmphasis({})", list(content)),
-            Token::Code { language, content, block } => {
+            Token::Code {
+                language,
+                content,
+                block,
+            } => {
                 let kind = if *block { "CodeBlock" } else { "CodeSpan" };
                 format!("{}({}, {})", kind, quote(language), quote(content))
             }
@@ -623,7 +642,11 @@ impl Token {
                     list(content)
                 )
             }
-            Token::Link { content, url, title } => {
+            Token::Link {
+                content,
+                url,
+                title,
+            } => {
                 let t = match title {
                     Some(s) => quote(s),
                     None => "_".to_string(),

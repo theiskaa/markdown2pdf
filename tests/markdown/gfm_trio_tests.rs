@@ -2,8 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
-
 #[test]
 fn unchecked_task_list_item() {
     let tokens = parse("- [ ] Pending task");
@@ -76,7 +74,6 @@ fn ordered_task_list_item() {
     }
 }
 
-
 #[test]
 fn tilde_fenced_code_block_basic() {
     let input = "~~~\nfn main() {}\n~~~";
@@ -97,7 +94,11 @@ fn tilde_fenced_code_block_with_language() {
     let tokens = parse(input);
     assert_eq!(
         tokens,
-        vec![Token::Code { language: "rust".to_string(), content: "let x = 5;".to_string(), block: true }]
+        vec![Token::Code {
+            language: "rust".to_string(),
+            content: "let x = 5;".to_string(),
+            block: true
+        }]
     );
 }
 
@@ -112,7 +113,6 @@ fn tilde_fence_can_contain_backticks() {
         panic!("expected code, got {:?}", tokens);
     }
 }
-
 
 #[test]
 fn strikethrough_basic() {
@@ -163,12 +163,15 @@ fn strikethrough_with_emphasis_inside() {
     }
 }
 
-
 #[test]
 fn tilde_in_inline_code_stays_literal() {
     let tokens = parse("`~~not strikethrough~~`");
     assert_eq!(
         tokens,
-        vec![Token::Code { language: "".to_string(), content: "~~not strikethrough~~".to_string(), block: false }]
+        vec![Token::Code {
+            language: "".to_string(),
+            content: "~~not strikethrough~~".to_string(),
+            block: false
+        }]
     );
 }

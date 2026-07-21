@@ -2,7 +2,6 @@ use markdown2pdf::markdown::*;
 
 use super::common::parse;
 
-
 #[test]
 fn link_text_parses_emphasis() {
     let tokens = parse("[*emph* text](u)");
@@ -118,8 +117,16 @@ fn link_title_with_paren_delimiter_escaped_close() {
 #[test]
 fn autolink_keeps_url_as_link_text() {
     let tokens = parse("<https://example.com>");
-    let Token::Link { content, url, title } = &tokens[0] else {
-        panic!("expected autolink, got {}", Token::slice_to_compact(&tokens));
+    let Token::Link {
+        content,
+        url,
+        title,
+    } = &tokens[0]
+    else {
+        panic!(
+            "expected autolink, got {}",
+            Token::slice_to_compact(&tokens)
+        );
     };
     assert_eq!(Token::collect_all_text(content), "https://example.com");
     assert_eq!(url, "https://example.com");

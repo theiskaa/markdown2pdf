@@ -11,7 +11,9 @@
 
 use crate::markdown::{TableCell, Token};
 
-use super::ir::{Block, DefinitionEntry, FootnoteEntry, InlineRun, ListBullet, ListEntry, RunFlags};
+use super::ir::{
+    Block, DefinitionEntry, FootnoteEntry, InlineRun, ListBullet, ListEntry, RunFlags,
+};
 use std::collections::HashMap;
 
 /// Lower a slice of top-level tokens into the block IR.
@@ -147,11 +149,8 @@ fn lower_blocks(
                     // attributes (`<div class="…">body</div>`) get
                     // unwrapped instead of dropped as a standalone tag.
                     if let Ok(inner_tokens) = crate::markdown::Lexer::new(inner).parse() {
-                        let inner_blocks = lower_blocks(
-                            &inner_tokens,
-                            footnote_numbers,
-                            footnote_definitions,
-                        );
+                        let inner_blocks =
+                            lower_blocks(&inner_tokens, footnote_numbers, footnote_definitions);
                         out.extend(inner_blocks);
                     } else if !is_only_html_comments(content) {
                         out.push(Block::Html {
@@ -183,9 +182,9 @@ fn lower_blocks(
                 body,
             } => {
                 flush_paragraph(&mut out, &mut buffered_inline);
-                let title_runs = title.as_ref().map(|t| {
-                    flatten_inline(t, RunFlags::default(), None, footnote_numbers)
-                });
+                let title_runs = title
+                    .as_ref()
+                    .map(|t| flatten_inline(t, RunFlags::default(), None, footnote_numbers));
                 let nested = lower_blocks(body, footnote_numbers, footnote_definitions);
                 out.push(Block::Admonition {
                     kind: kind.clone(),
@@ -212,7 +211,9 @@ fn lower_blocks(
                             .collect(),
                     })
                     .collect();
-                out.push(Block::DefinitionList { entries: ir_entries });
+                out.push(Block::DefinitionList {
+                    entries: ir_entries,
+                });
                 i += 1;
             }
             Token::Math {
@@ -234,9 +235,7 @@ fn lower_blocks(
                 // inline runs so the post-pass doesn't have to lower
                 // recursively.
                 let runs = flatten_inline(content, RunFlags::default(), None, footnote_numbers);
-                footnote_definitions
-                    .entry(label.clone())
-                    .or_insert(runs);
+                footnote_definitions.entry(label.clone()).or_insert(runs);
                 i += 1;
             }
             Token::ListItem { .. } => {
@@ -289,8 +288,7 @@ fn lower_blocks(
                         flatten_inline(c, RunFlags::default(), None, footnote_numbers)
                     })
                 };
-                let head_runs: Vec<TableCell<InlineRun>> =
-                    headers.iter().map(to_runs).collect();
+                let head_runs: Vec<TableCell<InlineRun>> = headers.iter().map(to_runs).collect();
                 let row_runs: Vec<Vec<TableCell<InlineRun>>> = rows
                     .iter()
                     .map(|row| row.iter().map(to_runs).collect())
@@ -350,7 +348,13 @@ fn lower_blocks(
                     }
                 }
                 let effective = root_html_depth.apply(RunFlags::default());
-                flatten_one(&tokens[i], effective, None, &mut buffered_inline, footnote_numbers);
+                flatten_one(
+                    &tokens[i],
+                    effective,
+                    None,
+                    &mut buffered_inline,
+                    footnote_numbers,
+                );
                 i += 1;
             }
         }
@@ -720,8 +724,7 @@ fn collect_inline_footnote_defs(
                 for c in content {
                     walk(c, footnotes, out);
                 }
-                let runs =
-                    flatten_inline(content, RunFlags::default(), None, footnotes);
+                let runs = flatten_inline(content, RunFlags::default(), None, footnotes);
                 out.entry(label.clone()).or_insert(runs);
             }
             Token::Heading(inner, _)
@@ -866,10 +869,11 @@ fn flatten_inline(
     let mut depth = InlineHtmlDepth::default();
     for tok in tokens {
         if let Token::HtmlInline(tag) = tok
-            && let Some(parsed) = classify_inline_html_tag(tag) {
-                depth.handle(parsed);
-                continue;
-            }
+            && let Some(parsed) = classify_inline_html_tag(tag)
+        {
+            depth.handle(parsed);
+            continue;
+        }
         let effective = depth.apply(flags);
         flatten_one(tok, effective, link, &mut out, footnotes);
     }
@@ -1095,7 +1099,8 @@ fn flatten_one(
                 .unwrap_or_else(|| label.clone());
             let anchor_link = number.map(|n| format!("#footnote-{}", n));
             let sup_flags = flags.with_superscript();
-            out.push(InlineRun { math: None,
+            out.push(InlineRun {
+                math: None,
                 text: display,
                 flags: sup_flags,
                 link: anchor_link,
@@ -1109,7 +1114,8 @@ fn flatten_one(
             // numbering somehow missed it we emit nothing rather than
             // leak the control-prefixed id.
             if let Some(n) = footnotes.get(label).copied() {
-                out.push(InlineRun { math: None,
+                out.push(InlineRun {
+                    math: None,
                     text: n.to_string(),
                     flags: flags.with_superscript(),
                     link: Some(format!("#footnote-{}", n)),
@@ -1188,7 +1194,12 @@ fn flatten_one(
         // shouldn't — the top-level lower arm promotes it to
         // Block::Admonition) we degrade gracefully by spilling its
         // header label and body text into the surrounding run.
-        Token::Admonition { raw_label, title, body, .. } => {
+        Token::Admonition {
+            raw_label,
+            title,
+            body,
+            ..
+        } => {
             if let Some(t) = title {
                 for tok in t {
                     flatten_one(tok, flags, link, out, footnotes);
@@ -1220,11 +1231,15 @@ fn push_text(out: &mut Vec<InlineRun>, text: &str, flags: RunFlags, link: Option
     }
     let link_owned = link.map(|s| s.to_string());
     if let Some(last) = out.last_mut()
-        && last.math.is_none() && last.flags == flags && last.link == link_owned {
-            last.text.push_str(text);
-            return;
-        }
-    out.push(InlineRun { math: None,
+        && last.math.is_none()
+        && last.flags == flags
+        && last.link == link_owned
+    {
+        last.text.push_str(text);
+        return;
+    }
+    out.push(InlineRun {
+        math: None,
         text: text.to_string(),
         flags,
         link: link_owned,
@@ -1322,9 +1337,10 @@ mod tests {
         };
         // The math run carries the raw TeX and no flowing text — the
         // layout pass typesets + draws it as outlines.
-        assert!(runs
-            .iter()
-            .any(|r| r.math.as_deref() == Some("x^2") && r.text.is_empty()));
+        assert!(
+            runs.iter()
+                .any(|r| r.math.as_deref() == Some("x^2") && r.text.is_empty())
+        );
     }
 
     #[test]
@@ -1373,10 +1389,12 @@ mod tests {
         let Block::List { entries } = &blocks[0] else {
             panic!("expected list");
         };
-        assert!(entries[0]
-            .runs
-            .iter()
-            .any(|r| r.math.as_deref() == Some("a+b")));
+        assert!(
+            entries[0]
+                .runs
+                .iter()
+                .any(|r| r.math.as_deref() == Some("a+b"))
+        );
     }
 
     #[test]
@@ -1394,7 +1412,9 @@ mod tests {
     }
 
     fn lex(src: &str) -> Vec<Token> {
-        crate::markdown::Lexer::new(src.to_string()).parse().unwrap()
+        crate::markdown::Lexer::new(src.to_string())
+            .parse()
+            .unwrap()
     }
 
     fn footnote_section(blocks: &[Block]) -> &[FootnoteEntry] {
@@ -1448,8 +1468,7 @@ mod tests {
         assert_eq!(entries[0].number, 1);
         assert_eq!(entries[1].number, 2);
         let first: String = entries[0].runs.iter().map(|r| r.text.as_str()).collect();
-        let second: String =
-            entries[1].runs.iter().map(|r| r.text.as_str()).collect();
+        let second: String = entries[1].runs.iter().map(|r| r.text.as_str()).collect();
         assert!(first.contains("inline note"), "got {first:?}");
         assert!(second.contains("ref def"), "got {second:?}");
     }
@@ -1457,8 +1476,7 @@ mod tests {
     fn walk_superscript_markers(blocks: &[Block], out: &mut Vec<String>) {
         for b in blocks {
             match b {
-                Block::Paragraph { runs }
-                | Block::Heading { runs, .. } => {
+                Block::Paragraph { runs } | Block::Heading { runs, .. } => {
                     for r in runs {
                         if r.flags.superscript {
                             out.push(r.text.clone());
@@ -1519,7 +1537,12 @@ mod tests {
         // ref must show its assigned number, NOT 1.
         assert_eq!(
             markers,
-            vec!["1".to_string(), "2".to_string(), "3".to_string(), "4".to_string()],
+            vec![
+                "1".to_string(),
+                "2".to_string(),
+                "3".to_string(),
+                "4".to_string()
+            ],
             "footnote markers in nested contexts must use document-wide numbering"
         );
     }

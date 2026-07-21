@@ -221,8 +221,7 @@ fn metadata_fields_written_to_info_dict() {
     assert!(s.contains("/Subject"), "Info dict missing /Subject key");
     assert!(s.contains("/Title"), "Info dict missing /Title key");
     assert!(
-        s.contains("FEFF0041006C006900630065")
-            || s.contains("FEFF0041006c006900630065"),
+        s.contains("FEFF0041006C006900630065") || s.contains("FEFF0041006c006900630065"),
         "expected `Alice` as UTF-16BE bytes after FEFF BOM"
     );
 }
@@ -233,7 +232,11 @@ fn html_pagebreak_comment_yields_two_pages() {
         "First page content.\n\n<!-- pagebreak -->\n\nSecond page content.",
         "",
     );
-    assert!(page_count(&bytes) >= 2, "expected ≥2 pages, got {}", page_count(&bytes));
+    assert!(
+        page_count(&bytes) >= 2,
+        "expected ≥2 pages, got {}",
+        page_count(&bytes)
+    );
 }
 
 #[test]
@@ -495,10 +498,7 @@ fn title_page_has_no_header_or_footer() {
         "##,
     );
     let s = String::from_utf8_lossy(&bytes);
-    assert!(
-        !s.contains("(page 1)"),
-        "footer leaked onto the title page"
-    );
+    assert!(!s.contains("(page 1)"), "footer leaked onto the title page");
     assert!(
         s.contains("(page 2)"),
         "footer missing on the body's first page (final page 2)"
@@ -537,10 +537,7 @@ fn footnote_reference_renders_as_superscript_number() {
 
 #[test]
 fn footnotes_section_heading_appears() {
-    let bytes = render(
-        "Note[^a].\n\n[^a]: First definition.",
-        "",
-    );
+    let bytes = render("Note[^a].\n\n[^a]: First definition.", "");
     let s = String::from_utf8_lossy(&bytes);
     assert!(
         s.contains("(Footnotes)"),
@@ -717,7 +714,10 @@ fn image_with_no_title_renders_without_caption() {
     let md = format!("![alt]({})\n", img);
     let bytes = render(&md, "");
     let s = String::from_utf8_lossy(&bytes);
-    assert!(!s.contains("(alt)"), "alt text should not render as caption");
+    assert!(
+        !s.contains("(alt)"),
+        "alt text should not render as caption"
+    );
 }
 
 #[test]
@@ -885,9 +885,7 @@ fn html_strike_and_del_tags_consumed() {
         let bytes = render(src, "");
         let s = String::from_utf8_lossy(&bytes);
         assert!(
-            !s.contains("(<s>)")
-                && !s.contains("(<del>)")
-                && !s.contains("(<strike>)"),
+            !s.contains("(<s>)") && !s.contains("(<del>)") && !s.contains("(<strike>)"),
             "tag leaked into output for `{}`",
             src
         );
@@ -1067,10 +1065,7 @@ fn definition_list_emits_term_and_definition() {
 
 #[test]
 fn definition_list_handles_multiple_entries() {
-    let bytes = render(
-        "Apple\n: A red fruit.\nBanana\n: A yellow fruit.\n",
-        "",
-    );
+    let bytes = render("Apple\n: A red fruit.\nBanana\n: A yellow fruit.\n", "");
     let s = String::from_utf8_lossy(&bytes);
     assert!(s.contains("(Apple)"));
     assert!(s.contains("(Banana)"));
@@ -1121,10 +1116,7 @@ fn standalone_p_tag_is_dropped() {
     let md = "<p align=\"center\">\n\nReal body text here.\n\n</p>";
     let bytes = render(md, "");
     let s = String::from_utf8_lossy(&bytes);
-    assert!(
-        !s.contains("<p align="),
-        "framing <p> tag rendered as text"
-    );
+    assert!(!s.contains("<p align="), "framing <p> tag rendered as text");
     assert!(!s.contains("</p>"), "framing </p> tag rendered as text");
 }
 
@@ -1321,10 +1313,11 @@ mod inline_style_application {
             let l = line.trim();
             if let Some(p) = l.strip_suffix(" Td")
                 && let Some(x) = p.split_whitespace().next()
-                    && let Ok(v) = x.parse::<f32>()
-                        && v > m {
-                            m = v;
-                        }
+                && let Ok(v) = x.parse::<f32>()
+                && v > m
+            {
+                m = v;
+            }
         }
         m
     }
@@ -1477,7 +1470,10 @@ mod inline_style_application {
             done, open,
             "checked vs unchecked task produced identical output"
         );
-        assert!(done.len() > open.len(), "checked box should add a tick path");
+        assert!(
+            done.len() > open.len(),
+            "checked box should add a tick path"
+        );
     }
 
     #[test]

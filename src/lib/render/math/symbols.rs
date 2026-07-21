@@ -504,8 +504,8 @@ pub fn char_class(c: char) -> Class {
 /// A few literal characters render better as a dedicated math glyph.
 pub fn char_remap(c: char) -> char {
     match c {
-        '-' => '\u{2212}', // minus sign
-        '*' => '\u{2217}', // asterisk operator
+        '-' => '\u{2212}',  // minus sign
+        '*' => '\u{2217}',  // asterisk operator
         '\'' => '\u{2032}', // prime
         _ => c,
     }

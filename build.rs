@@ -8,11 +8,13 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/entities.json");
     println!("cargo:rerun-if-changed=build.rs");
 
-    let json_text = std::fs::read_to_string("assets/entities.json")
-        .expect("assets/entities.json not found");
+    let json_text =
+        std::fs::read_to_string("assets/entities.json").expect("assets/entities.json not found");
     let parsed: serde_json::Value =
         serde_json::from_str(&json_text).expect("entities.json is not valid JSON");
-    let map = parsed.as_object().expect("entities.json root must be object");
+    let map = parsed
+        .as_object()
+        .expect("entities.json root must be object");
 
     // entity references must end with `;`. Filter to the
     // semicolon-terminated entries only; strip the leading `&` and trailing

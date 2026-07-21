@@ -55,7 +55,14 @@ impl fmt::Display for ResolveError {
                     .unwrap_or_else(|| "<config>".to_string());
                 if let Some(span) = source.span() {
                     let (line, col) = line_col_in(input, span.start);
-                    write!(f, "error in {} at line {}, column {}: {}", where_, line, col, source.message())?;
+                    write!(
+                        f,
+                        "error in {} at line {}, column {}: {}",
+                        where_,
+                        line,
+                        col,
+                        source.message()
+                    )?;
                 } else {
                     write!(f, "error in {}: {}", where_, source.message())?;
                 }
@@ -72,11 +79,7 @@ impl fmt::Display for ResolveError {
                 Ok(())
             }
             ResolveError::InheritsCycle(chain) => {
-                write!(
-                    f,
-                    "theme inheritance cycle: {}",
-                    chain.join(" -> ")
-                )
+                write!(f, "theme inheritance cycle: {}", chain.join(" -> "))
             }
             ResolveError::PresetIncomplete {
                 theme,
@@ -89,7 +92,12 @@ impl fmt::Display for ResolveError {
                 )
             }
             ResolveError::Io { path, source } => {
-                write!(f, "could not read config file {}: {}", path.display(), source)
+                write!(
+                    f,
+                    "could not read config file {}: {}",
+                    path.display(),
+                    source
+                )
             }
         }
     }
@@ -144,8 +152,7 @@ pub(crate) fn unknown_field_suggestion(msg: &str) -> Option<String> {
         .map(|c| c.trim().trim_matches('`'))
         .filter(|c| !c.is_empty())
         .collect();
-    closest_match(field, candidates.iter().copied(), 3)
-        .map(|m| format!("did you mean `{}`?", m))
+    closest_match(field, candidates.iter().copied(), 3).map(|m| format!("did you mean `{}`?", m))
 }
 
 /// Hand-rolled Levenshtein for typo suggestions on unknown fields and
@@ -183,9 +190,7 @@ fn levenshtein(a: &str, b: &str) -> usize {
         curr[0] = i + 1;
         for (j, bc) in b.iter().enumerate() {
             let cost = if ac == bc { 0 } else { 1 };
-            curr[j + 1] = (prev[j + 1] + 1)
-                .min(curr[j] + 1)
-                .min(prev[j] + cost);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -237,7 +242,10 @@ mod tests {
     fn closest_match_under_cutoff() {
         let opts = ["text_color", "background_color", "font_size_pt"];
         assert_eq!(closest_match("texcolor", opts, 3), Some("text_color"));
-        assert_eq!(closest_match("backround_color", opts, 3), Some("background_color"));
+        assert_eq!(
+            closest_match("backround_color", opts, 3),
+            Some("background_color")
+        );
         assert_eq!(closest_match("totally_unrelated", opts, 3), None);
     }
 }

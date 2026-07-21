@@ -4,7 +4,7 @@
 //! length are bounded so adversarial input can't blow the stack.
 
 use super::symbols::{
-    char_class, char_remap, command, operator_name, styled_letter, Class, Variant,
+    Class, Variant, char_class, char_remap, command, operator_name, styled_letter,
 };
 
 #[derive(Debug, Clone)]
@@ -19,9 +19,16 @@ pub enum Node {
     /// `{ … }` — a single Ord made of a sub-list.
     Group(Vec<Node>),
     /// `\frac` / `\binom` body (bar=false for binomials/`\atop`).
-    Frac { num: Vec<Node>, den: Vec<Node>, bar: bool },
+    Frac {
+        num: Vec<Node>,
+        den: Vec<Node>,
+        bar: bool,
+    },
     /// `\sqrt[index]{body}`.
-    Sqrt { index: Option<Vec<Node>>, body: Vec<Node> },
+    Sqrt {
+        index: Option<Vec<Node>>,
+        body: Vec<Node>,
+    },
     /// A nucleus with optional super/sub-scripts.
     Scripts {
         base: Box<Node>,
@@ -188,7 +195,9 @@ impl Parser {
                 (Tok::Amp, _) | (Tok::Newline, _) => break,
                 _ => {}
             }
-            let Some(mut node) = self.atom(var) else { break };
+            let Some(mut node) = self.atom(var) else {
+                break;
+            };
             // `\limits` / `\nolimits` immediately after a big operator
             // override its default script placement.
             while let Some(Tok::Cmd(c)) = self.lx.peek() {
@@ -198,9 +207,7 @@ impl Parser {
                     _ => break,
                 };
                 self.lx.next();
-                if let Node::BigOp { limits, .. } | Node::OpName { limits, .. } =
-                    &mut node
-                {
+                if let Node::BigOp { limits, .. } | Node::OpName { limits, .. } = &mut node {
                     *limits = over;
                 }
             }
@@ -302,7 +309,14 @@ impl Parser {
             Tok::Char(c) => {
                 if c.is_ascii_alphabetic() {
                     Node::Symbol {
-                        ch: styled_letter(c, if var == Variant::Normal { Variant::Italic } else { var }),
+                        ch: styled_letter(
+                            c,
+                            if var == Variant::Normal {
+                                Variant::Italic
+                            } else {
+                                var
+                            },
+                        ),
                         class: Class::Ord,
                     }
                 } else if c.is_ascii_digit() {
@@ -342,7 +356,11 @@ impl Parser {
             "frac" | "dfrac" | "tfrac" | "cfrac" => {
                 let num = self.arg(var);
                 let den = self.arg(var);
-                Some(Node::Frac { num, den, bar: true })
+                Some(Node::Frac {
+                    num,
+                    den,
+                    bar: true,
+                })
             }
             "binom" | "dbinom" | "tbinom" => {
                 let num = self.arg(var);
@@ -350,7 +368,11 @@ impl Parser {
                 Some(Node::Delimited {
                     left: Some('('),
                     right: Some(')'),
-                    body: vec![Node::Frac { num, den, bar: false }],
+                    body: vec![Node::Frac {
+                        num,
+                        den,
+                        bar: false,
+                    }],
                 })
             }
             "sqrt" => {
@@ -373,7 +395,11 @@ impl Parser {
                     self.lx.next();
                     right = self.delim_char();
                 }
-                Some(Node::Delimited { left: d, right, body })
+                Some(Node::Delimited {
+                    left: d,
+                    right,
+                    body,
+                })
             }
             "right" => {
                 let _ = self.delim_char();
@@ -458,8 +484,8 @@ impl Parser {
             }
             // `\limits`/`\nolimits` are consumed by `list()` after a big
             // operator; reaching here means stray use — treat as no-op.
-            "limits" | "nolimits" | "displaystyle" | "textstyle"
-            | "scriptstyle" | "scriptscriptstyle" => Some(Node::Space(0.0)),
+            "limits" | "nolimits" | "displaystyle" | "textstyle" | "scriptstyle"
+            | "scriptscriptstyle" => Some(Node::Space(0.0)),
             "not" => {
                 // Overstrike the next atom with a slash.
                 let nxt = self.atom(var)?;
@@ -613,8 +639,8 @@ impl Parser {
             "vmatrix" => (Some('\u{007C}'), Some('\u{007C}'), false),
             "Vmatrix" => (Some('\u{2016}'), Some('\u{2016}'), false),
             "cases" => (Some('{'), None, true),
-            "matrix" | "array" | "aligned" | "align" | "align*" | "alignedat"
-            | "gathered" | "smallmatrix" => (None, None, name.starts_with("align")),
+            "matrix" | "array" | "aligned" | "align" | "align*" | "alignedat" | "gathered"
+            | "smallmatrix" => (None, None, name.starts_with("align")),
             _ => (None, None, false),
         };
         let mut rows: Vec<Vec<Vec<Node>>> = vec![vec![]];
@@ -718,9 +744,22 @@ mod tests {
     #[test]
     fn adversarial_inputs_do_not_panic() {
         for s in [
-            "", "{", "}", "^", "_", "\\", "\\\\", "\\frac", "\\sqrt[",
-            "\\left(", "{{{{{{{{{{", "\\begin{matrix}", "a & b \\\\ c",
-            "x^^_2", "\\frac{}{}", "\\\\\\\\",
+            "",
+            "{",
+            "}",
+            "^",
+            "_",
+            "\\",
+            "\\\\",
+            "\\frac",
+            "\\sqrt[",
+            "\\left(",
+            "{{{{{{{{{{",
+            "\\begin{matrix}",
+            "a & b \\\\ c",
+            "x^^_2",
+            "\\frac{}{}",
+            "\\\\\\\\",
         ] {
             let _ = parse(s);
         }
@@ -761,13 +800,15 @@ mod tests {
     #[test]
     fn primes_become_superscript_runs() {
         match only("x''") {
-            Node::Scripts { sup: Some(s), sub, .. } => {
+            Node::Scripts {
+                sup: Some(s), sub, ..
+            } => {
                 assert!(sub.is_none());
                 assert_eq!(s.len(), 2);
-                assert!(s.iter().all(|t| matches!(
-                    t,
-                    Node::Symbol { ch: '\u{2032}', .. }
-                )));
+                assert!(
+                    s.iter()
+                        .all(|t| matches!(t, Node::Symbol { ch: '\u{2032}', .. }))
+                );
             }
             other => panic!("expected primed Scripts, got {other:?}"),
         }
@@ -791,7 +832,11 @@ mod tests {
         }
         // \binom is a bar-less fraction wrapped in parentheses.
         match only("\\binom{n}{k}") {
-            Node::Delimited { left: Some('('), right: Some(')'), body } => {
+            Node::Delimited {
+                left: Some('('),
+                right: Some(')'),
+                body,
+            } => {
                 assert!(matches!(body[0], Node::Frac { bar: false, .. }));
             }
             other => panic!("expected delimited binom, got {other:?}"),
@@ -813,17 +858,29 @@ mod tests {
     fn null_and_sized_delimiters() {
         // `\left.` is a null (invisible) fence.
         match only("\\left. x \\right|") {
-            Node::Delimited { left: None, right: Some('\u{007C}'), .. } => {}
+            Node::Delimited {
+                left: None,
+                right: Some('\u{007C}'),
+                ..
+            } => {}
             other => panic!("expected null-left delimited, got {other:?}"),
         }
         // \bigl( .. \Bigg) carry their enlargement level.
         assert!(matches!(
             parse("\\bigl(")[0],
-            Node::SizedDelim { ch: '(', level: 1, .. }
+            Node::SizedDelim {
+                ch: '(',
+                level: 1,
+                ..
+            }
         ));
         assert!(matches!(
             parse("\\Biggl[")[0],
-            Node::SizedDelim { ch: '[', level: 4, .. }
+            Node::SizedDelim {
+                ch: '[',
+                level: 4,
+                ..
+            }
         ));
     }
 
@@ -831,23 +888,42 @@ mod tests {
     fn accents_and_over_under() {
         assert!(matches!(
             only("\\hat{x}"),
-            Node::Accent { mark: '\u{0302}', stretchy: false, .. }
+            Node::Accent {
+                mark: '\u{0302}',
+                stretchy: false,
+                ..
+            }
         ));
         assert!(matches!(
             only("\\widehat{x}"),
-            Node::Accent { mark: '\u{0302}', stretchy: true, .. }
+            Node::Accent {
+                mark: '\u{0302}',
+                stretchy: true,
+                ..
+            }
         ));
         assert!(matches!(
             only("\\vec{v}"),
-            Node::Accent { mark: '\u{20D7}', .. }
+            Node::Accent {
+                mark: '\u{20D7}',
+                ..
+            }
         ));
         assert!(matches!(
             only("\\overline{x}"),
-            Node::OverUnder { over: Some(_), rule: true, .. }
+            Node::OverUnder {
+                over: Some(_),
+                rule: true,
+                ..
+            }
         ));
         assert!(matches!(
             only("\\underbrace{x}"),
-            Node::OverUnder { under: Some('\u{23DF}'), rule: false, .. }
+            Node::OverUnder {
+                under: Some('\u{23DF}'),
+                rule: false,
+                ..
+            }
         ));
     }
 
@@ -855,7 +931,10 @@ mod tests {
     fn text_operatorname_and_spacing() {
         assert!(matches!(only("\\text{hi there}"), Node::Text(t) if t == "hi there"));
         match only("\\operatorname{lcm}") {
-            Node::OpName { text, limits: false } => assert_eq!(text, "lcm"),
+            Node::OpName {
+                text,
+                limits: false,
+            } => assert_eq!(text, "lcm"),
             other => panic!("expected OpName, got {other:?}"),
         }
         let n = parse("a\\,b\\quad c\\!d");
@@ -876,20 +955,23 @@ mod tests {
         // Default letters are math-italic.
         assert!(matches!(
             only("x"),
-            Node::Symbol { ch: '\u{1D465}', .. }
+            Node::Symbol {
+                ch: '\u{1D465}',
+                ..
+            }
         ));
         // \mathbb{R} bakes the double-struck code point.
         match only("\\mathbb{R}") {
-            Node::Group(inner) => assert!(matches!(
-                inner[0],
-                Node::Symbol { ch: '\u{211D}', .. }
-            )),
+            Node::Group(inner) => assert!(matches!(inner[0], Node::Symbol { ch: '\u{211D}', .. })),
             other => panic!("expected group, got {other:?}"),
         }
         match only("\\mathbf{A}") {
             Node::Group(inner) => assert!(matches!(
                 inner[0],
-                Node::Symbol { ch: '\u{1D400}', .. }
+                Node::Symbol {
+                    ch: '\u{1D400}',
+                    ..
+                }
             )),
             other => panic!("expected group, got {other:?}"),
         }
@@ -899,12 +981,18 @@ mod tests {
     fn big_operator_limits_flag() {
         assert!(matches!(
             only("\\sum"),
-            Node::BigOp { ch: '\u{2211}', limits: true }
+            Node::BigOp {
+                ch: '\u{2211}',
+                limits: true
+            }
         ));
         // Integrals default to no over/under limits.
         assert!(matches!(
             only("\\int"),
-            Node::BigOp { ch: '\u{222B}', limits: false }
+            Node::BigOp {
+                ch: '\u{222B}',
+                limits: false
+            }
         ));
     }
 
@@ -914,7 +1002,10 @@ mod tests {
         match &parse("\\int\\limits_{0}^{1}")[0] {
             Node::Scripts { base, .. } => assert!(matches!(
                 **base,
-                Node::BigOp { ch: '\u{222B}', limits: true }
+                Node::BigOp {
+                    ch: '\u{222B}',
+                    limits: true
+                }
             )),
             other => panic!("expected scripted ∫, got {other:?}"),
         }
@@ -922,7 +1013,10 @@ mod tests {
         match &parse("\\sum\\nolimits_{i}")[0] {
             Node::Scripts { base, .. } => assert!(matches!(
                 **base,
-                Node::BigOp { ch: '\u{2211}', limits: false }
+                Node::BigOp {
+                    ch: '\u{2211}',
+                    limits: false
+                }
             )),
             other => panic!("expected scripted ∑, got {other:?}"),
         }
@@ -933,20 +1027,35 @@ mod tests {
     #[test]
     fn environments_shapes() {
         match only("\\begin{bmatrix} 1 \\\\ 2 \\end{bmatrix}") {
-            Node::Array { left: Some('['), right: Some(']'), rows, .. } => {
+            Node::Array {
+                left: Some('['),
+                right: Some(']'),
+                rows,
+                ..
+            } => {
                 assert_eq!(rows.len(), 2);
             }
             other => panic!("expected bmatrix, got {other:?}"),
         }
         match only("\\begin{cases} a & x>0 \\\\ b & x\\le 0 \\end{cases}") {
-            Node::Array { left: Some('{'), right: None, align_left: true, rows } => {
+            Node::Array {
+                left: Some('{'),
+                right: None,
+                align_left: true,
+                rows,
+            } => {
                 assert_eq!(rows.len(), 2);
                 assert_eq!(rows[0].len(), 2);
             }
             other => panic!("expected cases, got {other:?}"),
         }
         match only("\\begin{aligned} a &= b \\\\ &= c \\end{aligned}") {
-            Node::Array { left: None, right: None, align_left: true, rows } => {
+            Node::Array {
+                left: None,
+                right: None,
+                align_left: true,
+                rows,
+            } => {
                 assert_eq!(rows.len(), 2);
             }
             other => panic!("expected aligned, got {other:?}"),
@@ -1027,33 +1136,122 @@ mod tests {
         // Constructors only — `\right` / `\end` are closers that
         // legitimately produce nothing when used standalone.
         let structural = [
-            "frac", "dfrac", "tfrac", "binom", "sqrt", "left",
-            "text", "operatorname", "hat", "vec", "bar", "tilde", "dot",
-            "overline", "underline", "overbrace", "underbrace", "mathbb",
-            "mathbf", "mathcal", "mathrm", "mathfrak", "mathsf",
-            "quad", "qquad", "bigl", "Big",
+            "frac",
+            "dfrac",
+            "tfrac",
+            "binom",
+            "sqrt",
+            "left",
+            "text",
+            "operatorname",
+            "hat",
+            "vec",
+            "bar",
+            "tilde",
+            "dot",
+            "overline",
+            "underline",
+            "overbrace",
+            "underbrace",
+            "mathbb",
+            "mathbf",
+            "mathcal",
+            "mathrm",
+            "mathfrak",
+            "mathsf",
+            "quad",
+            "qquad",
+            "bigl",
+            "Big",
         ];
         for cmd in [
-            "alpha", "beta", "gamma", "pi", "theta", "lambda", "mu", "phi",
-            "omega", "Gamma", "Delta", "Omega", "sum", "prod", "int", "oint",
-            "lim", "sin", "cos", "tan", "log", "ln", "exp", "min", "max",
-            "leq", "geq", "neq", "approx", "equiv", "in", "subset", "cup",
-            "cap", "to", "rightarrow", "Rightarrow", "mapsto", "infty",
-            "partial", "nabla", "forall", "exists", "times", "div", "pm",
-            "cdot", "circ", "oplus", "otimes", "langle", "rangle", "lfloor",
-            "rfloor", "lceil", "rceil", "hbar", "ell", "Re", "Im", "aleph",
-            "emptyset", "ldots", "cdots", "vdots", "wedge", "vee", "neg",
-            "uparrow", "downarrow", "cong", "sim", "propto", "perp",
-            "parallel", "mid", "setminus", "star", "ast", "bullet", "dagger",
+            "alpha",
+            "beta",
+            "gamma",
+            "pi",
+            "theta",
+            "lambda",
+            "mu",
+            "phi",
+            "omega",
+            "Gamma",
+            "Delta",
+            "Omega",
+            "sum",
+            "prod",
+            "int",
+            "oint",
+            "lim",
+            "sin",
+            "cos",
+            "tan",
+            "log",
+            "ln",
+            "exp",
+            "min",
+            "max",
+            "leq",
+            "geq",
+            "neq",
+            "approx",
+            "equiv",
+            "in",
+            "subset",
+            "cup",
+            "cap",
+            "to",
+            "rightarrow",
+            "Rightarrow",
+            "mapsto",
+            "infty",
+            "partial",
+            "nabla",
+            "forall",
+            "exists",
+            "times",
+            "div",
+            "pm",
+            "cdot",
+            "circ",
+            "oplus",
+            "otimes",
+            "langle",
+            "rangle",
+            "lfloor",
+            "rfloor",
+            "lceil",
+            "rceil",
+            "hbar",
+            "ell",
+            "Re",
+            "Im",
+            "aleph",
+            "emptyset",
+            "ldots",
+            "cdots",
+            "vdots",
+            "wedge",
+            "vee",
+            "neg",
+            "uparrow",
+            "downarrow",
+            "cong",
+            "sim",
+            "propto",
+            "perp",
+            "parallel",
+            "mid",
+            "setminus",
+            "star",
+            "ast",
+            "bullet",
+            "dagger",
         ] {
             let n = parse(&format!("\\{cmd}"));
             assert_eq!(n.len(), 1, "\\{cmd} produced {} nodes", n.len());
             let resolved = matches!(
                 &n[0],
-                Node::Symbol { .. }
-                    | Node::BigOp { .. }
-                    | Node::OpName { .. }
-                    | Node::Space(_)
+                Node::Symbol { .. } | Node::BigOp { .. } | Node::OpName { .. } | Node::Space(_)
             );
             assert!(
                 resolved,
@@ -1066,7 +1264,9 @@ mod tests {
             // A constructor must produce a node and must NOT fall
             // through to literal `\name` text.
             let n = parse(&format!("\\{cmd}{{x}}{{y}}"));
-            let head = n.first().unwrap_or_else(|| panic!("\\{cmd} produced nothing"));
+            let head = n
+                .first()
+                .unwrap_or_else(|| panic!("\\{cmd} produced nothing"));
             assert!(
                 !matches!(head, Node::Text(t) if t.starts_with('\\')),
                 "\\{cmd} fell through to literal text"

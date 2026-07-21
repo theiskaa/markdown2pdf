@@ -211,14 +211,16 @@ fn definition_body_with_indented_code_block() {
     let entries = first_definition_list(&toks).expect("expected DefinitionList");
     let def = &entries[0].definitions[0];
     assert!(
-        def.iter().any(|t| matches!(t, Token::Code { block: true, .. })),
+        def.iter()
+            .any(|t| matches!(t, Token::Code { block: true, .. })),
         "expected a fenced Code block inside definition body, got {def:?}"
     );
 }
 
 #[test]
 fn definition_body_with_multiple_paragraphs() {
-    let toks = parse("Term\n:   First paragraph.\n\n    Second paragraph still part of definition.\n");
+    let toks =
+        parse("Term\n:   First paragraph.\n\n    Second paragraph still part of definition.\n");
     let entries = first_definition_list(&toks).expect("expected DefinitionList");
     let def = &entries[0].definitions[0];
     let text = Token::collect_all_text(def);

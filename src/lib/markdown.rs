@@ -142,15 +142,68 @@ const RAW_HTML_BLOCK_TAG_NAMES: &[&str] = &["script", "pre", "style", "textarea"
 ///      land in a follow-up commit (with its own opener-completeness
 ///      and paragraph-interrupt rules).
 const BLOCK_ELEMENT_TAG_NAMES: &[&str] = &[
-    "address", "article", "aside", "base", "basefont", "blockquote",
-    "body", "caption", "center", "col", "colgroup", "dd", "details",
-    "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption",
-    "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3",
-    "h4", "h5", "h6", "head", "header", "hr", "html", "iframe",
-    "legend", "li", "link", "main", "menu", "menuitem", "nav",
-    "noframes", "ol", "optgroup", "option", "p", "param", "search",
-    "section", "summary", "table", "tbody", "td", "tfoot", "th",
-    "thead", "title", "tr", "track", "ul",
+    "address",
+    "article",
+    "aside",
+    "base",
+    "basefont",
+    "blockquote",
+    "body",
+    "caption",
+    "center",
+    "col",
+    "colgroup",
+    "dd",
+    "details",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "frame",
+    "frameset",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "header",
+    "hr",
+    "html",
+    "iframe",
+    "legend",
+    "li",
+    "link",
+    "main",
+    "menu",
+    "menuitem",
+    "nav",
+    "noframes",
+    "ol",
+    "optgroup",
+    "option",
+    "p",
+    "param",
+    "search",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "title",
+    "tr",
+    "track",
+    "ul",
 ];
 
 /// Map a raw admonition label (the word right after `!!!` or inside
@@ -344,10 +397,7 @@ pub enum Token {
     /// GFM footnote definition: `[^label]: definition` at the start
     /// of a paragraph. The renderer collects all definitions and
     /// emits a "Footnotes" section at the end of the document.
-    FootnoteDefinition {
-        label: String,
-        content: Vec<Token>,
-    },
+    FootnoteDefinition { label: String, content: Vec<Token> },
     /// Pandoc-style inline footnote: `text^[note body]`. The body is
     /// already inline-parsed. `label` is a lexer-assigned internal id,
     /// globally unique within the document and not author-reachable
@@ -355,19 +405,14 @@ pub enum Token {
     /// this as a `FootnoteReference` + `FootnoteDefinition` pair under
     /// that label, so numbering, the back-link, and the tail
     /// "Footnotes" section all reuse the existing GFM machinery.
-    InlineFootnote {
-        label: String,
-        content: Vec<Token>,
-    },
+    InlineFootnote { label: String, content: Vec<Token> },
     /// PHP Markdown Extra-style definition list. A term line is
     /// followed by one or more lines beginning with `:` introducing a
     /// definition. Consecutive entries (term/definition groups) are
     /// gathered into the same list when separated by at most one
     /// blank line. The renderer emits each entry as a bold term plus
     /// an indented definition body.
-    DefinitionList {
-        entries: Vec<DefinitionListEntry>,
-    },
+    DefinitionList { entries: Vec<DefinitionListEntry> },
     /// Plain text content
     Text(String),
     /// Internal lexer state — a run of `*` or `_` delimiter characters
@@ -377,10 +422,7 @@ pub enum Token {
     /// only because Rust requires public enum variants to be public.
     /// Hidden from rustdoc.
     #[doc(hidden)]
-    DelimRun {
-        ch: char,
-        count: usize,
-    },
+    DelimRun { ch: char, count: usize },
     /// Table with header, alignment info, and rows
     Table {
         headers: Vec<TableCell<Token>>,
@@ -538,8 +580,7 @@ impl Token {
                 // emit the raw label so the text isn't lost.
                 result.push_str(label);
             }
-            Token::FootnoteDefinition { content, .. }
-            | Token::InlineFootnote { content, .. } => {
+            Token::FootnoteDefinition { content, .. } | Token::InlineFootnote { content, .. } => {
                 for token in content {
                     token.collect_text_recursive(result);
                 }
@@ -757,11 +798,12 @@ fn decode_escapes_and_entities(s: &str) -> String {
             continue;
         }
         if c == '&'
-            && let Some((decoded, consumed)) = try_decode_entity(&chars, i) {
-                out.push_str(&decoded);
-                i += consumed;
-                continue;
-            }
+            && let Some((decoded, consumed)) = try_decode_entity(&chars, i)
+        {
+            out.push_str(&decoded);
+            i += consumed;
+            continue;
+        }
         out.push(c);
         i += 1;
     }
@@ -1115,9 +1157,7 @@ fn is_paragraph_breaking_line_chars(chars: &[char], start: usize, end: usize) ->
         }
         if (1..=6).contains(&h) {
             let after = chars.get(p + h);
-            if after.is_none()
-                || matches!(after, Some(' ') | Some('\t') | Some('\n'))
-            {
+            if after.is_none() || matches!(after, Some(' ') | Some('\t') | Some('\n')) {
                 return true;
             }
         }
@@ -1422,11 +1462,7 @@ fn resolve_emphasis_chunk(tokens: &mut Vec<Token>) {
     let mut openers_bottom = [[[0usize; 2]; 3]; 2];
 
     fn ch_idx(c: char) -> usize {
-        if c == '*' {
-            0
-        } else {
-            1
-        }
+        if c == '*' { 0 } else { 1 }
     }
 
     let mut ci = 0;
@@ -1438,8 +1474,7 @@ fn resolve_emphasis_chunk(tokens: &mut Vec<Token>) {
         let c_ch = delims[ci].ch;
         let c_can_open = delims[ci].can_open;
         let c_count = delims[ci].count;
-        let bottom = openers_bottom[ch_idx(c_ch)][c_count % 3]
-            [if c_can_open { 1 } else { 0 }];
+        let bottom = openers_bottom[ch_idx(c_ch)][c_count % 3][if c_can_open { 1 } else { 0 }];
         let mut oi_found: Option<usize> = None;
         let mut oi = ci;
         while oi > bottom {
@@ -1466,7 +1501,11 @@ fn resolve_emphasis_chunk(tokens: &mut Vec<Token>) {
         if let Some(oi) = oi_found {
             let opener = delims[oi].clone();
             let closer = delims[ci].clone();
-            let n = if opener.count >= 2 && closer.count >= 2 { 2 } else { 1 };
+            let n = if opener.count >= 2 && closer.count >= 2 {
+                2
+            } else {
+                1
+            };
             // Deactivate delims between opener and closer (they're inside
             // the wrapped Emphasis content; an inner pair may still match
             // via the recursive call below in wrap_emphasis_pair).
@@ -1484,9 +1523,8 @@ fn resolve_emphasis_chunk(tokens: &mut Vec<Token>) {
             // Update delim positions after the splice. The splice replaced
             // tokens[opener.pos..closer.pos+1] with 1-3 new tokens.
             let old_len = closer.pos - opener.pos + 1;
-            let new_len = 1
-                + (if opener.count > n { 1 } else { 0 })
-                + (if closer.count > n { 1 } else { 0 });
+            let new_len =
+                1 + (if opener.count > n { 1 } else { 0 }) + (if closer.count > n { 1 } else { 0 });
             let shift: i64 = new_len as i64 - old_len as i64;
             for d in delims.iter_mut().skip(ci + 1) {
                 d.pos = ((d.pos as i64) + shift) as usize;
@@ -1495,9 +1533,7 @@ fn resolve_emphasis_chunk(tokens: &mut Vec<Token>) {
             // opener delim is at opener.pos; else removed.
             let new_opener_pos = opener.pos;
             // The closer's token position: opener.pos + (opener has remainder ? 1 : 0) + 1 (for Emphasis).
-            let new_closer_pos = opener.pos
-                + (if opener.count > n { 1 } else { 0 })
-                + 1;
+            let new_closer_pos = opener.pos + (if opener.count > n { 1 } else { 0 }) + 1;
             delims[oi].count -= n;
             delims[oi].pos = new_opener_pos;
             if delims[oi].count == 0 {
@@ -1512,8 +1548,7 @@ fn resolve_emphasis_chunk(tokens: &mut Vec<Token>) {
             // Otherwise: closer has chars left — recheck it as closer next
             // iter (don't advance ci).
         } else {
-            openers_bottom[ch_idx(c_ch)][c_count % 3]
-                [if c_can_open { 1 } else { 0 }] = ci;
+            openers_bottom[ch_idx(c_ch)][c_count % 3][if c_can_open { 1 } else { 0 }] = ci;
             if !c_can_open {
                 active[ci] = false;
             }
@@ -1534,9 +1569,17 @@ fn resolve_emphasis_chunk(tokens: &mut Vec<Token>) {
 fn find_em_delims(tokens: &[Token]) -> Vec<EmDelim> {
     let mut out = Vec::new();
     for (i, tok) in tokens.iter().enumerate() {
-        let Token::DelimRun { ch, count } = tok else { continue };
+        let Token::DelimRun { ch, count } = tok else {
+            continue;
+        };
         let (can_open, can_close) = compute_em_flanking(tokens, i, *ch);
-        out.push(EmDelim { pos: i, ch: *ch, count: *count, can_open, can_close });
+        out.push(EmDelim {
+            pos: i,
+            ch: *ch,
+            count: *count,
+            can_open,
+            can_close,
+        });
     }
     out
 }
@@ -1549,10 +1592,8 @@ fn compute_em_flanking(tokens: &[Token], idx: usize, ch: char) -> (bool, bool) {
     if ch == '*' {
         (lf, rf)
     } else {
-        let can_open =
-            lf && (!rf || matches!(before, Some(c) if is_md_punctuation(c)));
-        let can_close =
-            rf && (!lf || matches!(after, Some(c) if is_md_punctuation(c)));
+        let can_open = lf && (!rf || matches!(before, Some(c) if is_md_punctuation(c)));
+        let can_close = rf && (!lf || matches!(after, Some(c) if is_md_punctuation(c)));
         (can_open, can_close)
     }
 }
@@ -1685,14 +1726,23 @@ fn wrap_emphasis_pair(
     // any leftover `DelimRun` becomes either `Emphasis` or `Text`, never
     // escaping into a final `Emphasis.content` slot.
     resolve_emphasis_chunk(&mut inside);
-    let emph = Token::Emphasis { level: n, content: inside };
+    let emph = Token::Emphasis {
+        level: n,
+        content: inside,
+    };
     let mut replacement = Vec::new();
     if opener_remaining > 0 {
-        replacement.push(Token::DelimRun { ch: opener_ch, count: opener_remaining });
+        replacement.push(Token::DelimRun {
+            ch: opener_ch,
+            count: opener_remaining,
+        });
     }
     replacement.push(emph);
     if closer_remaining > 0 {
-        replacement.push(Token::DelimRun { ch: closer_ch, count: closer_remaining });
+        replacement.push(Token::DelimRun {
+            ch: closer_ch,
+            count: closer_remaining,
+        });
     }
     tokens.splice(opener_pos..closer_pos + 1, replacement);
 }
@@ -1764,11 +1814,10 @@ pub(crate) fn slugify(text: &str) -> String {
         if ch.is_ascii_alphanumeric() {
             out.push(ch.to_ascii_lowercase());
             last_was_dash = false;
-        } else if (ch.is_whitespace() || ch == '-' || ch == '_')
-            && !last_was_dash {
-                out.push('-');
-                last_was_dash = true;
-            }
+        } else if (ch.is_whitespace() || ch == '-' || ch == '_') && !last_was_dash {
+            out.push('-');
+            last_was_dash = true;
+        }
     }
     while out.ends_with('-') {
         out.pop();
@@ -2029,9 +2078,7 @@ impl Lexer {
                     while peel < chars.len() && chars[peel] == '>' {
                         any_marker = true;
                         peel += 1;
-                        if peel < chars.len()
-                            && (chars[peel] == ' ' || chars[peel] == '\t')
-                        {
+                        if peel < chars.len() && (chars[peel] == ' ' || chars[peel] == '\t') {
                             peel += 1;
                         }
                     }
@@ -2043,8 +2090,7 @@ impl Lexer {
                             try_parse_definition(&chars, peel)
                         {
                             let single_line = def_end <= line_end
-                                || (def_end == line_end + 1
-                                    && line_end < chars.len());
+                                || (def_end == line_end + 1 && line_end < chars.len());
                             if single_line {
                                 definitions
                                     .entry(normalize_label(&label))
@@ -2071,8 +2117,7 @@ impl Lexer {
                 }
             }
             if chars[i] == '\n' {
-                may_start_def =
-                    is_paragraph_breaking_line_chars(&chars, line_start, i);
+                may_start_def = is_paragraph_breaking_line_chars(&chars, line_start, i);
             }
             kept.push(chars[i]);
             i += 1;
@@ -2224,11 +2269,10 @@ impl Lexer {
                                 continue;
                             }
                         }
-                        '0'..='9'
-                            if self.check_ordered_list_marker().is_some() => {
-                                content.push(self.parse_list_item(true, ctx)?);
-                                continue;
-                            }
+                        '0'..='9' if self.check_ordered_list_marker().is_some() => {
+                            content.push(self.parse_list_item(true, ctx)?);
+                            continue;
+                        }
                         _ => {}
                     }
                 }
@@ -2316,20 +2360,22 @@ impl Lexer {
         // HRs, not a setext-H2 with `***` content.
         if is_block_start
             && matches!(ctx, ParseContext::Root | ParseContext::BlockQuote)
-            && !(matches!(current_char, '*' | '_' | '-')
-                && self.is_thematic_break_line())
-            && let Some(level) = self.peek_setext_level() {
-                return Ok(Some(self.consume_setext_heading(level)?));
-            }
+            && !(matches!(current_char, '*' | '_' | '-') && self.is_thematic_break_line())
+            && let Some(level) = self.peek_setext_level()
+        {
+            return Ok(Some(self.consume_setext_heading(level)?));
+        }
 
         // PHP Markdown Extra-style definition lists: a non-marker term
         // line followed immediately by a `: definition` line. Detection
         // must run before the regular `parse_text` fallthrough so the
         // term doesn't get glued into an adjacent paragraph.
-        if is_block_start && matches!(ctx, ParseContext::Root | ParseContext::BlockQuote)
-            && let Some(tok) = self.try_parse_definition_list()? {
-                return Ok(Some(tok));
-            }
+        if is_block_start
+            && matches!(ctx, ParseContext::Root | ParseContext::BlockQuote)
+            && let Some(tok) = self.try_parse_definition_list()?
+        {
+            return Ok(Some(tok));
+        }
 
         let token = match current_char {
             '#' if is_block_start && allow_block_tokens(ctx) && self.is_atx_heading_start() => {
@@ -2347,9 +2393,7 @@ impl Lexer {
                 self.parse_list_item(false, ctx)?
             }
             '*' => self.parse_emphasis()?,
-            '_' if !self.is_intra_word_underscore_run(self.position) => {
-                self.parse_emphasis()?
-            }
+            '_' if !self.is_intra_word_underscore_run(self.position) => self.parse_emphasis()?,
             '_' => self.parse_text(ctx)?,
             '`' => self.parse_code()?,
             '~' if is_block_start
@@ -2549,7 +2593,10 @@ impl Lexer {
             count += 1;
             self.advance();
         }
-        Ok(Token::DelimRun { ch: delimiter, count })
+        Ok(Token::DelimRun {
+            ch: delimiter,
+            count,
+        })
     }
 
     /// Parses code blocks, handling both inline code and fenced code blocks
@@ -2590,9 +2637,8 @@ impl Lexer {
         // remaining metadata discarded (we have no consumer for it).
         self.skip_whitespace();
         let info_string = self.read_until_newline();
-        let language = decode_escapes_and_entities(
-            info_string.split_whitespace().next().unwrap_or(""),
-        );
+        let language =
+            decode_escapes_and_entities(info_string.split_whitespace().next().unwrap_or(""));
         // Consume the opener line's newline.
         if self.position < self.input.len() && self.current_char() == '\n' {
             self.advance();
@@ -2607,9 +2653,7 @@ impl Lexer {
             // Measure leading whitespace cols on this line.
             let mut col = 0usize;
             let mut q = line_start;
-            while q < self.input.len()
-                && (self.input[q] == ' ' || self.input[q] == '\t')
-                && col < 4
+            while q < self.input.len() && (self.input[q] == ' ' || self.input[q] == '\t') && col < 4
             {
                 if self.input[q] == ' ' {
                     col += 1;
@@ -2908,9 +2952,7 @@ impl Lexer {
             if c == '$' && !is_backslash_escaped(&self.input, i) {
                 let before = self.input[i - 1];
                 let after = self.input.get(i + 1).copied();
-                if !before.is_whitespace()
-                    && !matches!(after, Some(d) if d.is_ascii_digit())
-                {
+                if !before.is_whitespace() && !matches!(after, Some(d) if d.is_ascii_digit()) {
                     return Some((true, content_start, i, i + 1));
                 }
                 // A `$` that fails the closer test (`$5 and $6`)
@@ -2928,8 +2970,7 @@ impl Lexer {
     fn parse_math(&mut self) -> Token {
         match self.scan_math() {
             Some((inline, content_start, content_end, after_close)) => {
-                let content: String =
-                    self.input[content_start..content_end].iter().collect();
+                let content: String = self.input[content_start..content_end].iter().collect();
                 self.position = after_close;
                 // Display math is centered as a block, so surrounding
                 // whitespace/newlines are noise; inline content is
@@ -2980,9 +3021,8 @@ impl Lexer {
         // the language is still the first whitespace-delimited word.
         self.skip_whitespace();
         let info_string = self.read_until_newline();
-        let language = decode_escapes_and_entities(
-            info_string.split_whitespace().next().unwrap_or(""),
-        );
+        let language =
+            decode_escapes_and_entities(info_string.split_whitespace().next().unwrap_or(""));
         if self.position < self.input.len() && self.current_char() == '\n' {
             self.advance();
         }
@@ -2996,9 +3036,7 @@ impl Lexer {
             // Measure leading whitespace cols.
             let mut col = 0usize;
             let mut q = line_start;
-            while q < self.input.len()
-                && (self.input[q] == ' ' || self.input[q] == '\t')
-                && col < 4
+            while q < self.input.len() && (self.input[q] == ' ' || self.input[q] == '\t') && col < 4
             {
                 if self.input[q] == ' ' {
                     col += 1;
@@ -3107,8 +3145,7 @@ impl Lexer {
                 peek += 1;
                 leading += 1;
             }
-            let is_marked =
-                peek < self.input.len() && self.input[peek] == '>';
+            let is_marked = peek < self.input.len() && self.input[peek] == '>';
 
             if is_marked {
                 self.position = peek;
@@ -3193,16 +3230,13 @@ impl Lexer {
                     if l.trim().is_empty() {
                         return false;
                     }
-                    let leading: usize =
-                        l.chars().take_while(|&c| c == ' ').count();
+                    let leading: usize = l.chars().take_while(|&c| c == ' ').count();
                     if leading >= 4 {
                         return false;
                     }
                     let chars: Vec<char> = l.chars().collect();
                     let p = leading;
-                    if p < chars.len()
-                        && (chars[p] == '`' || chars[p] == '~')
-                    {
+                    if p < chars.len() && (chars[p] == '`' || chars[p] == '~') {
                         let marker = chars[p];
                         let mut cnt = 0;
                         while p + cnt < chars.len() && chars[p + cnt] == marker {
@@ -3238,9 +3272,7 @@ impl Lexer {
         // inline content after a space) is a callout, not a quote.
         // Unknown kinds still convert — the renderer's `generic` box
         // gives the author visible feedback that the marker landed.
-        if let Some((kind, raw_label, stripped_body)) =
-            extract_gfm_alert_marker(&body_lines)
-        {
+        if let Some((kind, raw_label, stripped_body)) = extract_gfm_alert_marker(&body_lines) {
             let body_text = stripped_body.join("\n");
             let body = if body_text.trim().is_empty() {
                 Vec::new()
@@ -3348,8 +3380,7 @@ impl Lexer {
                 self.position = saved;
                 return Ok(None);
             }
-            let raw_title: String =
-                self.input[title_start..self.position].iter().collect();
+            let raw_title: String = self.input[title_start..self.position].iter().collect();
             self.advance(); // closing `"`
             title_text = Some(raw_title);
         }
@@ -3413,11 +3444,7 @@ impl Lexer {
 
         // Trim trailing blank lines so a stray empty paragraph isn't
         // appended at the end of the body.
-        while body_lines
-            .last()
-            .map(|l| l.is_empty())
-            .unwrap_or(false)
-        {
+        while body_lines.last().map(|l| l.is_empty()).unwrap_or(false) {
             body_lines.pop();
         }
 
@@ -3509,13 +3536,10 @@ impl Lexer {
     fn parse_bracket_dispatch(&mut self, is_block_start: bool) -> Result<Token, LexerError> {
         // GFM footnote markers: `[^...]` discriminator on second char.
         // Block-level definition (`[^id]: text`) only at line start.
-        if self.position + 1 < self.input.len()
-            && self.input[self.position + 1] == '^'
-        {
-            if is_block_start
-                && let Some(tok) = self.try_parse_footnote_definition()? {
-                    return Ok(tok);
-                }
+        if self.position + 1 < self.input.len() && self.input[self.position + 1] == '^' {
+            if is_block_start && let Some(tok) = self.try_parse_footnote_definition()? {
+                return Ok(tok);
+            }
             if let Some(tok) = self.try_parse_footnote_reference()? {
                 return Ok(tok);
             }
@@ -3542,9 +3566,7 @@ impl Lexer {
     /// emitted verbatim (no nested inline parsing), matching Obsidian.
     fn try_parse_wikilink(&mut self) -> Option<Token> {
         // Caller guarantees `self.input[self.position] == '['`.
-        if self.position + 1 >= self.input.len()
-            || self.input[self.position + 1] != '['
-        {
+        if self.position + 1 >= self.input.len() || self.input[self.position + 1] != '[' {
             return None;
         }
         let body_start = self.position + 2;
@@ -4023,9 +4045,7 @@ impl Lexer {
             // path. Instead fall through to the queue path so every
             // `Token::Newline` survives as a real newline token and
             // lowering turns it into a space like any soft break.
-            let only_flat_text = content
-                .iter()
-                .all(|t| matches!(t, Token::Text(_)));
+            let only_flat_text = content.iter().all(|t| matches!(t, Token::Text(_)));
             if only_flat_text {
                 let mut s = String::from("[");
                 for t in &content {
@@ -4047,10 +4067,7 @@ impl Lexer {
         // pending queue and advance past the `]`. Any trailing `(url)`
         // or `[label]` becomes literal text via the dispatcher (because
         // the outer wasn't a link, we don't consume them as link suffix).
-        if content
-            .iter()
-            .any(|t| matches!(t, Token::Link { .. }))
-        {
+        if content.iter().any(|t| matches!(t, Token::Link { .. })) {
             self.advance(); // skip ']'
             for t in content {
                 self.pending.push_back(t);
@@ -4069,7 +4086,11 @@ impl Lexer {
                 self.advance(); // skip ')'
                 let mut content = content;
                 resolve_emphasis(&mut content);
-                return Ok(Token::Link { content, url, title });
+                return Ok(Token::Link {
+                    content,
+                    url,
+                    title,
+                });
             }
             // The `(…)` form didn't close cleanly — rewind to just before
             // `(` and fall through to the reference / shortcut forms below.
@@ -4091,8 +4112,8 @@ impl Lexer {
             let second_bracket = self.position;
             self.advance(); // skip [
             let label_str = self.read_until_char_with_escapes(']');
-            let saw_closing_bracket = self.position < self.input.len()
-                && self.current_char() == ']';
+            let saw_closing_bracket =
+                self.position < self.input.len() && self.current_char() == ']';
             if saw_closing_bracket {
                 self.advance();
             }
@@ -4104,7 +4125,11 @@ impl Lexer {
             if let Some((url, title)) = self.definitions.get(&key).cloned() {
                 let mut content = content;
                 resolve_emphasis(&mut content);
-                return Ok(Token::Link { content, url, title });
+                return Ok(Token::Link {
+                    content,
+                    url,
+                    title,
+                });
             }
             // Lookup failed. For COLLAPSED `[text][]` the empty label is
             // effectively the text and the shortcut form is identical, so
@@ -4131,10 +4156,7 @@ impl Lexer {
                     "[]".to_string()
                 };
                 if only_text {
-                    return Ok(Token::Text(format!(
-                        "[{}]{}",
-                        text_str, bracket_label
-                    )));
+                    return Ok(Token::Text(format!("[{}]{}", text_str, bracket_label)));
                 }
                 self.pending_hard_break = false;
                 self.position = bracket_pos + 1;
@@ -4155,7 +4177,11 @@ impl Lexer {
         if let Some((url, title)) = self.definitions.get(&key).cloned() {
             let mut content = content;
             resolve_emphasis(&mut content);
-            return Ok(Token::Link { content, url, title });
+            return Ok(Token::Link {
+                content,
+                url,
+                title,
+            });
         }
 
         // Unresolved — emit `[text]` literally so the brackets aren't lost.
@@ -4194,15 +4220,14 @@ impl Lexer {
                 }
             }
             if c == '&'
-                && let Some((decoded, consumed)) =
-                    try_decode_entity(&self.input, self.position)
-                {
-                    url.push_str(&decoded);
-                    for _ in 0..consumed {
-                        self.advance();
-                    }
-                    continue;
+                && let Some((decoded, consumed)) = try_decode_entity(&self.input, self.position)
+            {
+                url.push_str(&decoded);
+                for _ in 0..consumed {
+                    self.advance();
                 }
+                continue;
+            }
             if c == '\n' {
                 break;
             }
@@ -4216,9 +4241,7 @@ impl Lexer {
             } else if (c == ' ' || c == '\t') && depth == 0 {
                 // Whitespace at depth 0 may introduce a title — peek ahead.
                 let mut p = self.position;
-                while p < self.input.len()
-                    && (self.input[p] == ' ' || self.input[p] == '\t')
-                {
+                while p < self.input.len() && (self.input[p] == ' ' || self.input[p] == '\t') {
                     p += 1;
                 }
                 if p < self.input.len() {
@@ -4266,15 +4289,14 @@ impl Lexer {
                     }
                 }
                 if c == '&'
-                    && let Some((decoded, consumed)) =
-                        try_decode_entity(&self.input, self.position)
-                    {
-                        s.push_str(&decoded);
-                        for _ in 0..consumed {
-                            self.advance();
-                        }
-                        continue;
+                    && let Some((decoded, consumed)) = try_decode_entity(&self.input, self.position)
+                {
+                    s.push_str(&decoded);
+                    for _ in 0..consumed {
+                        self.advance();
                     }
+                    continue;
+                }
                 if c == '>' {
                     self.advance();
                     ok = true;
@@ -4372,15 +4394,14 @@ impl Lexer {
                 }
             }
             if ch == '&'
-                && let Some((decoded, consumed)) =
-                    try_decode_entity(&self.input, self.position)
-                {
-                    out.push_str(&decoded);
-                    for _ in 0..consumed {
-                        self.advance();
-                    }
-                    continue;
+                && let Some((decoded, consumed)) = try_decode_entity(&self.input, self.position)
+            {
+                out.push_str(&decoded);
+                for _ in 0..consumed {
+                    self.advance();
                 }
+                continue;
+            }
             out.push(ch);
             self.advance();
         }
@@ -4414,9 +4435,7 @@ impl Lexer {
             let mut p = self.position;
             while p < self.input.len() {
                 match self.input[p] {
-                    '\\' if p + 1 < self.input.len()
-                        && is_ascii_punctuation(self.input[p + 1]) =>
-                    {
+                    '\\' if p + 1 < self.input.len() && is_ascii_punctuation(self.input[p + 1]) => {
                         p += 2;
                         continue;
                     }
@@ -4459,9 +4478,7 @@ impl Lexer {
             return Ok(Token::Image { alt, url, title });
         }
 
-        let raw_alt_text: String = self.input[alt_text_start..alt_text_end]
-            .iter()
-            .collect();
+        let raw_alt_text: String = self.input[alt_text_start..alt_text_end].iter().collect();
 
         // Reference / collapsed: ![alt][label] or ![alt][]
         if self.position < self.input.len() && self.current_char() == '[' {
@@ -4534,9 +4551,7 @@ impl Lexer {
         }
 
         // Tag name: letters/digits/-.
-        while p < chars.len()
-            && (chars[p].is_ascii_alphanumeric() || chars[p] == '-')
-        {
+        while p < chars.len() && (chars[p].is_ascii_alphanumeric() || chars[p] == '-') {
             p += 1;
         }
 
@@ -4555,9 +4570,7 @@ impl Lexer {
         loop {
             // Skip whitespace between attributes.
             let ws_start = p;
-            while p < chars.len()
-                && (chars[p] == ' ' || chars[p] == '\t' || chars[p] == '\n')
-            {
+            while p < chars.len() && (chars[p] == ' ' || chars[p] == '\t' || chars[p] == '\n') {
                 p += 1;
             }
             if p >= chars.len() {
@@ -4705,10 +4718,7 @@ impl Lexer {
         // Declaration: `<!LETTER…>`. Distinguished from CDATA by the
         // third character (`[` vs ASCII letter) and from comments by
         // the third character (`-` for comments, letter here).
-        if pos + 2 < chars.len()
-            && chars[pos + 1] == '!'
-            && chars[pos + 2].is_ascii_alphabetic()
-        {
+        if pos + 2 < chars.len() && chars[pos + 1] == '!' && chars[pos + 2].is_ascii_alphabetic() {
             let mut p = pos + 3;
             while p < chars.len() {
                 if chars[p] == '>' {
@@ -4752,8 +4762,7 @@ impl Lexer {
         let has_scheme = {
             let mut chars = body.chars();
             let first = chars.next();
-            matches!(first, Some(c) if c.is_ascii_alphabetic())
-                && body.contains(':')
+            matches!(first, Some(c) if c.is_ascii_alphabetic()) && body.contains(':')
         };
         if has_scheme {
             return true;
@@ -4800,23 +4809,22 @@ impl Lexer {
         // URL autolink: scheme = ALPHA + 1+ of [ALPHA|DIGIT|+|-|.] then `:`.
         let mut chars = body.chars();
         let first = chars.next();
-        let is_url_scheme = matches!(first, Some(c) if c.is_ascii_alphabetic())
-            && {
-                let mut found_colon = false;
-                let mut scheme_len = 1;
-                for c in chars {
-                    if c == ':' {
-                        found_colon = true;
-                        break;
-                    }
-                    if c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.' {
-                        scheme_len += 1;
-                    } else {
-                        break;
-                    }
+        let is_url_scheme = matches!(first, Some(c) if c.is_ascii_alphabetic()) && {
+            let mut found_colon = false;
+            let mut scheme_len = 1;
+            for c in chars {
+                if c == ':' {
+                    found_colon = true;
+                    break;
                 }
-                found_colon && scheme_len >= 2
-            };
+                if c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.' {
+                    scheme_len += 1;
+                } else {
+                    break;
+                }
+            }
+            found_colon && scheme_len >= 2
+        };
 
         let is_email = !is_url_scheme && body.contains('@') && {
             let mut parts = body.splitn(2, '@');
@@ -4831,9 +4839,25 @@ impl Lexer {
                     c.is_ascii_alphanumeric()
                         || matches!(
                             c,
-                            '.' | '!' | '#' | '$' | '%' | '&' | '\'' | '*'
-                            | '+' | '/' | '=' | '?' | '^' | '_' | '`' | '{'
-                            | '|' | '}' | '~' | '-'
+                            '.' | '!'
+                                | '#'
+                                | '$'
+                                | '%'
+                                | '&'
+                                | '\''
+                                | '*'
+                                | '+'
+                                | '/'
+                                | '='
+                                | '?'
+                                | '^'
+                                | '_'
+                                | '`'
+                                | '{'
+                                | '|'
+                                | '}'
+                                | '~'
+                                | '-'
                         )
                 });
             let domain_ok = !domain.is_empty()
@@ -4907,16 +4931,15 @@ impl Lexer {
 
             // HTML entity / numeric character references.
             if ch == '&'
-                && let Some((decoded, consumed)) =
-                    try_decode_entity(&self.input, self.position)
-                {
-                    content.push_str(&decoded);
-                    for _ in 0..consumed {
-                        self.advance();
-                    }
-                    last_was_escape = false;
-                    continue;
+                && let Some((decoded, consumed)) = try_decode_entity(&self.input, self.position)
+            {
+                content.push_str(&decoded);
+                for _ in 0..consumed {
+                    self.advance();
                 }
+                last_was_escape = false;
+                continue;
+            }
 
             if ch == '\n' || self.is_start_of_special_token(ctx) {
                 break;
@@ -4932,10 +4955,7 @@ impl Lexer {
         // (which is a single-line construct per spec). A hard break only
         // forms when actual content follows on the next line — at EOF or
         // before a blank line the trailing `\` is just literal text.
-        if self.position < self.input.len()
-            && self.current_char() == '\n'
-            && !self.in_heading
-        {
+        if self.position < self.input.len() && self.current_char() == '\n' && !self.in_heading {
             let has_follow = self.has_content_after_newline(self.position);
             if content.ends_with("  ") && has_follow {
                 while content.ends_with(' ') {
@@ -4943,10 +4963,7 @@ impl Lexer {
                 }
                 self.advance();
                 self.pending_hard_break = true;
-            } else if !last_was_escape
-                && content.ends_with('\\')
-                && has_follow
-            {
+            } else if !last_was_escape && content.ends_with('\\') && has_follow {
                 content.pop();
                 self.advance();
                 self.pending_hard_break = true;
@@ -5088,9 +5105,7 @@ impl Lexer {
         // closer "need not match the start tag"). If no closer ever
         // appears, the block runs to EOF. Body is verbatim — no
         // markdown parsing happens inside.
-        if self.input[self.position] == '<'
-            && self.is_raw_html_block_opener_at(self.position + 1)
-        {
+        if self.input[self.position] == '<' && self.is_raw_html_block_opener_at(self.position + 1) {
             let end = self.scan_to_raw_html_block_close(self.position);
             let content: String = self.input[block_start..end].iter().collect();
             self.position = end;
@@ -5169,13 +5184,9 @@ impl Lexer {
         // start. Body runs to the next blank line or EOF; content is
         // verbatim. This kind CAN interrupt an open paragraph (no
         // previous_line_is_blank_or_bof check).
-        if self.input[self.position] == '<'
-            && self.is_block_element_opener_at(self.position)
-        {
+        if self.input[self.position] == '<' && self.is_block_element_opener_at(self.position) {
             let mut after_opener_line = self.position;
-            while after_opener_line < self.input.len()
-                && self.input[after_opener_line] != '\n'
-            {
+            while after_opener_line < self.input.len() && self.input[after_opener_line] != '\n' {
                 after_opener_line += 1;
             }
             if after_opener_line < self.input.len() {
@@ -5198,47 +5209,49 @@ impl Lexer {
         // Precedence rule: this kind CANNOT interrupt an open paragraph
         // (per CommonMark spec). When the previous line is non-blank,
         // we fall through so the line stays part of the paragraph.
-        if self.input[self.position] == '<' && self.previous_line_is_blank_or_bof()
-            && let Some(tag_name) = self.extract_html_tag_name_at(self.position) {
-                let name_lower = tag_name.to_ascii_lowercase();
-                let is_block_element = BLOCK_ELEMENT_TAG_NAMES
-                    .iter()
-                    .any(|t| t.eq_ignore_ascii_case(&name_lower));
-                let is_raw_content = RAW_HTML_BLOCK_TAG_NAMES
-                    .iter()
-                    .any(|t| t.eq_ignore_ascii_case(&name_lower));
-                if !is_block_element && !is_raw_content
-                    && let Some(tag_len) = self.try_match_html_tag_len() {
-                        let after_tag = self.position + tag_len;
-                        // The complete tag must fit on a single line.
-                        // CommonMark's Type 7 start condition is "line
-                        // begins with a complete open tag ... followed
-                        // by ... the end of the line" — a tag whose
-                        // attributes wrap onto a continuation line
-                        // (e.g. `<a href="foo\nbar">`) doesn't qualify
-                        // and stays as inline HTML inside a paragraph.
-                        let tag_spans_newline = self.input[self.position..after_tag].contains(&'\n');
-                        if !tag_spans_newline
-                            && self.is_only_whitespace_to_eol(after_tag)
-                        {
-                            // Move past the opener line's `\n` so the
-                            // blank-line scan starts on the next line.
-                            let mut after_opener_line = after_tag;
-                            while after_opener_line < self.input.len()
-                                && self.input[after_opener_line] != '\n'
-                            {
-                                after_opener_line += 1;
-                            }
-                            if after_opener_line < self.input.len() {
-                                after_opener_line += 1;
-                            }
-                            let end = self.scan_to_blank_line(after_opener_line);
-                            let content: String = self.input[block_start..end].iter().collect();
-                            self.position = end;
-                            return Some(Token::HtmlBlock(content));
-                        }
+        if self.input[self.position] == '<'
+            && self.previous_line_is_blank_or_bof()
+            && let Some(tag_name) = self.extract_html_tag_name_at(self.position)
+        {
+            let name_lower = tag_name.to_ascii_lowercase();
+            let is_block_element = BLOCK_ELEMENT_TAG_NAMES
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case(&name_lower));
+            let is_raw_content = RAW_HTML_BLOCK_TAG_NAMES
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case(&name_lower));
+            if !is_block_element
+                && !is_raw_content
+                && let Some(tag_len) = self.try_match_html_tag_len()
+            {
+                let after_tag = self.position + tag_len;
+                // The complete tag must fit on a single line.
+                // CommonMark's Type 7 start condition is "line
+                // begins with a complete open tag ... followed
+                // by ... the end of the line" — a tag whose
+                // attributes wrap onto a continuation line
+                // (e.g. `<a href="foo\nbar">`) doesn't qualify
+                // and stays as inline HTML inside a paragraph.
+                let tag_spans_newline = self.input[self.position..after_tag].contains(&'\n');
+                if !tag_spans_newline && self.is_only_whitespace_to_eol(after_tag) {
+                    // Move past the opener line's `\n` so the
+                    // blank-line scan starts on the next line.
+                    let mut after_opener_line = after_tag;
+                    while after_opener_line < self.input.len()
+                        && self.input[after_opener_line] != '\n'
+                    {
+                        after_opener_line += 1;
                     }
+                    if after_opener_line < self.input.len() {
+                        after_opener_line += 1;
+                    }
+                    let end = self.scan_to_blank_line(after_opener_line);
+                    let content: String = self.input[block_start..end].iter().collect();
+                    self.position = end;
+                    return Some(Token::HtmlBlock(content));
+                }
             }
+        }
 
         None
     }
@@ -5357,8 +5370,7 @@ impl Lexer {
         }
         let name: String = self.input[name_start..p].iter().collect();
         let name_lower = name.to_ascii_lowercase();
-        if !BLOCK_ELEMENT_TAG_NAMES.contains(&name_lower.as_str())
-        {
+        if !BLOCK_ELEMENT_TAG_NAMES.contains(&name_lower.as_str()) {
             return false;
         }
         match self.input.get(p).copied() {
@@ -5594,10 +5606,7 @@ impl Lexer {
 
             // `^[` may open a Pandoc inline footnote; a lone `^`
             // (`2^3`, `a ^ b`) stays literal text.
-            '^' => {
-                self.position + 1 < self.input.len()
-                    && self.input[self.position + 1] == '['
-            }
+            '^' => self.position + 1 < self.input.len() && self.input[self.position + 1] == '[',
 
             '!' => {
                 if self.position + 1 < self.input.len() {
@@ -5819,9 +5828,10 @@ impl Lexer {
                 if q < self.input.len()
                     && (self.input[q] == '.' || self.input[q] == ')')
                     && let Some(&n) = self.input.get(q + 1)
-                        && (n == ' ' || n == '\t' || n == '\n') {
-                            return None;
-                        }
+                    && (n == ' ' || n == '\t' || n == '\n')
+                {
+                    return None;
+                }
             }
             if c == '#' {
                 // ATX heading line — not a paragraph for setext purposes.
@@ -5851,10 +5861,7 @@ impl Lexer {
             // into a setext heading. Without this guard a `$$ … =\n …$$`
             // body gets eaten as an H1 because the `=` line looks like a
             // setext underline.
-            if c == '$'
-                && scan_start + 1 < self.input.len()
-                && self.input[scan_start + 1] == '$'
-            {
+            if c == '$' && scan_start + 1 < self.input.len() && self.input[scan_start + 1] == '$' {
                 return None;
             }
         }
@@ -5905,9 +5912,7 @@ impl Lexer {
                 }
                 if count > 0 {
                     let mut r = q;
-                    while r < self.input.len()
-                        && (self.input[r] == ' ' || self.input[r] == '\t')
-                    {
+                    while r < self.input.len() && (self.input[r] == ' ' || self.input[r] == '\t') {
                         r += 1;
                     }
                     if r >= self.input.len() || self.input[r] == '\n' {
@@ -5925,9 +5930,10 @@ impl Lexer {
             // List marker
             if matches!(c, '-' | '+' | '*')
                 && let Some(&n) = self.input.get(p + 1)
-                    && (n == ' ' || n == '\t') {
-                        return None;
-                    }
+                && (n == ' ' || n == '\t')
+            {
+                return None;
+            }
             if c.is_ascii_digit() {
                 let mut q = p;
                 while q < self.input.len() && self.input[q].is_ascii_digit() {
@@ -5936,9 +5942,10 @@ impl Lexer {
                 if q < self.input.len()
                     && (self.input[q] == '.' || self.input[q] == ')')
                     && let Some(&n) = self.input.get(q + 1)
-                        && (n == ' ' || n == '\t') {
-                            return None;
-                        }
+                    && (n == ' ' || n == '\t')
+                {
+                    return None;
+                }
             }
             if c == '>' || c == '#' || c == '`' || c == '~' {
                 return None;
@@ -5967,8 +5974,7 @@ impl Lexer {
             while self.position < self.input.len() && self.current_char() != '\n' {
                 self.advance();
             }
-            let line: String =
-                self.input[line_start..self.position].iter().collect();
+            let line: String = self.input[line_start..self.position].iter().collect();
             // Detect underline: 0-3 leading spaces, then a run of
             // `underline_char`, then optional whitespace.
             let trimmed = line.trim_start_matches(' ');
@@ -5976,11 +5982,7 @@ impl Lexer {
             let is_underline = after_leading <= 3
                 && !trimmed.is_empty()
                 && trimmed.starts_with(underline_char)
-                && trimmed
-                    .chars()
-                    .take_while(|c| *c == underline_char)
-                    .count()
-                    > 0
+                && trimmed.chars().take_while(|c| *c == underline_char).count() > 0
                 && trimmed
                     .chars()
                     .skip_while(|c| *c == underline_char)
@@ -6029,9 +6031,7 @@ impl Lexer {
             return None;
         }
 
-        if pos < self.input.len()
-            && (self.input[pos] == '.' || self.input[pos] == ')')
-        {
+        if pos < self.input.len() && (self.input[pos] == '.' || self.input[pos] == ')') {
             // Marker terminator must be followed by space/tab/end-of-line,
             // OR (for an empty-item sibling within an open list) only end-
             // of-line — never directly by a paragraph word like `1.two`.
@@ -6143,9 +6143,7 @@ impl Lexer {
         // first-line indented-code content.
         let mut probe = self.position;
         let mut spaces_after = 0usize;
-        while probe < self.input.len()
-            && (self.input[probe] == ' ' || self.input[probe] == '\t')
-        {
+        while probe < self.input.len() && (self.input[probe] == ' ' || self.input[probe] == '\t') {
             if self.input[probe] == ' ' {
                 spaces_after += 1;
             } else {
@@ -6248,10 +6246,7 @@ impl Lexer {
         // occupy the entire content of a list item — handle them up front
         // before the inline-token loop.
         let mut first_line_handled = first_line_is_indented_code;
-        if !first_line_handled
-            && self.position < self.input.len()
-            && self.current_char() != '\n'
-        {
+        if !first_line_handled && self.position < self.input.len() && self.current_char() != '\n' {
             let ch = self.current_char();
             if self.is_thematic_break_line() {
                 self.consume_current_line();
@@ -6269,9 +6264,7 @@ impl Lexer {
                 let line_end = (self.position..self.input.len())
                     .find(|&i| self.input[i] == '\n')
                     .unwrap_or(self.input.len());
-                let first_line: String = self.input[self.position..line_end]
-                    .iter()
-                    .collect();
+                let first_line: String = self.input[self.position..line_end].iter().collect();
                 self.position = if line_end < self.input.len() {
                     line_end + 1
                 } else {
@@ -6297,9 +6290,7 @@ impl Lexer {
                 let line_end = (self.position..self.input.len())
                     .find(|&i| self.input[i] == '\n')
                     .unwrap_or(self.input.len());
-                let first_line: String = self.input[self.position..line_end]
-                    .iter()
-                    .collect();
+                let first_line: String = self.input[self.position..line_end].iter().collect();
                 self.position = if line_end < self.input.len() {
                     line_end + 1
                 } else {
@@ -6327,9 +6318,7 @@ impl Lexer {
                     }
                     let mut cols = 0usize;
                     let mut q = lz_start;
-                    while q < lz_end
-                        && (self.input[q] == ' ' || self.input[q] == '\t')
-                    {
+                    while q < lz_end && (self.input[q] == ' ' || self.input[q] == '\t') {
                         if self.input[q] == ' ' {
                             cols += 1;
                         } else {
@@ -6414,8 +6403,7 @@ impl Lexer {
                 {
                     tail += 1;
                 }
-                let ends_line =
-                    tail >= self.input.len() || self.input[tail] == '\n';
+                let ends_line = tail >= self.input.len() || self.input[tail] == '\n';
                 if run_len >= 1 && ends_line {
                     let level = if underline_char == '=' { 1 } else { 2 };
                     let inner = std::mem::take(&mut content);
@@ -6526,8 +6514,7 @@ impl Lexer {
                     // The sub-lexer's output will be a mix of block + inline
                     // tokens; the renderer's split_item_content separates
                     // inline run from nested blocks.
-                    let sub_tokens =
-                        sub.parse_with_context(ParseContext::Root)?;
+                    let sub_tokens = sub.parse_with_context(ParseContext::Root)?;
                     content.extend(sub_tokens);
                 }
                 continue;
@@ -6583,8 +6570,7 @@ impl Lexer {
                 // the item's boundary. Same path applies when the item is
                 // still empty: the first deep-indent line is the item's
                 // first block, not lazy continuation of nothing.
-                let item_has_content =
-                    content.iter().any(|t| !matches!(t, Token::Newline));
+                let item_has_content = content.iter().any(|t| !matches!(t, Token::Newline));
                 let starts_block = next_ch == '>'
                     || ((next_ch == '`' || next_ch == '~') && {
                         let mut p = after_indent;
@@ -6598,8 +6584,7 @@ impl Lexer {
                     let rest = self.collect_list_item_block_content(content_offset);
                     if !rest.is_empty() {
                         let mut sub = self.sub_lexer(rest);
-                        let sub_tokens =
-                            sub.parse_with_context(ParseContext::Root)?;
+                        let sub_tokens = sub.parse_with_context(ParseContext::Root)?;
                         content.extend(sub_tokens);
                     }
                     continue;
@@ -6822,11 +6807,12 @@ impl Lexer {
         let mut origin: Option<usize> = None;
         for cell in raw {
             if cell == ">"
-                && let Some(o) = origin {
-                    out[o].colspan += 1;
-                    out.push(TableCellPlan::covered());
-                    continue;
-                }
+                && let Some(o) = origin
+            {
+                out[o].colspan += 1;
+                out.push(TableCellPlan::covered());
+                continue;
+            }
             out.push(TableCellPlan::origin(cell));
             origin = Some(out.len() - 1);
         }
@@ -6965,9 +6951,7 @@ impl Lexer {
             let line_start = self.position;
             let mut col = 0usize;
             let mut q = line_start;
-            while q < self.input.len()
-                && (self.input[q] == ' ' || self.input[q] == '\t')
-            {
+            while q < self.input.len() && (self.input[q] == ' ' || self.input[q] == '\t') {
                 if self.input[q] == ' ' {
                     col += 1;
                 } else {
@@ -6988,9 +6972,7 @@ impl Lexer {
                 while scan < self.input.len() {
                     let mut c = 0usize;
                     let mut r = scan;
-                    while r < self.input.len()
-                        && (self.input[r] == ' ' || self.input[r] == '\t')
-                    {
+                    while r < self.input.len() && (self.input[r] == ' ' || self.input[r] == '\t') {
                         if self.input[r] == ' ' {
                             c += 1;
                         } else {
@@ -7169,8 +7151,7 @@ impl Lexer {
             // the previous source line was blank / start-of-document — in
             // either case there's no paragraph in progress to interrupt.
             if next_char == '\n' || next_char == '\r' {
-                return self.last_emitted_list_item
-                    || self.previous_line_is_blank_or_bof();
+                return self.last_emitted_list_item || self.previous_line_is_blank_or_bof();
             }
             false
         } else {

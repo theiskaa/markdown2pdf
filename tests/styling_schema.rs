@@ -56,22 +56,54 @@ fn sides_accepts_scalar_pair_quad_and_struct() {
     let scalar = r#"[paragraph]
         padding = 4.0"#;
     let s = load_config_strict(ConfigSource::Embedded(scalar), None).unwrap();
-    assert_eq!(s.paragraph.padding, Sides { top: 4.0, right: 4.0, bottom: 4.0, left: 4.0 });
+    assert_eq!(
+        s.paragraph.padding,
+        Sides {
+            top: 4.0,
+            right: 4.0,
+            bottom: 4.0,
+            left: 4.0
+        }
+    );
 
     let pair = r#"[paragraph]
         padding = [2.0, 6.0]"#;
     let s = load_config_strict(ConfigSource::Embedded(pair), None).unwrap();
-    assert_eq!(s.paragraph.padding, Sides { top: 2.0, right: 6.0, bottom: 2.0, left: 6.0 });
+    assert_eq!(
+        s.paragraph.padding,
+        Sides {
+            top: 2.0,
+            right: 6.0,
+            bottom: 2.0,
+            left: 6.0
+        }
+    );
 
     let quad = r#"[paragraph]
         padding = [1.0, 2.0, 3.0, 4.0]"#;
     let s = load_config_strict(ConfigSource::Embedded(quad), None).unwrap();
-    assert_eq!(s.paragraph.padding, Sides { top: 1.0, right: 2.0, bottom: 3.0, left: 4.0 });
+    assert_eq!(
+        s.paragraph.padding,
+        Sides {
+            top: 1.0,
+            right: 2.0,
+            bottom: 3.0,
+            left: 4.0
+        }
+    );
 
     let strukt = r#"[paragraph]
         padding = { top = 1.0, right = 2.0, bottom = 3.0, left = 4.0 }"#;
     let s = load_config_strict(ConfigSource::Embedded(strukt), None).unwrap();
-    assert_eq!(s.paragraph.padding, Sides { top: 1.0, right: 2.0, bottom: 3.0, left: 4.0 });
+    assert_eq!(
+        s.paragraph.padding,
+        Sides {
+            top: 1.0,
+            right: 2.0,
+            bottom: 3.0,
+            left: 4.0
+        }
+    );
 }
 
 #[test]
@@ -84,7 +116,13 @@ fn page_size_accepts_named_and_custom() {
     let custom = r#"[page]
         size = { width_mm = 100.0, height_mm = 150.0 }"#;
     let s = load_config_strict(ConfigSource::Embedded(custom), None).unwrap();
-    assert_eq!(s.page.size, PageSize::Custom { width_mm: 100.0, height_mm: 150.0 });
+    assert_eq!(
+        s.page.size,
+        PageSize::Custom {
+            width_mm: 100.0,
+            height_mm: 150.0
+        }
+    );
 }
 
 #[test]

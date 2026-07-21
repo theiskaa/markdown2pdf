@@ -94,10 +94,7 @@ fn repeated_reference_with_same_label() {
     // The lexer doesn't deduplicate — both occurrences are emitted.
     // Numbering / dedup happens at lower time.
     let tokens = parse("Body[^1] then again[^1].");
-    assert_eq!(
-        refs_of(&tokens),
-        vec!["1".to_string(), "1".to_string()]
-    );
+    assert_eq!(refs_of(&tokens), vec!["1".to_string(), "1".to_string()]);
 }
 
 #[test]
@@ -174,10 +171,12 @@ fn definition_body_inline_emphasis_is_parsed() {
     for t in &tokens {
         if let Token::FootnoteDefinition { label, content } = t {
             assert_eq!(label, "1");
-            let has_emphasis = content
-                .iter()
-                .any(|c| matches!(c, Token::Emphasis { .. }));
-            assert!(has_emphasis, "expected parsed Emphasis token in definition body, got {:?}", content);
+            let has_emphasis = content.iter().any(|c| matches!(c, Token::Emphasis { .. }));
+            assert!(
+                has_emphasis,
+                "expected parsed Emphasis token in definition body, got {:?}",
+                content
+            );
             return;
         }
     }
@@ -356,9 +355,7 @@ fn multiline_definition_continuation_runs_inline_lexer() {
     for t in &tokens {
         if let Token::FootnoteDefinition { label, content } = t {
             assert_eq!(label, "1");
-            let has_emphasis = content
-                .iter()
-                .any(|c| matches!(c, Token::Emphasis { .. }));
+            let has_emphasis = content.iter().any(|c| matches!(c, Token::Emphasis { .. }));
             let has_code = content
                 .iter()
                 .any(|c| matches!(c, Token::Code { block: false, .. }));

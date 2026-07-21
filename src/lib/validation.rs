@@ -107,19 +107,22 @@ pub fn validate_conversion(
     }
 
     if let Some(unicode_chars) = detect_unicode_chars(markdown)
-        && !has_unicode_font(font_config, style_fallback_fonts) {
-            warnings.push(ValidationWarning::unicode_without_font(unicode_chars));
-        }
+        && !has_unicode_font(font_config, style_fallback_fonts)
+    {
+        warnings.push(ValidationWarning::unicode_without_font(unicode_chars));
+    }
 
     if let Some(path) = output_path
         && let Some(parent) = Path::new(path).parent()
-            && !parent.as_os_str().is_empty() && !parent.exists() {
-                warnings.push(ValidationWarning {
-                    kind: WarningKind::SyntaxWarning,
-                    message: format!("Output directory does not exist: {}", parent.display()),
-                    suggestion: format!("Create directory with: mkdir -p {}", parent.display()),
-                });
-            }
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        warnings.push(ValidationWarning {
+            kind: WarningKind::SyntaxWarning,
+            message: format!("Output directory does not exist: {}", parent.display()),
+            suggestion: format!("Create directory with: mkdir -p {}", parent.display()),
+        });
+    }
 
     warnings.extend(check_syntax_issues(markdown));
     warnings.extend(check_image_references(markdown));
@@ -165,9 +168,9 @@ fn has_unicode_font(font_config: Option<&FontConfig>, style_fallback_fonts: &[St
             || config.default_font_source.is_some()
             || !config.fallback_fonts.is_empty()
             || !config.fallback_font_sources.is_empty())
-        {
-            return true;
-        }
+    {
+        return true;
+    }
     default_body_source().is_some()
 }
 
@@ -280,32 +283,31 @@ fn check_image_references(markdown: &str) -> Vec<ValidationWarning> {
 
     let mut chars = markdown.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '!'
-            && chars.peek() == Some(&'[') {
-                // Found potential image
-                // Skip to the path part
-                while let Some(ch) = chars.next() {
-                    if ch == ']'
-                        && chars.peek() == Some(&'(') {
-                            chars.next(); // consume '('
-                            let mut path = String::new();
-                            for ch in chars.by_ref() {
-                                if ch == ')' {
-                                    break;
-                                }
-                                path.push(ch);
-                            }
-                            // Check if it's a local file path (not URL)
-                            if !path.starts_with("http://")
-                                && !path.starts_with("https://")
-                                && !path.is_empty()
-                                && !Path::new(&path).exists() {
-                                    warnings.push(ValidationWarning::missing_image(&path));
-                                }
+        if c == '!' && chars.peek() == Some(&'[') {
+            // Found potential image
+            // Skip to the path part
+            while let Some(ch) = chars.next() {
+                if ch == ']' && chars.peek() == Some(&'(') {
+                    chars.next(); // consume '('
+                    let mut path = String::new();
+                    for ch in chars.by_ref() {
+                        if ch == ')' {
                             break;
                         }
+                        path.push(ch);
+                    }
+                    // Check if it's a local file path (not URL)
+                    if !path.starts_with("http://")
+                        && !path.starts_with("https://")
+                        && !path.is_empty()
+                        && !Path::new(&path).exists()
+                    {
+                        warnings.push(ValidationWarning::missing_image(&path));
+                    }
+                    break;
                 }
             }
+        }
     }
 
     warnings

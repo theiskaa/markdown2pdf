@@ -516,12 +516,13 @@ impl FontSet {
     /// happens per-codepoint inside [`FontSet::split_for_emit`].
     pub fn resolve(&self, flags: RunFlags) -> FontResolution<'_> {
         if flags.inline_code
-            && let Some(ext) = self.external_code_inline.pick(flags) {
-                return FontResolution::External {
-                    handle: PdfFontHandle::External(ext.font_id.clone()),
-                    font: ext,
-                };
-            }
+            && let Some(ext) = self.external_code_inline.pick(flags)
+        {
+            return FontResolution::External {
+                handle: PdfFontHandle::External(ext.font_id.clone()),
+                font: ext,
+            };
+        }
         if flags.monospace {
             if let Some(ext) = self.external_code.pick(flags) {
                 return FontResolution::External {
@@ -583,12 +584,7 @@ impl FontSet {
     /// Width is precomputed against `size_pt` so callers that need
     /// both a width sum (for wrapping) and a per-chunk emission don't
     /// pay the per-glyph scan twice.
-    pub fn split_for_emit(
-        &self,
-        flags: RunFlags,
-        text: &str,
-        size_pt: f32,
-    ) -> Vec<EmitChunk> {
+    pub fn split_for_emit(&self, flags: RunFlags, text: &str, size_pt: f32) -> Vec<EmitChunk> {
         if text.is_empty() {
             return Vec::new();
         }
@@ -667,11 +663,7 @@ fn primary_covers(primary: &FontResolution<'_>, c: char) -> bool {
     }
 }
 
-fn chunk_from_resolution(
-    primary: &FontResolution<'_>,
-    text: String,
-    size_pt: f32,
-) -> EmitChunk {
+fn chunk_from_resolution(primary: &FontResolution<'_>, text: String, size_pt: f32) -> EmitChunk {
     match primary {
         FontResolution::Builtin { handle, metrics } => {
             let width_pt = metrics.measure(&text, size_pt);
@@ -710,7 +702,11 @@ fn load_fallbacks(
     };
     let mut sources: Vec<FontSource> = Vec::new();
     sources.extend(cfg.fallback_font_sources.iter().cloned());
-    sources.extend(cfg.fallback_fonts.iter().map(|n| name_to_external_source(n)));
+    sources.extend(
+        cfg.fallback_fonts
+            .iter()
+            .map(|n| name_to_external_source(n)),
+    );
     for src in sources {
         let Some((_, bytes)) = resolve_regular(src) else {
             continue;
@@ -772,10 +768,7 @@ fn default_monospace_source() -> Option<FontSource> {
 /// to `File`, everything else goes to `System`. Falling back to a
 /// built-in still happens, but only when the system lookup fails.
 fn name_to_external_source(name: &str) -> FontSource {
-    if name.contains('/')
-        || name.contains('\\')
-        || name.ends_with(".ttf")
-        || name.ends_with(".otf")
+    if name.contains('/') || name.contains('\\') || name.ends_with(".ttf") || name.ends_with(".otf")
     {
         return FontSource::File(name.into());
     }
@@ -828,8 +821,13 @@ fn load_external_family(
 ) -> Option<ExternalFamily> {
     let source = source?;
     let (anchor_path, regular_bytes) = resolve_regular(source)?;
-    let regular =
-        parse_and_register(regular_bytes, "regular", used_codepoints, doc, retain_regular)?;
+    let regular = parse_and_register(
+        regular_bytes,
+        "regular",
+        used_codepoints,
+        doc,
+        retain_regular,
+    )?;
 
     let mut family = ExternalFamily {
         regular: Some(regular),
@@ -852,19 +850,23 @@ fn load_external_family(
             }
             if let Some(variant_path) = find_variant_path(&path, names)
                 && let Some(bytes) = read_font_file(&variant_path)
-                    && let Some(parsed) =
-                        parse_and_register(bytes, kind.label(), used_codepoints, doc, false)
-                    {
-                        match kind {
-                            VariantKind::Bold => family.bold = Some(parsed),
-                            VariantKind::Italic => family.italic = Some(parsed),
-                            VariantKind::BoldItalic => family.bold_italic = Some(parsed),
-                        }
-                    }
+                && let Some(parsed) =
+                    parse_and_register(bytes, kind.label(), used_codepoints, doc, false)
+            {
+                match kind {
+                    VariantKind::Bold => family.bold = Some(parsed),
+                    VariantKind::Italic => family.italic = Some(parsed),
+                    VariantKind::BoldItalic => family.bold_italic = Some(parsed),
+                }
+            }
         }
     }
 
-    if family.is_loaded() { Some(family) } else { None }
+    if family.is_loaded() {
+        Some(family)
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -955,9 +957,7 @@ pub fn for_each_builtin_emit_char(c: char, mut f: impl FnMut(char)) {
 /// pass inserts them.
 const RENDERER_INJECTED_CHARS: &[char] = &[
     '\u{2022}', // bullet •
-    '[', ']', 'x', ' ', '.',
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-    '(', ')', ':', '-',
+    '[', ']', 'x', ' ', '.', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '(', ')', ':', '-',
 ];
 
 fn parse_and_register(
@@ -990,10 +990,11 @@ fn parse_and_register(
     for &ch in used_codepoints {
         let cp = ch as u32;
         if let Some(gid) = face.glyph_index(ch)
-            && let Some(w) = face.glyph_hor_advance(gid) {
-                codepoint_to_orig_gid.insert(cp, gid.0);
-                orig_gid_advance.insert(gid.0, w);
-            }
+            && let Some(w) = face.glyph_hor_advance(gid)
+        {
+            codepoint_to_orig_gid.insert(cp, gid.0);
+            orig_gid_advance.insert(gid.0, w);
+        }
     }
 
     // Subset the font down to just those glyphs. `.notdef` (gid 0)
@@ -1006,10 +1007,7 @@ fn parse_and_register(
     let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(&orig_gids);
     let (subset_bytes, gid_remap): (Vec<u8>, Box<dyn Fn(u16) -> u16>) =
         match subsetter::subset(&bytes, 0, &remapper) {
-            Ok(b) => (
-                b,
-                Box::new(move |old| remapper.get(old).unwrap_or(0)),
-            ),
+            Ok(b) => (b, Box::new(move |old| remapper.get(old).unwrap_or(0))),
             Err(e) => {
                 log::warn!(
                     "could not subset {} font: {:?}; embedding full font instead",
