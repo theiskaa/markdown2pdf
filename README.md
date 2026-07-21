@@ -166,4 +166,4 @@ path, or embedded bytes), frontmatter, and the error model are
 covered in **[`docs/library.md`](docs/library.md)**.
 
 ## Contributing
-For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file.
+For information regarding contributions, please refer to [CONTRIBUTING.md](CONTRIBUTING.md) file. Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md), and security issues have a private reporting channel described in [SECURITY.md](SECURITY.md).
