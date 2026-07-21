@@ -323,47 +323,25 @@ mod security_image_confinement {
         let _ = std::fs::remove_file(&p);
     }
 
-    #[test]
-    fn remote_image_falls_back_when_allow_remote_images_false() {
-        let cfg = "[security]\nallow_remote_images = false\n";
-        let md = "![sec remote](https://example.invalid/should-not-fetch.png)\n";
-        let font_cfg = markdown2pdf::fonts::FontConfig::new()
-            .with_default_font_source(markdown2pdf::fonts::FontSource::Builtin("Helvetica"));
-        let bytes = markdown2pdf::parse_into_bytes(
-            md.to_string(),
-            markdown2pdf::config::ConfigSource::Embedded(cfg),
-            Some(&font_cfg),
-        )
-        .expect("render must succeed even when the remote image is refused");
-        assert!(pdf_well_formed(&bytes));
-        assert!(
-            contains_text(&bytes, "[image: sec remote]"),
-            "remote image must fall back to alt text when allow_remote_images = false"
-        );
-    }
-
-    #[test]
-    fn uppercase_scheme_url_is_treated_as_url_and_refused() {
-        // Scheme detection must be case-insensitive: an `HTTP://`
-        // reference has to route down the same URL branch as
-        // `http://` and be subject to `allow_remote_images`, not
-        // silently fall through to the local-file branch.
-        let cfg = "[security]\nallow_remote_images = false\n";
-        let md = "![sec upper](HTTP://example.invalid/should-not-fetch.png)\n";
-        let font_cfg = markdown2pdf::fonts::FontConfig::new()
-            .with_default_font_source(markdown2pdf::fonts::FontSource::Builtin("Helvetica"));
-        let bytes = markdown2pdf::parse_into_bytes(
-            md.to_string(),
-            markdown2pdf::config::ConfigSource::Embedded(cfg),
-            Some(&font_cfg),
-        )
-        .expect("render must succeed even when the uppercase-scheme remote image is refused");
-        assert!(pdf_well_formed(&bytes));
-        assert!(
-            contains_text(&bytes, "[image: sec upper]"),
-            "uppercase-scheme URL must be treated as a URL and fall back to alt text when allow_remote_images = false"
-        );
-    }
+    // `remote_image_falls_back_when_allow_remote_images_false` and
+    // `uppercase_scheme_url_is_treated_as_url_and_refused` used to
+    // live here, both pointed at `https://example.invalid/...` /
+    // `HTTP://example.invalid/...`. `.invalid` (RFC 2606) never
+    // resolves, so a DNS failure produces the exact same `[image: …]`
+    // fallback a genuine policy refusal does — neither test could
+    // tell "refused by the guard" apart from "failed to resolve
+    // anyway" (proof: wrapping the `allow_remote_images` gate in
+    // `if false && …` left both green). They needed a real,
+    // controllable network endpoint to observe the difference, which
+    // in turn needs `MARKDOWN2PDF_ALLOW_PRIVATE_NETWORK=1` (loopback
+    // is otherwise blocked by the separate SSRF host-block guard) —
+    // a process-global env var unsafe to set from a test sharing this
+    // binary with the rest of `tests/render.rs`. They now live as
+    // their own process-isolated integration targets:
+    // `tests/net_remote_image_gate.rs` and
+    // `tests/net_uppercase_scheme_gate.rs`, mirroring the isolation
+    // `tests/net_size_cap.rs` already established for the same
+    // reason.
 }
 
 /// Every "image not shown" path must emit the same italic

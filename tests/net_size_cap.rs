@@ -28,11 +28,37 @@ use common::*;
 
 use std::io::Write;
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Prove the size cap actually bounds the download: a server that
-/// never sends `Content-Length` and just keeps writing must still
-/// have the connection cut once the 10 MB cap is hit, rather than the
-/// client buffering the whole stream.
+/// never sends `Content-Length` and just keeps writing a body far
+/// larger than the 10 MB cap must have the connection cut by the
+/// client once the cap is hit, rather than the client reading the
+/// stream to completion.
+///
+/// The body content here (raw zero bytes) is never a decodable image
+/// either way, so "falls back to alt text" alone proves nothing — a
+/// prior version of this test asserted only that, and stayed green
+/// even with `MAX_BYTES` raised to 10 GiB (i.e. with the cap
+/// effectively disabled), because the fallback then was just "not a
+/// valid image", not "cut off by the cap".
+///
+/// What actually distinguishes a working cap is how many bytes the
+/// SERVER manages to push down the socket before the client hangs up:
+/// it counts every byte accepted by `write_all`, and this test asserts
+/// that count stays bounded well under the `TARGET_BYTES` the server
+/// was willing to send. The target is set to 8x the 10 MB cap
+/// specifically so loopback OS socket-buffer slack (which on a local
+/// connection can absorb several MB before the writer ever blocks)
+/// can't by itself account for the whole thing — with the cap intact,
+/// the client stops reading a little past 10 MB and the connection
+/// gets torn down (a `write_all` past that point returns an error, or
+/// the loop is still short of `TARGET_BYTES` when the join times out);
+/// with the cap disabled, the client keeps reading until the server
+/// has written the entire `TARGET_BYTES`, so `written` reaches it.
 #[test]
 fn oversize_streamed_body_is_cut_off_not_buffered() {
     // SAFETY: this binary contains exactly one test (this one), so no
@@ -42,8 +68,14 @@ fn oversize_streamed_body_is_cut_off_not_buffered() {
         std::env::set_var("MARKDOWN2PDF_ALLOW_PRIVATE_NETWORK", "1");
     }
 
+    const TARGET_BYTES: usize = 80 * 1024 * 1024; // 8x the 10 MB cap
+
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind local listener");
     let addr = listener.local_addr().expect("local addr");
+
+    let written_bytes = Arc::new(AtomicUsize::new(0));
+    let written_bytes_writer = Arc::clone(&written_bytes);
+    let (done_tx, done_rx) = mpsc::channel();
 
     let handle = std::thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
@@ -55,24 +87,24 @@ fn oversize_streamed_body_is_cut_off_not_buffered() {
 
             let header = b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n";
             if stream.write_all(header).is_err() {
+                let _ = done_tx.send(());
                 return;
             }
-            // 11 MB of filler, well past the 10 MB cap. Writes in a
-            // loop so the client can cut the connection once it hits
-            // the cap instead of us building an 11 MB buffer up front
-            // — but even if the whole thing gets queued by the OS,
-            // this thread just exits when the write fails (client
-            // dropped the socket).
+            // Far more filler than the 10 MB cap. Writes in a loop,
+            // counting every byte actually accepted by the socket, so
+            // the client cutting the connection early is directly
+            // observable rather than inferred.
             let chunk = vec![0u8; 64 * 1024];
             let mut written = 0usize;
-            let target = 11 * 1024 * 1024;
-            while written < target {
+            while written < TARGET_BYTES {
                 if stream.write_all(&chunk).is_err() {
                     break;
                 }
                 written += chunk.len();
+                written_bytes_writer.store(written, Ordering::SeqCst);
             }
         }
+        let _ = done_tx.send(());
     });
 
     let md = format!(
@@ -87,9 +119,25 @@ fn oversize_streamed_body_is_cut_off_not_buffered() {
         "oversize body should have been rejected, falling back to alt text"
     );
 
-    // Don't hang the test suite if the server thread is stuck on a
-    // write the client never reads from.
+    // Wait for the server thread to finish writing (or give up once
+    // the client has dropped the connection). Bounded so a hung write
+    // can't hang the whole test suite; if it times out, `written` is
+    // read from whatever the atomic last observed, which is still a
+    // valid (and in that case damning) measurement.
+    let _ = done_rx.recv_timeout(Duration::from_secs(15));
     let _ = handle.join();
+
+    // The load-bearing assertion: the server must not have been
+    // allowed to write anywhere near the full `TARGET_BYTES`. A
+    // disabled/raised cap lets the client keep reading to completion,
+    // so `written` reaches `TARGET_BYTES`; a working ~10 MB cap cuts
+    // the connection well before that.
+    let written = written_bytes.load(Ordering::SeqCst);
+    assert!(
+        written < TARGET_BYTES / 2,
+        "server was allowed to write {written} of {TARGET_BYTES} target bytes — \
+         the size cap did not cut the connection off"
+    );
 
     // Hygiene: don't leak the escape hatch past this test, in case a
     // future harness or tooling ever reuses this process.
