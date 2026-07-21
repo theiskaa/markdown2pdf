@@ -4204,24 +4204,8 @@ fn draw_outlined_rect(
 fn dash_pattern_for(style: BorderStyle) -> LineDashPattern {
     match style {
         BorderStyle::Solid => LineDashPattern::default(),
-        BorderStyle::Dashed => LineDashPattern {
-            offset: 0,
-            dash_1: Some(4),
-            gap_1: Some(2),
-            dash_2: None,
-            gap_2: None,
-            dash_3: None,
-            gap_3: None,
-        },
-        BorderStyle::Dotted => LineDashPattern {
-            offset: 0,
-            dash_1: Some(1),
-            gap_1: Some(1),
-            dash_2: None,
-            gap_2: None,
-            dash_3: None,
-            gap_3: None,
-        },
+        BorderStyle::Dashed => LineDashPattern::new(0.0, &[4.0, 2.0]),
+        BorderStyle::Dotted => LineDashPattern::new(0.0, &[1.0, 1.0]),
     }
 }
 

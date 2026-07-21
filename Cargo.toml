@@ -2,7 +2,7 @@
 name = "markdown2pdf"
 version = "1.5.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["Ismael Sh <me@theiskaa.com>"]
 description = "Create PDF with Markdown files (a md to pdf transpiler)"
 readme = "README.md"
@@ -32,7 +32,7 @@ clap = { version = "4.6", features = ["derive"] }
 reqwest = { version = "0.13", features = [
     "blocking",
 ], default-features = false, optional = true }
-printpdf = { version = "0.9", default-features = false, features = [
+printpdf = { version = "0.11", default-features = false, features = [
     "png",
     "jpeg",
 ] }
