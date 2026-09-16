@@ -177,7 +177,11 @@ pub fn resolve_font_source(name: &str) -> FontSource {
     FontSource::System(name.to_string())
 }
 
-/// Returns known font directories for the current platform.
+/// Returns the platform's system-wide font directories.
+///
+/// These are only the fixed roots. The lookup in [`find_system_font`]
+/// also searches per-user font directories and walks subdirectories;
+/// see [`font_search_dirs`] for the full list of roots it starts from.
 pub fn system_font_dirs() -> Vec<&'static str> {
     if cfg!(target_os = "macos") {
         vec![
@@ -186,12 +190,7 @@ pub fn system_font_dirs() -> Vec<&'static str> {
             "/Library/Fonts",
         ]
     } else if cfg!(target_os = "linux") {
-        vec![
-            "/usr/share/fonts/truetype",
-            "/usr/share/fonts/TTF",
-            "/usr/share/fonts/opentype",
-            "/usr/local/share/fonts",
-        ]
+        vec!["/usr/share/fonts", "/usr/local/share/fonts"]
     } else if cfg!(target_os = "windows") {
         vec!["C:\\Windows\\Fonts"]
     } else {
@@ -199,13 +198,47 @@ pub fn system_font_dirs() -> Vec<&'static str> {
     }
 }
 
-/// Search the platform's system font directories for a TTF/OTF file
-/// matching `name`. Skips `.ttc` (TrueType Collection) files — most
-/// font parsers don't handle them.
-pub fn find_system_font(name: &str) -> Option<PathBuf> {
-    find_system_font_in(name, &system_font_dirs())
+/// Returns every root directory [`find_system_font`] searches: the
+/// system-wide [`system_font_dirs`] followed by the current user's font
+/// directories. Subdirectories of each root are searched too.
+///
+/// Per-user directories are `~/Library/Fonts` on macOS,
+/// `$XDG_DATA_HOME/fonts` (default `~/.local/share/fonts`) and
+/// `~/.fonts` on Linux, and `%LOCALAPPDATA%\Microsoft\Windows\Fonts`
+/// on Windows.
+pub fn font_search_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = system_font_dirs().into_iter().map(PathBuf::from).collect();
+    let home = std::env::home_dir();
+    if cfg!(target_os = "macos") {
+        dirs.extend(home.map(|h| h.join("Library/Fonts")));
+    } else if cfg!(target_os = "linux") {
+        let data_home = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| home.as_ref().map(|h| h.join(".local/share")));
+        dirs.extend(data_home.map(|d| d.join("fonts")));
+        dirs.extend(home.map(|h| h.join(".fonts")));
+    } else if cfg!(target_os = "windows") {
+        dirs.extend(
+            std::env::var_os("LOCALAPPDATA")
+                .map(|d| PathBuf::from(d).join("Microsoft\\Windows\\Fonts")),
+        );
+    }
+    dirs
 }
 
+/// How deep [`find_system_font`] descends below each search root.
+/// Distribution packages nest two levels deep
+/// (`/usr/share/fonts/truetype/dejavu/`); the extra headroom covers
+/// hand-organized user font folders without walking arbitrarily deep.
+const FONT_DIR_MAX_DEPTH: usize = 4;
+
+/// Search the platform's font directories (see [`font_search_dirs`])
+/// for a TTF/OTF file matching `name`. Skips `.ttc` (TrueType
+/// Collection) files — most font parsers don't handle them.
+pub fn find_system_font(name: &str) -> Option<PathBuf> {
+    find_system_font_in(name, &font_search_dirs())
+}
 /// Probe a per-OS list of likely-installed Unicode body fonts and
 /// return the first one that resolves. The built-in Type 1 Helvetica
 /// the renderer otherwise falls back to is ASCII-only (lopdf's
@@ -247,62 +280,144 @@ pub fn default_body_source() -> Option<FontSource> {
     None
 }
 
+/// Lowercase `s` and drop spaces, hyphens, and underscores, so
+/// `DejaVu Sans`, `DejaVuSans`, and `dejavu-sans` compare equal.
+pub(crate) fn normalize_font_name(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, ' ' | '-' | '_'))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Weight names recognized in font file names, normalized by
+/// [`normalize_font_name`].
+const WEIGHT_NAMES: &[(u16, &[&str])] = &[
+    (100, &["thin", "hairline"]),
+    (200, &["extralight", "ultralight"]),
+    (300, &["light"]),
+    (400, &["regular", "normal", "roman", "book"]),
+    (500, &["medium"]),
+    (600, &["semibold", "demibold"]),
+    (700, &["bold"]),
+    (800, &["extrabold", "ultrabold"]),
+    (900, &["black", "heavy"]),
+];
+
+/// Parse a normalized file-name suffix made only of an optional weight
+/// name (or a numeric `100`..`900`) followed by an optional `italic` /
+/// `oblique`. The empty suffix is the regular upright face.
+pub(crate) fn parse_face_style(suffix: &str) -> Option<(u16, bool)> {
+    let (weight, italic) = match suffix
+        .strip_suffix("italic")
+        .or_else(|| suffix.strip_suffix("oblique"))
+    {
+        Some(rest) => (rest, true),
+        None => (suffix, false),
+    };
+    if weight.is_empty() {
+        return Some((400, italic));
+    }
+    WEIGHT_NAMES
+        .iter()
+        .find(|(w, names)| names.contains(&weight) || weight.parse() == Ok(*w))
+        .map(|&(w, _)| (w, italic))
+}
+
+/// Split a normalized font stem into family, weight, and slant, taking
+/// the longest trailing style suffix: `fooextrabolditalic` is
+/// `("foo", 800, true)`. A stem with no recognized suffix is a regular
+/// upright face of its own family.
+pub(crate) fn split_face_stem(stem: &str) -> (&str, u16, bool) {
+    stem.char_indices()
+        .skip(1)
+        .find_map(|(i, _)| parse_face_style(&stem[i..]).map(|(w, it)| (&stem[..i], w, it)))
+        .unwrap_or((stem, 400, false))
+}
+
+/// Collect `.ttf` / `.otf` files below `dir`, at most `depth` levels
+/// down, in sorted order so ties resolve the same way on every run.
+/// Canonical directory paths are tracked so symlink cycles terminate.
+fn collect_font_files(
+    dir: &Path,
+    depth: usize,
+    seen: &mut std::collections::HashSet<PathBuf>,
+    out: &mut Vec<PathBuf>,
+) {
+    let Ok(canonical) = dir.canonicalize() else {
+        return;
+    };
+    if !seen.insert(canonical) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            if depth > 0 {
+                collect_font_files(&path, depth - 1, seen, out);
+            }
+        } else if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf"))
+        {
+            out.push(path);
+        }
+    }
+}
+
 /// `find_system_font` with the search directories injected, so the
 /// matching logic can be exercised against a controlled directory.
-fn find_system_font_in(name: &str, dirs: &[&str]) -> Option<PathBuf> {
-    let name_lower = name.to_lowercase();
-    let patterns: Vec<String> = [
-        format!("{}.ttf", name),
-        format!("{}.otf", name),
-        format!("{}.ttf", name.replace(" MS", "")),
-    ]
-    .iter()
-    .map(|p| p.to_lowercase())
-    .collect();
-
-    // An exact filename match always wins, but directory enumeration
-    // order is unspecified — a prefix like `Tahoma Bold.ttf` can be
-    // visited before the exact `Tahoma.ttf`. So scan every entry for
-    // an exact match first; only if none exists fall back to the
-    // shortest-named prefix match (regular faces have shorter names
-    // than their `X Bold` / `X Italic` siblings).
-    let mut prefix_match: Option<PathBuf> = None;
+///
+/// Names match file stems ignoring case, spaces, hyphens, and
+/// underscores. In order of preference: an exact stem
+/// (`DejaVuSans.ttf` for `DejaVu Sans`), then the family's explicit
+/// regular face (`NotoSans-Regular.ttf` for `Noto Sans`), then the
+/// shortest stem that starts with the name (`Tahoma Bold.ttf` before
+/// `Tahoma Bold Italic.ttf`). Earlier directories win ties.
+fn find_system_font_in(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let wanted: Vec<String> = [name.to_string(), name.replace(" MS", "")]
+        .iter()
+        .map(|n| normalize_font_name(n))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut best: Option<((u8, usize), PathBuf)> = None;
     for dir in dirs {
-        let dir_path = Path::new(dir);
-        if !dir_path.exists() {
-            continue;
-        }
-        let Ok(entries) = std::fs::read_dir(dir_path) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let file_name = entry.file_name();
-            let file_lower = file_name.to_string_lossy().to_lowercase();
-
-            if file_lower.ends_with(".ttc") {
+        let mut files = Vec::new();
+        collect_font_files(dir, FONT_DIR_MAX_DEPTH, &mut seen, &mut files);
+        for path in files {
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
+            };
+            let stem = normalize_font_name(stem);
+            let rank = wanted
+                .iter()
+                .filter_map(|w| {
+                    let suffix = stem.strip_prefix(w.as_str())?;
+                    Some(if suffix.is_empty() {
+                        (0, 0)
+                    } else if parse_face_style(suffix) == Some((400, false)) {
+                        (1, 0)
+                    } else {
+                        (2, stem.len())
+                    })
+                })
+                .min();
+            let Some(rank) = rank else {
+                continue;
+            };
+            if rank.0 == 0 {
+                return Some(path);
             }
-
-            if patterns.contains(&file_lower) {
-                return Some(entry.path());
-            }
-
-            if file_lower.starts_with(&name_lower)
-                && (file_lower.ends_with(".ttf") || file_lower.ends_with(".otf"))
-            {
-                let shorter = prefix_match
-                    .as_ref()
-                    .and_then(|p| p.file_name())
-                    .map(|n| file_lower.len() < n.to_string_lossy().len())
-                    .unwrap_or(true);
-                if shorter {
-                    prefix_match = Some(entry.path());
-                }
+            if best.as_ref().is_none_or(|(r, _)| rank < *r) {
+                best = Some((rank, path));
             }
         }
     }
-
-    prefix_match
+    best.map(|(_, path)| path)
 }
 
 #[cfg(test)]
@@ -355,13 +470,14 @@ mod tests {
         // Don't assert anything platform-specific — just verify the
         // function returns successfully.
         let _ = system_font_dirs();
+        let _ = font_search_dirs();
     }
 
     /// Builds a throwaway directory containing the named empty files
-    /// and runs `f` with its path. Cleans up afterwards. The directory
+    /// (which may include subdirectories) and runs `f` with its path. Cleans up afterwards. The directory
     /// name is made unique with a process-wide atomic counter so the
     /// parallel font tests can't collide on each other's files.
-    fn with_font_dir(files: &[&str], f: impl FnOnce(&str)) {
+    fn with_font_dir(files: &[&str], f: impl FnOnce(PathBuf)) {
         use std::sync::atomic::{AtomicU32, Ordering};
         static SEQ: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
@@ -372,9 +488,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for name in files {
-            std::fs::write(dir.join(name), b"x").unwrap();
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"x").unwrap();
         }
-        f(dir.to_str().unwrap());
+        f(dir.clone());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -404,5 +522,71 @@ mod tests {
         with_font_dir(&["Helvetica Neue.ttc"], |dir| {
             assert!(find_system_font_in("Helvetica Neue", &[dir]).is_none());
         });
+    }
+
+    #[test]
+    fn find_system_font_ignores_case_and_separators() {
+        with_font_dir(&["DejaVuSansMono.ttf", "DejaVuSans.ttf"], |dir| {
+            let found = find_system_font_in("DejaVu Sans", &[dir]).unwrap();
+            assert_eq!(found.file_name().unwrap(), "DejaVuSans.ttf");
+        });
+        with_font_dir(&["liberation_serif.OTF"], |dir| {
+            assert!(find_system_font_in("Liberation-Serif", &[dir]).is_some());
+        });
+    }
+
+    #[test]
+    fn find_system_font_prefers_the_family_regular_face() {
+        // `NotoSansArabic-Regular` also contains "regular" and sorts
+        // first, but it's a different family.
+        with_font_dir(
+            &[
+                "NotoSansArabic-Regular.ttf",
+                "NotoSans-Bold.ttf",
+                "NotoSans-Regular.ttf",
+            ],
+            |dir| {
+                let found = find_system_font_in("Noto Sans", &[dir]).unwrap();
+                assert_eq!(found.file_name().unwrap(), "NotoSans-Regular.ttf");
+            },
+        );
+    }
+
+    #[test]
+    fn find_system_font_searches_nested_directories() {
+        // Debian and Fedora package fonts two levels below the root.
+        with_font_dir(&["truetype/dejavu/DejaVuSans.ttf"], |dir| {
+            let found = find_system_font_in("DejaVu Sans", &[dir]).unwrap();
+            assert!(found.ends_with("truetype/dejavu/DejaVuSans.ttf"));
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_system_font_survives_symlink_cycles() {
+        with_font_dir(&["fonts/Foo.ttf"], |dir| {
+            std::os::unix::fs::symlink(&dir, dir.join("fonts/loop")).unwrap();
+            assert!(find_system_font_in("Foo", std::slice::from_ref(&dir)).is_some());
+            assert!(find_system_font_in("Missing", &[dir]).is_none());
+        });
+    }
+
+    #[test]
+    fn face_stems_split_into_family_weight_and_slant() {
+        for (stem, expected) in [
+            ("fooregular", ("foo", 400, false)),
+            ("fooextrabolditalic", ("foo", 800, true)),
+            ("foosemibold", ("foo", 600, false)),
+            ("foo700oblique", ("foo", 700, true)),
+            ("fooitalic", ("foo", 400, true)),
+            ("timesnewroman", ("timesnew", 400, false)),
+            ("arialblack", ("arial", 900, false)),
+            ("foo", ("foo", 400, false)),
+            ("bold", ("bold", 400, false)),
+        ] {
+            assert_eq!(split_face_stem(stem), expected, "{stem}");
+        }
+        assert_eq!(parse_face_style(""), Some((400, false)));
+        assert_eq!(parse_face_style("narrow"), None);
     }
 }

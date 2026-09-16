@@ -347,10 +347,19 @@ pub enum FontStyleVariant {
 pub enum FontWeight {
     Normal,
     Bold,
-    /// CSS-style numeric weight (100..=900). Maps to bold ≥ 600 in the
-    /// renderer today; richer mapping arrives once the
-    /// per-weight font variant work.
+    /// Numeric weight (100..=900), matched to an available external face.
     Numeric(u16),
+}
+
+impl FontWeight {
+    /// Numeric weight used for external font selection.
+    pub fn numeric(self) -> u16 {
+        match self {
+            Self::Normal => 400,
+            Self::Bold => 700,
+            Self::Numeric(n) => n,
+        }
+    }
 }
 
 impl Serialize for FontWeight {
@@ -370,12 +379,25 @@ impl<'de> Deserialize<'de> for FontWeight {
         impl<'de> Visitor<'de> for V {
             type Value = FontWeight;
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("`normal` | `bold` | integer 100..=900")
+                f.write_str("a named font weight (thin, light, normal, medium, semibold, bold, black, etc.) or integer 100..=900")
             }
             fn visit_str<E: Error>(self, s: &str) -> Result<FontWeight, E> {
                 match s {
-                    "normal" => Ok(FontWeight::Normal),
+                    "normal" | "regular" => Ok(FontWeight::Normal),
                     "bold" => Ok(FontWeight::Bold),
+                    "thin" | "hairline" => Ok(FontWeight::Numeric(100)),
+                    "extra-light" | "extralight" | "ultra-light" | "ultralight" => {
+                        Ok(FontWeight::Numeric(200))
+                    }
+                    "light" => Ok(FontWeight::Numeric(300)),
+                    "medium" => Ok(FontWeight::Numeric(500)),
+                    "semi-bold" | "semibold" | "demi-bold" | "demibold" => {
+                        Ok(FontWeight::Numeric(600))
+                    }
+                    "extra-bold" | "extrabold" | "ultra-bold" | "ultrabold" => {
+                        Ok(FontWeight::Numeric(800))
+                    }
+                    "black" | "heavy" => Ok(FontWeight::Numeric(900)),
                     other => Err(E::custom(format!("unknown font weight `{}`", other))),
                 }
             }

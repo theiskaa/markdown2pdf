@@ -640,7 +640,8 @@ impl<'a> Engine<'a> {
             return;
         }
         let flags = RunFlags {
-            bold: force_bold || style.is_bold(),
+            bold: force_bold,
+            weight: Some(style.font_weight.numeric()),
             italic: style.is_italic(),
             monospace: false,
             strikethrough: false,
@@ -747,7 +748,8 @@ impl<'a> Engine<'a> {
         }];
         let color = Some(rgb_color(s.text_color_rgb()));
         let flags = RunFlags {
-            bold: s.is_bold(),
+            weight: Some(s.font_weight.numeric()),
+            bold: false,
             italic: s.is_italic(),
             monospace: false,
             strikethrough: false,
@@ -855,6 +857,22 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// Merge a run's flags with its block's base style, then apply
+    /// `[code_inline]` typography to inline code. A normal
+    /// `[code_inline].font_weight` inherits the surrounding weight, so
+    /// code in a bold heading stays bold.
+    fn styled_run_flags(&self, flags: RunFlags, base: RunFlags) -> RunFlags {
+        let mut flags = flags.or(base);
+        if flags.inline_code && !self.in_code_block {
+            let weight = self.style.code_inline.font_weight.numeric();
+            if weight != 400 {
+                flags.weight = Some(weight);
+            }
+            flags.italic |= self.style.code_inline.is_italic();
+        }
+        flags
+    }
+
     /// Conservative wrap-count estimate: total word ink at `font_size`
     /// divided by current content width, rounded up. Used by
     /// keep-with-next to reserve enough vertical space for a heading
@@ -879,7 +897,7 @@ impl<'a> Engine<'a> {
             if run.math.is_some() {
                 continue;
             }
-            let flags = run.flags.or(base_flags);
+            let flags = self.styled_run_flags(run.flags, base_flags);
             total += self.measure_text(flags, &run.text, font_size);
         }
         ((total / max_width).ceil() as usize).max(1)
@@ -1598,7 +1616,8 @@ impl<'a> Engine<'a> {
         style: &ResolvedBlock,
     ) {
         let flags = RunFlags {
-            bold: style.is_bold(),
+            weight: Some(style.font_weight.numeric()),
+            bold: false,
             italic: style.is_italic(),
             monospace: false,
             strikethrough: false,
@@ -2084,7 +2103,8 @@ impl<'a> Engine<'a> {
         self.keep_with_next_break(header_h, follow_h);
         let color = Some(rgb_color(h2.text_color_rgb()));
         let flags = RunFlags {
-            bold: h2.is_bold(),
+            weight: Some(h2.font_weight.numeric()),
+            bold: false,
             italic: h2.is_italic(),
             monospace: false,
             strikethrough: false,
@@ -3313,22 +3333,15 @@ impl<'a> Engine<'a> {
         // (e.g. list children) don't inherit it.
         let first_line_indent_pt = std::mem::take(&mut self.first_line_indent_pt);
 
-        // Fold the block-level base style (e.g. a heading's bold
-        // weight) into every run so it isn't lost when a run carries
-        // its own inline flags. A default `base_flags` is a no-op.
-        let merged_runs;
-        let runs: &[InlineRun] = if base_flags == RunFlags::default() {
-            runs
-        } else {
-            merged_runs = runs
-                .iter()
-                .map(|r| InlineRun {
-                    flags: r.flags.or(base_flags),
-                    ..r.clone()
-                })
-                .collect::<Vec<_>>();
-            &merged_runs
-        };
+        // Resolve weights before both line measurement and PDF emission.
+        let merged_runs: Vec<_> = runs
+            .iter()
+            .map(|r| InlineRun {
+                flags: self.styled_run_flags(r.flags, base_flags),
+                ..r.clone()
+            })
+            .collect();
+        let runs = &merged_runs;
 
         // Split runs into a flat sequence of (word, flags) pairs.
         // Whitespace is the only break opportunity in this phase.
@@ -4730,7 +4743,8 @@ fn pt_to_mm(pt: f32) -> f32 {
 /// base flags that `write_wrapped_runs` applies to every run.
 fn base_flags_from_block(s: &ResolvedBlock) -> RunFlags {
     RunFlags {
-        bold: s.is_bold(),
+        weight: Some(s.font_weight.numeric()),
+        bold: false,
         italic: s.is_italic(),
         underline: s.underline,
         strikethrough: s.strikethrough,

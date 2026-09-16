@@ -29,7 +29,7 @@ column_gap_mm = 6.0
 [defaults]
 font_family = "Helvetica"
 font_size_pt = 11.0
-font_weight = "normal"     # normal | bold | <100..=900>
+font_weight = "normal"     # named weight (thin/light/medium/semibold/bold/black etc.) | <100..=900>
 font_style = "normal"      # normal | italic
 text_color = "#1B1F23"     # #RRGGBB hex, #RGB short hex, { r, g, b }, or [r, g, b]
 line_height = 1.5          # multiplier of font_size_pt

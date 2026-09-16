@@ -165,11 +165,13 @@ impl InlineRun {
     }
 }
 
-/// Which font variants the document actually uses. Built by walking
-/// the lowered IR once before font loading, so we can skip loading
-/// (and embedding) weights that no run in the document references.
-#[derive(Debug, Default, Clone, Copy)]
+/// Font variants requested by Markdown runs and configured typography.
+/// Collected before font loading so unrelated weights are not embedded.
+#[derive(Debug, Default, Clone)]
 pub struct VariantUsage {
+    pub body_weights: std::collections::BTreeSet<(u16, bool)>,
+    pub code_weights: std::collections::BTreeSet<(u16, bool)>,
+    pub inline_code_weights: std::collections::BTreeSet<(u16, bool)>,
     pub body_bold: bool,
     pub body_italic: bool,
     pub body_bold_italic: bool,
@@ -187,12 +189,94 @@ pub struct VariantUsage {
 }
 
 impl VariantUsage {
+    pub fn include_style(&mut self, style: &crate::styling::ResolvedStyle) {
+        let mut blocks: Vec<_> = style
+            .headings
+            .iter()
+            .chain([
+                &style.paragraph,
+                &style.blockquote,
+                &style.list_ordered.block,
+                &style.list_unordered.block,
+                &style.list_task.block,
+                &style.table.header,
+                &style.table.cell,
+                &style.image.caption,
+                &style.admonition.note.block,
+                &style.admonition.info.block,
+                &style.admonition.tip.block,
+                &style.admonition.warning.block,
+                &style.admonition.danger.block,
+                &style.admonition.generic.block,
+            ])
+            .collect();
+        blocks.extend(style.header.iter().map(|f| &f.style));
+        blocks.extend(style.footer.iter().map(|f| &f.style));
+        blocks.extend(style.title_page.iter().map(|f| &f.style));
+        blocks.extend(style.toc.iter().map(|f| &f.style));
+        for block in blocks {
+            add_style_weights(
+                &mut self.body_weights,
+                block.font_weight.numeric(),
+                block.is_italic(),
+                self.body_bold || self.body_bold_italic || style.title_page.is_some(),
+                self.body_italic || self.body_bold_italic,
+            );
+        }
+        add_style_weights(
+            &mut self.code_weights,
+            style.code_block.font_weight.numeric(),
+            style.code_block.is_italic(),
+            self.mono_bold || self.mono_bold_italic,
+            self.mono_italic || self.mono_bold_italic,
+        );
+        // Inline code takes its slant, and with a normal
+        // `[code_inline].font_weight` its weight, from the surrounding
+        // block, so it can need any weight the body text uses.
+        let code_weight = style.code_inline.font_weight.numeric();
+        let code_italic = style.code_inline.is_italic();
+        let bold_runs = self.inline_code_bold || self.inline_code_bold_italic;
+        let surrounding: Vec<_> = self.body_weights.iter().copied().collect();
+        for (weight, italic) in surrounding {
+            add_style_weights(
+                &mut self.inline_code_weights,
+                if code_weight == 400 {
+                    weight
+                } else {
+                    code_weight
+                },
+                italic || code_italic,
+                bold_runs,
+                self.inline_code_italic || self.inline_code_bold_italic,
+            );
+        }
+    }
+
     pub fn analyze(blocks: &[Block]) -> Self {
         let mut u = Self::default();
         for b in blocks {
             walk_block(b, &mut u);
         }
         u
+    }
+}
+
+fn add_style_weights(
+    weights: &mut std::collections::BTreeSet<(u16, bool)>,
+    weight: u16,
+    italic: bool,
+    bold_runs: bool,
+    italic_runs: bool,
+) {
+    weights.insert((weight, italic));
+    if bold_runs {
+        weights.insert((weight.max(700), italic));
+    }
+    if italic_runs {
+        weights.insert((weight, true));
+    }
+    if bold_runs && italic_runs {
+        weights.insert((weight.max(700), true));
     }
 }
 
@@ -316,6 +400,8 @@ fn walk_run(run: &InlineRun, u: &mut VariantUsage) {
 /// the glyphs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RunFlags {
+    /// Explicit style weight; absent for plain Markdown runs.
+    pub weight: Option<u16>,
     pub bold: bool,
     pub italic: bool,
     pub monospace: bool,
@@ -347,6 +433,11 @@ pub struct RunFlags {
 }
 
 impl RunFlags {
+    pub fn font_weight(self) -> u16 {
+        let weight = self.weight.unwrap_or(400);
+        if self.bold { weight.max(700) } else { weight }
+    }
+
     pub fn with_bold(mut self) -> Self {
         self.bold = true;
         self
@@ -389,11 +480,11 @@ impl RunFlags {
         self
     }
 
-    /// OR every flag with `other`. Folds a block-level base style
-    /// (e.g. a heading's bold weight) into per-run inline flags so
-    /// the block style isn't lost when a run carries its own flags.
+    /// Combine decorations and emphasis with a block-level base style.
+    /// An explicit run weight takes precedence over the base weight.
     pub fn or(self, other: Self) -> Self {
         Self {
+            weight: self.weight.or(other.weight),
             bold: self.bold || other.bold,
             italic: self.italic || other.italic,
             monospace: self.monospace || other.monospace,

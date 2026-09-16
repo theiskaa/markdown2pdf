@@ -69,6 +69,58 @@ column_gap_mm = 6.0
 
 A `Mm` margin like `22.6` is millimeters; the renderer converts to PDF points internally.
 
+## Font weights
+
+`font_weight` accepts integers from 100 to 900 or these names:
+
+| Name | Weight |
+| --- | --- |
+| `thin` / `hairline` | 100 |
+| `extra-light` / `ultra-light` | 200 |
+| `light` | 300 |
+| `normal` / `regular` | 400 |
+| `medium` | 500 |
+| `semibold` / `demibold` | 600 |
+| `bold` | 700 |
+| `extra-bold` / `ultra-bold` | 800 |
+| `black` / `heavy` | 900 |
+
+Compound names also accept the joined spelling, such as `extralight`,
+`extrabold`, and `ultrabold`; `semi-bold` and `demi-bold` are accepted too.
+
+For external fonts, put the static weight files in the same directory. For
+example, `Foo-Regular.ttf` can select `Foo-Light.ttf`, `Foo-Medium.ttf`,
+`Foo-Bold.ttf`, and `Foo-Black.ttf`, and `Times New Roman.ttf` can select
+`Times New Roman Bold.ttf`. Discovery ignores capitalization, spaces,
+hyphens, and underscores, and accepts `.ttf` and `.otf`. Italic and oblique
+suffixes are supported, including `Foo-LightItalic.ttf` and `Foo-BoldOblique.ttf`.
+
+The configured file is always the normal face, and other weights are chosen
+relative to it: heavier requests never select a face lighter than the
+configured file, and lighter requests never select a heavier one. So
+`**bold**` in `Arial Black.ttf` stays black, and a `Lato-Light.ttf` body gets
+`Lato-Bold.ttf` for bold and `Lato-LightItalic.ttf` for italics.
+
+Selection prefers the requested slant, then the closest available weight;
+equal distances select the lighter face up to 500 and the heavier face above.
+If no italic face exists, an upright face is used. Markdown bold requests at
+least 700, preserving heavier configured weights. This applies to block
+typography and inline code. Inline code with a `normal` `[code_inline]`
+weight inherits the surrounding weight, so code in a heading stays bold; any
+other value sets the weight of all inline code.
+
+Built-in PDF fonts still offer only regular/bold (600 and above selects bold).
+Raw font bytes have no directory for sibling discovery. This is static-file
+selection; variable-font weight axes and synthetic weights are not supported.
+
+System font names are searched in the platform font directories and their
+subdirectories: `/System/Library/Fonts`, `/Library/Fonts`, and
+`~/Library/Fonts` on macOS; `/usr/share/fonts`, `/usr/local/share/fonts`,
+`$XDG_DATA_HOME/fonts` (default `~/.local/share/fonts`), and `~/.fonts` on
+Linux; `C:\Windows\Fonts` and `%LOCALAPPDATA%\Microsoft\Windows\Fonts` on
+Windows. Names match file names ignoring case, spaces, hyphens, and
+underscores, so `Noto Sans` finds `NotoSans-Regular.ttf`.
+
 ## Defaults cascade
 
 Every per-block section inherits any unset field from `[defaults]`:
@@ -77,7 +129,7 @@ Every per-block section inherits any unset field from `[defaults]`:
 [defaults]
 font_family = "Helvetica"
 font_size_pt = 11.0
-font_weight = "normal"  # normal | bold | numeric 100..=900
+font_weight = "normal"  # named weight or integer 100..=900
 font_style = "normal"   # normal | italic
 text_color = "#1B1F23"
 line_height = 1.5       # multiplier of font_size_pt

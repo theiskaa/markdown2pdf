@@ -145,6 +145,45 @@ fn font_weight_accepts_string_and_numeric() {
 }
 
 #[test]
+fn named_weight_aliases_resolve_and_round_trip() {
+    for (name, expected) in [
+        ("hairline", 100),
+        ("ultralight", 200),
+        ("extralight", 200),
+        ("ultra-light", 200),
+        ("regular", 400),
+        ("semi-bold", 600),
+        ("demibold", 600),
+        ("demi-bold", 600),
+        ("extrabold", 800),
+        ("ultra-bold", 800),
+        ("ultrabold", 800),
+        ("heavy", 900),
+    ] {
+        let cfg = format!("[paragraph]\nfont_weight = \"{name}\"");
+        let style = load_config_strict(ConfigSource::Embedded(&cfg), None).unwrap();
+        assert_eq!(style.paragraph.font_weight.numeric(), expected, "{name}");
+        let weight =
+            std::collections::BTreeMap::from([("font_weight", style.paragraph.font_weight)]);
+        let serialized = format!("[paragraph]\n{}", toml::to_string(&weight).unwrap());
+        let round_trip: ResolvedStyle =
+            load_config_strict(ConfigSource::Embedded(&serialized), None).unwrap();
+        assert_eq!(round_trip.paragraph.font_weight.numeric(), expected);
+    }
+}
+
+#[test]
+fn invalid_font_weights_are_rejected() {
+    for value in ["99", "901", "-1", "400.5", "\"lighter\""] {
+        let cfg = format!("[paragraph]\nfont_weight = {value}");
+        assert!(
+            load_config_strict(ConfigSource::Embedded(&cfg), None).is_err(),
+            "{value}"
+        );
+    }
+}
+
+#[test]
 fn inherits_resolves_recursively() {
     // `github` inherits from `default`; check that fields not set in
     // github.toml (e.g. h6) come through from default.toml.

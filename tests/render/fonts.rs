@@ -294,3 +294,232 @@ fn fallback_font_loads_when_system_font_available() {
         "expected at least one embedded font (the fallback) with an `/Ascent` entry, got none"
     );
 }
+
+/// Real, deterministic font files without depending on host-installed fonts.
+struct WeightFixtures(std::path::PathBuf);
+
+impl WeightFixtures {
+    fn new() -> Self {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "mdp-weights-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+    fn write(&self, name: &str, font: printpdf::BuiltinFont) -> std::path::PathBuf {
+        let path = self.0.join(name);
+        std::fs::write(&path, font.get_subset_font().bytes).unwrap();
+        path
+    }
+}
+impl Drop for WeightFixtures {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// PostScript name of the embedded face that draws the first glyph.
+fn first_emitted_face(bytes: &[u8]) -> String {
+    let mut doc = lopdf::Document::load_mem(bytes).unwrap();
+    doc.decompress();
+    let page = *doc.get_pages().values().next().unwrap();
+    let fonts = doc.get_page_fonts(page).unwrap();
+    let content = lopdf::content::Content::decode(&doc.get_page_content(page)).unwrap();
+    let mut current = None;
+    for op in content.operations {
+        if op.operator == "Tf" {
+            current = Some(op.operands[0].as_name().unwrap().to_vec());
+        }
+        if op.operator == "Tj" {
+            let font = fonts[&current.unwrap()];
+            let descendant = doc
+                .dereference(&font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0])
+                .unwrap()
+                .1
+                .as_dict()
+                .unwrap();
+            let descriptor = doc
+                .dereference(descendant.get(b"FontDescriptor").unwrap())
+                .unwrap()
+                .1
+                .as_dict()
+                .unwrap();
+            let stream = doc
+                .dereference(descriptor.get(b"FontFile2").unwrap())
+                .unwrap()
+                .1
+                .as_stream()
+                .unwrap();
+            return postscript_name(&stream.content);
+        }
+    }
+    panic!("no emitted glyph");
+}
+
+fn postscript_name(font_bytes: &[u8]) -> String {
+    let face = ttf_parser::Face::parse(font_bytes, 0).unwrap();
+    face.names()
+        .into_iter()
+        .filter(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME)
+        .find_map(|n| n.to_string())
+        .expect("fixture face has a PostScript name")
+}
+
+fn expected_face(font: printpdf::BuiltinFont) -> String {
+    postscript_name(&font.get_subset_font().bytes)
+}
+
+#[test]
+fn configured_weights_select_real_sibling_faces_in_pdf() {
+    use printpdf::BuiltinFont as B;
+    let fixtures = WeightFixtures::new();
+    let anchor = fixtures.write("Foo-Regular.ttf", B::Helvetica);
+    let cases = [
+        ("thin", 100, "Foo-Thin.ttf", B::Courier),
+        ("extra-light", 200, "Foo_Extra_Light.OTF", B::TimesRoman),
+        ("light", 300, "Foo Light.ttf", B::TimesItalic),
+        ("normal", 400, "Foo-Regular.ttf", B::Helvetica),
+        ("medium", 500, "FooMedium.ttf", B::TimesBold),
+        ("semibold", 600, "Foo-SemiBold.ttf", B::TimesBoldItalic),
+        ("bold", 700, "Foo-Bold.ttf", B::HelveticaBold),
+        ("extra-bold", 800, "Foo-ExtraBold.ttf", B::HelveticaOblique),
+        ("black", 900, "Foo-Black.ttf", B::HelveticaBoldOblique),
+    ];
+    for &(_, _, name, font) in &cases {
+        fixtures.write(name, font);
+    }
+    let cfg = FontConfig::new()
+        .with_default_font_source(FontSource::file(&anchor))
+        .with_code_font_source(FontSource::file(&anchor));
+    for (name, numeric, _, font) in cases {
+        for value in [format!("\"{name}\""), numeric.to_string()] {
+            for (section, md) in [
+                ("paragraph", "A"),
+                ("code_block", "```\nA\n```"),
+                ("code_inline", "`A`"),
+            ] {
+                let toml = format!("[{section}]\nfont_weight = {value}");
+                let bytes =
+                    parse_into_bytes(md.to_string(), ConfigSource::Embedded(&toml), Some(&cfg))
+                        .unwrap();
+                assert_eq!(
+                    first_emitted_face(&bytes),
+                    expected_face(font),
+                    "{section} weight {value}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn weighted_italic_and_markdown_bold_select_matching_faces() {
+    use printpdf::BuiltinFont as B;
+    let fixtures = WeightFixtures::new();
+    let anchor = fixtures.write("Foo-Regular.ttf", B::Helvetica);
+    fixtures.write("Foo-Light.ttf", B::TimesRoman);
+    fixtures.write("foo_light_italic.TTF", B::TimesItalic);
+    fixtures.write("Foo-Bold.ttf", B::HelveticaBold);
+    fixtures.write("Foo-BoldOblique.ttf", B::HelveticaBoldOblique);
+    let cfg = FontConfig::new().with_default_font_source(FontSource::file(anchor));
+    for (md, style, font) in [
+        ("*A*", "font_weight = 300", B::TimesItalic),
+        (
+            "A",
+            "font_weight = 300\nfont_style = \"italic\"",
+            B::TimesItalic,
+        ),
+        ("**A**", "font_weight = 300", B::HelveticaBold),
+        ("***A***", "font_weight = 300", B::HelveticaBoldOblique),
+        // Missing medium matches regular; missing black matches bold.
+        ("A", "font_weight = 500", B::Helvetica),
+        ("A", "font_weight = 900", B::HelveticaBold),
+    ] {
+        let toml = format!("[paragraph]\n{style}");
+        let bytes =
+            parse_into_bytes(md.to_string(), ConfigSource::Embedded(&toml), Some(&cfg)).unwrap();
+        assert_eq!(
+            first_emitted_face(&bytes),
+            expected_face(font),
+            "{md}: {style}"
+        );
+    }
+}
+
+fn render_with(md: &str, toml: &str, cfg: &FontConfig) -> Vec<u8> {
+    parse_into_bytes(md.to_string(), ConfigSource::Embedded(toml), Some(cfg)).unwrap()
+}
+
+#[test]
+fn bold_faces_are_found_for_family_names_ending_in_weight_words() {
+    use printpdf::BuiltinFont as B;
+    let fixtures = WeightFixtures::new();
+    let anchor = fixtures.write("Serif Roman.ttf", B::TimesRoman);
+    fixtures.write("Serif Roman Bold.ttf", B::TimesBold);
+    fixtures.write("Serif Roman Italic.ttf", B::TimesItalic);
+    let cfg = FontConfig::new().with_default_font_source(FontSource::file(anchor));
+    for (md, font) in [
+        ("A", B::TimesRoman),
+        ("# A", B::TimesBold),
+        ("**A**", B::TimesBold),
+        ("*A*", B::TimesItalic),
+    ] {
+        assert_eq!(
+            first_emitted_face(&render_with(md, "", &cfg)),
+            expected_face(font),
+            "{md}"
+        );
+    }
+}
+
+#[test]
+fn bold_never_resolves_lighter_than_a_heavy_configured_face() {
+    use printpdf::BuiltinFont as B;
+    let fixtures = WeightFixtures::new();
+    fixtures.write("Sans.ttf", B::Helvetica);
+    fixtures.write("Sans Bold.ttf", B::HelveticaBold);
+    let anchor = fixtures.write("Sans Black.ttf", B::TimesBold);
+    let cfg = FontConfig::new().with_default_font_source(FontSource::file(anchor));
+    for md in ["A", "**A**", "# A"] {
+        assert_eq!(
+            first_emitted_face(&render_with(md, "", &cfg)),
+            expected_face(B::TimesBold),
+            "{md}"
+        );
+    }
+}
+
+#[test]
+fn inline_code_inherits_block_weight_unless_configured() {
+    use printpdf::BuiltinFont as B;
+    let fixtures = WeightFixtures::new();
+    let body = fixtures.write("Body.ttf", B::Helvetica);
+    fixtures.write("Body Bold.ttf", B::HelveticaBold);
+    let mono = fixtures.write("Mono.ttf", B::Courier);
+    fixtures.write("Mono Light.ttf", B::CourierOblique);
+    fixtures.write("Mono Bold.ttf", B::CourierBold);
+    let cfg = FontConfig::new()
+        .with_default_font_source(FontSource::file(body))
+        .with_code_font_source(FontSource::file(mono));
+    for (md, toml, font) in [
+        ("`A`", "", B::Courier),
+        ("# `A`", "", B::CourierBold),
+        ("**`A`**", "", B::CourierBold),
+        ("`A`", "[paragraph]\nfont_weight = \"bold\"", B::CourierBold),
+        (
+            "# `A`",
+            "[code_inline]\nfont_weight = \"light\"",
+            B::CourierOblique,
+        ),
+    ] {
+        assert_eq!(
+            first_emitted_face(&render_with(md, toml, &cfg)),
+            expected_face(font),
+            "{md}: {toml}"
+        );
+    }
+}
