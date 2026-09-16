@@ -2,6 +2,19 @@
 
 All notable changes to **markdown2pdf** are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release section below is what ships as the GitHub Release notes.
 
+## [1.6.1] - 2026-09-16
+
+A font release. System fonts are now found on Linux, where named fonts and the automatic Unicode body font silently fell back to the ASCII-only built-in Helvetica, and external fonts gain real weights beyond bold. One advisory is closed.
+
+Thanks to **Sanne Ladage** ([@sladage](https://github.com/sladage)), first-time contributor, for the font lookup and font weight work in [#122](https://github.com/theiskaa/markdown2pdf/pull/122).
+
+- **System fonts are found on Linux**: lookup only matched file names spelled exactly like the requested name and never descended into the per-package folders distributions use, so on Debian, Fedora, and Arch `--default-font "DejaVu Sans"`, `"Noto Sans"`, or `"Liberation Serif"` all rendered in built-in Helvetica, and so did documents with no font configured, which should have picked a Unicode system font automatically. Names now match ignoring case, spaces, hyphens, and underscores (`Noto Sans` finds `NotoSans-Regular.ttf`), and font directories are searched recursively. Thanks to Sanne Ladage.
+- **Per-user font directories are searched**: `$XDG_DATA_HOME/fonts` (default `~/.local/share/fonts`) and `~/.fonts` on Linux, `~/Library/Fonts` on macOS, and `%LOCALAPPDATA%\Microsoft\Windows\Fonts` on Windows. The new `fonts::font_search_dirs()` returns the full list of roots.
+- **Font weights beyond bold**: `font_weight` accepts `thin`, `extra-light`, `light`, `regular`, `medium`, `semibold`, `extra-bold`, and `black` (with common aliases) alongside `normal`, `bold`, and `100`..`900`. With an external font, each weight selects the matching static file next to the configured one, such as `Foo-Light.ttf` or `Foo-SemiBoldItalic.ttf`, falling back to the closest available weight. Weights apply to every configurable block, page furniture, and inline code. Built-in PDF fonts still offer only regular and bold. See [docs/configuration.md](docs/configuration.md#font-weights). Thanks to Sanne Ladage.
+- **Weights stay relative to the configured face**: the configured file is always the normal weight, so `**bold**` in `Arial Black` stays black instead of switching to the lighter Arial Bold, and a `Lato-Light` body now gets `Lato-Bold` for bold and `Lato-LightItalic` for italics. Sibling files are also discovered for names that were previously missed, such as `Foo-Regular.ttf` finding `Foo-Bold.ttf`.
+- **Inline code follows its surroundings**: code in a heading is consistently bold, where it was previously bold only when another part of the document happened to load the bold code face, and code inside an italic blockquote is italic. `[code_inline]` `font_weight` and `font_style` are now applied.
+- **Advisory closed**: RUSTSEC-2026-0285 (`rustls`, TLS 1.3 handshake messages accepted across encryption levels), reachable only with the `fetch` feature. `cargo audit` reports zero vulnerabilities.
+
 ## [1.6.0] - 2026-07-22
 
 A security and robustness release. A crash on malformed HTML is fixed, remote fetching is hardened against SSRF and unbounded downloads, local image reads can now be confined to a directory, three RUSTSEC advisories are closed, and CI gained real gates for formatting, linting, and dependency audits.
