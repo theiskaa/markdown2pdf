@@ -643,3 +643,23 @@ fn default_config_draws_bold_and_italic_differently_from_plain_text() {
         .expect("render must succeed");
     assert_styles_are_distinct(&bytes);
 }
+
+#[test]
+fn cli_with_default_config_draws_bold_and_italic_differently_from_plain_text() {
+    // The binary as users run it, with an empty config so neither a
+    // per-user nor a project config can pick the font.
+    let dir = WeightFixtures::new();
+    let config = dir.0.join("empty.toml");
+    std::fs::write(&config, "").unwrap();
+    let output = dir.0.join("out.pdf");
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_markdown2pdf"))
+        .current_dir(&dir.0)
+        .arg("-c")
+        .arg(&config)
+        .args(["-s", STYLED_PARAGRAPHS, "-o"])
+        .arg(&output)
+        .status()
+        .expect("markdown2pdf runs");
+    assert!(status.success());
+    assert_styles_are_distinct(&std::fs::read(&output).unwrap());
+}
