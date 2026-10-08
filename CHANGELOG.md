@@ -2,6 +2,20 @@
 
 All notable changes to **markdown2pdf** are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release section below is what ships as the GitHub Release notes.
 
+## [1.6.2] - 2026-10-08
+
+A font fix. Since 1.5.0, documents rendered without a configured font lost all bold and italic on Windows and macOS: every emphasized word came out in the regular face.
+
+Thanks to **Marc-Antoine Kruzik** ([@maf-kruzik-marc-antoine](https://github.com/maf-kruzik-marc-antoine)) for the report and the version bisect in [#124](https://github.com/theiskaa/markdown2pdf/issues/124).
+
+- **Bold and italic faces are found on Windows**: sibling faces were matched by file name alone, but Windows names them with short codes (`segoeuib.ttf`, `arialbd.ttf`, `timesbi.ttf`), so the automatically picked Segoe UI, and any configured Windows font, never found its bold or italic files. Faces are now also matched by the family name stored in each font, with weight and slant read from the font itself. Only the font headers are read, so scanning `C:\Windows\Fonts` stays fast.
+- **Emphasis never silently disappears**: when a family has no bold or italic face at all, such as Geneva on macOS or Tahoma's missing italic, bold is synthesized by stroking the glyph outlines and italic by slanting them. Families with real faces are unaffected.
+- **Windows font names resolve**: `font_family = "Times New Roman"`, `"Courier New"`, or `"Consolas"` failed on Windows because the files are `times.ttf`, `cour.ttf`, and `consola.ttf`. Lookup now falls back to the family name inside each font when no file name matches.
+- **Arial is the macOS default body font**: with no font configured, macOS now picks Arial, which has real bold and italic faces and covers more symbols, ahead of the regular-only Geneva.
+- **CI runs on Windows and macOS**: the default test suite now runs on all three platforms, with a smoke test that renders emphasis through the real binary.
+
+Resolves [#124](https://github.com/theiskaa/markdown2pdf/issues/124).
+
 ## [1.6.1] - 2026-09-16
 
 A font release. System fonts are now found on Linux, where named fonts and the automatic Unicode body font silently fell back to the ASCII-only built-in Helvetica, and external fonts gain real weights beyond bold. One advisory is closed.

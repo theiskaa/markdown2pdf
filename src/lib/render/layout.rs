@@ -8,7 +8,7 @@
 use printpdf::{
     Actions, BorderArray, ColorArray, Destination, LineDashPattern, LinePoint, LinkAnnotation, Mm,
     Op, PaintMode, PdfDocument, PdfPage, Point, Polygon, PolygonRing, Pt, RawImage, Rect, Rgb,
-    TextItem, WindingOrder, XObjectId, XObjectTransform,
+    TextItem, TextMatrix, TextRenderingMode, WindingOrder, XObjectId, XObjectTransform,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -659,10 +659,9 @@ impl<'a> Engine<'a> {
 
         self.close_text_section();
         self.ensure_text_section();
-        self.move_cursor_to(center_x, baseline_y);
-        self.page_ops.push(Op::SetFillColor {
-            col: rgb_color(style.text_color_rgb()),
-        });
+        self.place_run(center_x, baseline_y, flags);
+        let fill = rgb_color(style.text_color_rgb());
+        self.page_ops.push(Op::SetFillColor { col: fill.clone() });
         emit_text_chunks(
             &mut self.page_ops,
             self.font_set,
@@ -670,6 +669,7 @@ impl<'a> Engine<'a> {
             text,
             size_pt,
             self.letter_spacing_pt,
+            &fill,
         );
         self.close_text_section();
 
@@ -785,12 +785,11 @@ impl<'a> Engine<'a> {
         let baseline_y = self.y_from_top_pt + size_pt;
 
         // Heading-text portion (left).
+        let fill = rgb_color(style.text_color_rgb());
         self.close_text_section();
         self.ensure_text_section();
         self.move_cursor_to(row_left, baseline_y);
-        self.page_ops.push(Op::SetFillColor {
-            col: rgb_color(style.text_color_rgb()),
-        });
+        self.page_ops.push(Op::SetFillColor { col: fill.clone() });
         emit_text_chunks(
             &mut self.page_ops,
             self.font_set,
@@ -798,6 +797,7 @@ impl<'a> Engine<'a> {
             &anchor.text,
             size_pt,
             self.letter_spacing_pt,
+            &fill,
         );
 
         // Page-number portion (right-aligned at row_right).
@@ -814,6 +814,7 @@ impl<'a> Engine<'a> {
             &page_str,
             size_pt,
             self.letter_spacing_pt,
+            &fill,
         );
         self.close_text_section();
 
@@ -1435,6 +1436,16 @@ impl<'a> Engine<'a> {
         });
     }
 
+    /// [`move_cursor_to`](Self::move_cursor_to) for a fresh text
+    /// section that draws one run with `flags`: slants the text matrix
+    /// when the run's face has no italic of its own. The section must
+    /// be closed before any `T*` line break.
+    fn place_run(&mut self, x_pt_from_left: f32, y_pt_from_top: f32, flags: RunFlags) {
+        let y_pt = self.page_height_pt() - y_pt_from_top;
+        let slant = self.font_set.needs_synthetic_italic(flags);
+        self.page_ops.push(text_origin(x_pt_from_left, y_pt, slant));
+    }
+
     /// Enter a block: advance the margin-before, reserve top padding,
     /// shrink the content edges by horizontal padding, and remember
     /// the bounding box so [`end_block`] can paint background + border.
@@ -1641,17 +1652,15 @@ impl<'a> Engine<'a> {
             }
         };
 
-        let x_mm = pt_to_mm(x_pt);
-        let y_mm = pt_to_mm(self.page_height_pt() - y_pt);
-
+        let fill = rgb_color(style.text_color_rgb());
         ops.push(Op::SaveGraphicsState);
         ops.push(Op::StartTextSection);
-        ops.push(Op::SetTextCursor {
-            pos: Point::new(Mm(x_mm), Mm(y_mm)),
-        });
-        ops.push(Op::SetFillColor {
-            col: rgb_color(style.text_color_rgb()),
-        });
+        ops.push(text_origin(
+            x_pt,
+            self.page_height_pt() - y_pt,
+            self.font_set.needs_synthetic_italic(flags),
+        ));
+        ops.push(Op::SetFillColor { col: fill.clone() });
         emit_text_chunks(
             ops,
             self.font_set,
@@ -1659,6 +1668,7 @@ impl<'a> Engine<'a> {
             text,
             size_pt,
             self.letter_spacing_pt,
+            &fill,
         );
         ops.push(Op::EndTextSection);
         ops.push(Op::RestoreGraphicsState);
@@ -2941,7 +2951,9 @@ impl<'a> Engine<'a> {
                     self.page_ops.push(Op::SetLineHeight {
                         lh: Pt(size_pt * line_height.max(0.5)),
                     });
-                    self.page_ops.push(Op::SetFillColor { col: bullet_col });
+                    self.page_ops.push(Op::SetFillColor {
+                        col: bullet_col.clone(),
+                    });
                     emit_text_chunks(
                         &mut self.page_ops,
                         self.font_set,
@@ -2949,6 +2961,7 @@ impl<'a> Engine<'a> {
                         &bullet_text,
                         size_pt,
                         self.letter_spacing_pt,
+                        &bullet_col,
                     );
                 }
             }
@@ -3636,14 +3649,11 @@ impl<'a> Engine<'a> {
                     self.close_text_section();
                     self.page_ops.push(Op::SaveGraphicsState);
                     self.page_ops.push(Op::StartTextSection);
-                    let x_mm = pt_to_mm(x_cursor_pt);
-                    let y_mm = pt_to_mm(self.page_height_pt() - seg_baseline);
-                    self.page_ops.push(Op::SetTextCursor {
-                        pos: Point::new(Mm(x_mm), Mm(y_mm)),
-                    });
+                    self.place_run(x_cursor_pt, seg_baseline, seg.flags);
                     if let Some(c) = color.clone() {
                         self.page_ops.push(Op::SetFillColor { col: c });
                     }
+                    let fill = color.clone().unwrap_or_else(|| rgb_color((0, 0, 0)));
                     emit_text_chunks(
                         &mut self.page_ops,
                         self.font_set,
@@ -3651,19 +3661,35 @@ impl<'a> Engine<'a> {
                         &seg.text,
                         seg_size,
                         self.letter_spacing_pt,
+                        &fill,
                     );
                     self.page_ops.push(Op::EndTextSection);
                     self.page_ops.push(Op::RestoreGraphicsState);
                     cursor_needs_reset = true;
                     line_was_broken = true;
                 } else {
-                    if cursor_needs_reset {
+                    // A face without italic draws this segment slanted
+                    // in its own section, breaking out like a
+                    // superscript so the shear never reaches the rest
+                    // of the line.
+                    let slant = self.font_set.needs_synthetic_italic(seg.flags);
+                    if slant {
+                        self.close_text_section();
+                        self.ensure_text_section();
+                        self.place_run(x_cursor_pt, baseline_y_pt, seg.flags);
+                        if matches!(align, TextAlignment::Justify) {
+                            self.page_ops.push(Op::SetWordSpacing {
+                                pt: Pt(word_spacing_pt),
+                            });
+                        }
+                    } else if cursor_needs_reset {
                         // Re-open the line's main section after a
                         // superscript broke out. Place the cursor at
                         // the post-superscript x position on the
-                        // baseline AND restore the leading + color so
-                        // any subsequent `T*` line break in this
-                        // section behaves like the original BT.
+                        // baseline AND restore the leading, colour and
+                        // word spacing so any subsequent `T*` line
+                        // break in this section behaves like the
+                        // original BT.
                         self.ensure_text_section();
                         let x_mm = pt_to_mm(x_cursor_pt);
                         let y_mm = pt_to_mm(self.page_height_pt() - baseline_y_pt);
@@ -3676,29 +3702,33 @@ impl<'a> Engine<'a> {
                         if let Some(c) = color.clone() {
                             self.page_ops.push(Op::SetFillColor { col: c });
                         }
+                        if matches!(align, TextAlignment::Justify) {
+                            self.page_ops.push(Op::SetWordSpacing {
+                                pt: Pt(word_spacing_pt),
+                            });
+                        }
                         cursor_needs_reset = false;
                     }
                     // Restore the text fill colour: link colour for a
                     // link, `[mark]` colour for a highlight, `[code_inline]`
                     // colour for inline code, otherwise the block colour.
-                    if seg.link.is_some() {
-                        let lc = if self.is_unresolved_internal_link(&seg.link) {
+                    let fill = if seg.link.is_some() {
+                        Some(if self.is_unresolved_internal_link(&seg.link) {
                             rgb_color(UNRESOLVED_LINK_COLOR)
                         } else {
                             link_color.clone().unwrap_or_else(|| rgb_color((0, 0, 0)))
-                        };
-                        self.page_ops.push(Op::SetFillColor { col: lc });
+                        })
                     } else if seg.flags.highlight {
-                        self.page_ops.push(Op::SetFillColor {
-                            col: mark_color.clone(),
-                        });
+                        Some(mark_color.clone())
                     } else if seg.flags.monospace && !self.in_code_block {
-                        self.page_ops.push(Op::SetFillColor {
-                            col: code_inline_color.clone(),
-                        });
-                    } else if let Some(c) = color.clone() {
-                        self.page_ops.push(Op::SetFillColor { col: c });
+                        Some(code_inline_color.clone())
+                    } else {
+                        color.clone()
+                    };
+                    if let Some(col) = fill.clone() {
+                        self.page_ops.push(Op::SetFillColor { col });
                     }
+                    let fill = fill.unwrap_or_else(|| rgb_color((0, 0, 0)));
                     // Insert the inline-code left padding as a TJ
                     // negative offset (in thousandths of em) — moves
                     // the text cursor right by `pad_before_pt` without
@@ -3716,11 +3746,17 @@ impl<'a> Engine<'a> {
                         &seg.text,
                         seg_size,
                         self.letter_spacing_pt,
+                        &fill,
                     );
                     if pad_after_pt > 0.0 {
                         self.page_ops.push(Op::ShowText {
                             items: vec![TextItem::Offset(-pad_after_pt * 1000.0 / seg_size)],
                         });
+                    }
+                    if slant {
+                        self.close_text_section();
+                        cursor_needs_reset = true;
+                        line_was_broken = true;
                     }
                 }
 
@@ -3987,6 +4023,7 @@ fn emit_text_chunks(
     text: &str,
     size_pt: f32,
     letter_spacing_pt: f32,
+    fill: &Color,
 ) {
     // `Tc` adds spacing after every glyph. Emit it only when set —
     // a zero value leaves the op out so non-letter-spaced documents
@@ -4007,9 +4044,49 @@ fn emit_text_chunks(
         } else {
             chunk.text
         };
+        // A face without bold is thickened by stroking its outlines
+        // in the fill colour. Advances are unchanged, so measurement
+        // and wrapping don't need to know.
+        if chunk.synthetic_bold {
+            ops.push(Op::SetTextRenderingMode {
+                mode: TextRenderingMode::FillStroke,
+            });
+            ops.push(Op::SetOutlineColor { col: fill.clone() });
+            ops.push(Op::SetOutlineThickness {
+                pt: Pt(size_pt * SYNTHETIC_BOLD_STROKE_EM),
+            });
+        }
         ops.push(Op::ShowText {
             items: vec![TextItem::Text(emit)],
         });
+        if chunk.synthetic_bold {
+            ops.push(Op::SetTextRenderingMode {
+                mode: TextRenderingMode::Fill,
+            });
+        }
+    }
+}
+
+/// Stroke width, in em, that thickens a regular face into a stand-in
+/// for bold when the family has no bold face.
+const SYNTHETIC_BOLD_STROKE_EM: f32 = 0.04;
+
+/// Horizontal shear (tan 12°, the slant of Helvetica Oblique) applied
+/// to a face that has no italic of its own.
+const SYNTHETIC_ITALIC_SHEAR: f32 = 0.2126;
+
+/// The op that starts a fresh text section's first run at
+/// (`x_pt`, `y_pt`) from the page's bottom-left corner: a plain `Td`,
+/// or a sheared `Tm` when the face needs synthetic italic.
+fn text_origin(x_pt: f32, y_pt: f32, slant: bool) -> Op {
+    if slant {
+        Op::SetTextMatrix {
+            matrix: TextMatrix::Raw([1.0, 0.0, SYNTHETIC_ITALIC_SHEAR, 1.0, x_pt, y_pt]),
+        }
+    } else {
+        Op::SetTextCursor {
+            pos: Point::new(Mm(pt_to_mm(x_pt)), Mm(pt_to_mm(y_pt))),
+        }
     }
 }
 
