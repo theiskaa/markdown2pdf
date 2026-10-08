@@ -2,7 +2,7 @@
 
 All notable changes to **markdown2pdf** are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release section below is what ships as the GitHub Release notes.
 
-## [Unreleased]
+## [1.6.2] - 2026-10-08
 
 A font fix. Since 1.5.0, documents rendered without a configured font lost all bold and italic on Windows and macOS: every emphasized word came out in the regular face.
 
