@@ -1,0 +1,145 @@
+# One-off end-to-end verification for #124, not meant for main.
+#
+# On real Windows, macOS, and Linux machines, renders a set of scenarios
+# with the released v1.4.0 (last good), the released v1.6.1 (reported
+# broken), and the fix built from its own branch, then checks how every
+# word is drawn. Fails if the fix gets anything wrong or if v1.6.1 does
+# not reproduce the bug on Windows and macOS. See verify.py.
+name: Verify issue 124
+
+on:
+  push:
+    branches: [verify/issue-124]
+
+env:
+  FIX_BRANCH: bugfix/windows-emphasis-faces
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            exe: markdown2pdf.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.xz
+            exe: markdown2pdf
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.xz
+            exe: markdown2pdf
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout verification tools
+        uses: actions/checkout@v4
+
+      - name: Checkout the fix
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FIX_BRANCH }}
+          path: fix
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fix
+
+      - name: Build the fix
+        run: |
+          cargo build --release --manifest-path fix/Cargo.toml
+          echo "FIX_SHA=$(git -C fix rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the PDF inspector's dependencies
+        run: python -m pip install pypdf fonttools pypdfium2 pillow
+
+      - name: Download released binaries
+        run: |
+          for v in v1.4.0 v1.6.1; do
+            mkdir -p "rel/$v"
+            gh release download "$v" -p "markdown2pdf-${{ matrix.target }}.${{ matrix.archive }}" -D "rel/$v"
+            if [ "${{ matrix.archive }}" = zip ]; then
+              unzip -q "rel/$v"/*.zip -d "rel/$v"
+            else
+              tar -xJf "rel/$v"/*.tar.xz -C "rel/$v"
+            fi
+          done
+
+      - name: Show the system's font files
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            ls /c/Windows/Fonts | grep -iE '^(segoeui|segui|arial|times|georgia|verdana|calibri|trebuc|tahoma|consola|cour)' || true
+          elif [ "$RUNNER_OS" = macOS ]; then
+            ls /System/Library/Fonts/Supplemental | grep -iE '^(arial|georgia|verdana|tahoma|times|trebuchet|courier)' || true
+          else
+            find /usr/share/fonts -iname '*.ttf' | grep -iE 'dejavu|liberation' || true
+          fi
+
+      - name: Verify
+        run: |
+          old="$(find rel/v1.4.0 -name '${{ matrix.exe }}' -type f | head -1)"
+          broken="$(find rel/v1.6.1 -name '${{ matrix.exe }}' -type f | head -1)"
+          python .github/verify-issue-124/verify.py --out out --sha "$FIX_SHA" \
+            --bin "v1.4.0=$old" \
+            --bin "v1.6.1=$broken" \
+            --bin "fix=fix/target/release/${{ matrix.exe }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verify-${{ matrix.os }}
+          path: out/
+
+      # A ready-to-run Windows build of the fix for the reporter to try.
+      - name: Package the Windows test build
+        if: runner.os == 'Windows'
+        run: |
+          mkdir -p test-build
+          cp fix/target/release/markdown2pdf.exe test-build/
+          ./test-build/markdown2pdf.exe --version
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: markdown2pdf-windows-test-build
+          path: test-build/
+
+  # How a Windows user would try the fix before a release.
+  install-from-git:
+    name: cargo install --git (windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout verification tools
+        uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the fix from git
+        run: cargo install --git "https://github.com/${{ github.repository }}" --branch "$FIX_BRANCH" --locked --root inst
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the PDF inspector's dependencies
+        run: python -m pip install pypdf fonttools pypdfium2 pillow
+      - name: Verify the installed binary
+        run: |
+          python .github/verify-issue-124/verify.py --out out --fix installed \
+            --only "issue command,issue via cmd.exe,styles,headings,unicode text" \
+            --bin "installed=inst/bin/markdown2pdf.exe"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verify-install-from-git
+          path: out/
