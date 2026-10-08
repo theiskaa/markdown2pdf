@@ -254,16 +254,21 @@ pub fn find_system_font(name: &str) -> Option<PathBuf> {
 /// common-case Latin+punctuation degradation, not full multi-script
 /// coverage.
 ///
+/// Candidates with real bold and italic faces come first: a family
+/// with only a regular face still renders emphasis, but synthesized.
+///
 /// `.ttc` collection files are silently skipped by [`find_system_font`],
 /// so candidates like `Helvetica Neue` or `Lucida Grande` won't
 /// resolve on current macOS even though they're listed; the list
 /// keeps them so the same probe stays correct once a `.ttc`-capable
-/// loader lands. Until then, `Geneva` (always present in
-/// `/System/Library/Fonts`) is the macOS winner.
+/// loader lands. Until then, `Arial` (in
+/// `/System/Library/Fonts/Supplemental`) is the macOS winner, with
+/// regular-only `Geneva` behind it.
 pub fn default_body_source() -> Option<FontSource> {
     #[cfg(target_os = "macos")]
     const CANDIDATES: &[&str] = &[
         "Helvetica Neue",
+        "Arial",
         "Geneva",
         "Lucida Grande",
         "Arial Unicode MS",
