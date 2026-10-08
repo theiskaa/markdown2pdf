@@ -523,3 +523,123 @@ fn inline_code_inherits_block_weight_unless_configured() {
         );
     }
 }
+
+/// How each text run on the first page is drawn: the font, the text
+/// rendering mode (fill, fill + stroke, ...), and the slant of the text
+/// matrix. Real faces, stroked bold, and slanted italic all show up
+/// here, so a style that changes nothing leaves the entry unchanged.
+fn run_styles(bytes: &[u8]) -> Vec<(String, i64, [String; 4])> {
+    let mut doc = lopdf::Document::load_mem(bytes).unwrap();
+    doc.decompress();
+    let page = *doc.get_pages().values().next().unwrap();
+    let content = lopdf::content::Content::decode(&doc.get_page_content(page)).unwrap();
+    let identity = || ["1", "0", "0", "1"].map(String::from);
+    let number = |o: &lopdf::Object| format!("{:.3}", o.as_float().unwrap());
+    let (mut font, mut mode, mut matrix) = (String::new(), 0, identity());
+    let mut saved = Vec::new();
+    let mut runs = Vec::new();
+    for op in content.operations {
+        match op.operator.as_str() {
+            "q" => saved.push((font.clone(), mode)),
+            "Q" => (font, mode) = saved.pop().unwrap(),
+            "BT" => matrix = identity(),
+            "Tf" => font = String::from_utf8_lossy(op.operands[0].as_name().unwrap()).into_owned(),
+            "Tr" => mode = op.operands[0].as_i64().unwrap(),
+            "Tm" => matrix = std::array::from_fn(|i| number(&op.operands[i])),
+            "Tj" | "TJ" => runs.push((font.clone(), mode, matrix.clone())),
+            _ => {}
+        }
+    }
+    runs
+}
+
+/// Asserts that the four runs of [`STYLED_PARAGRAPHS`] (plain, bold,
+/// italic, bold italic) are each drawn differently.
+fn assert_styles_are_distinct(bytes: &[u8]) {
+    let runs = run_styles(bytes);
+    assert_eq!(runs.len(), 4, "one run per paragraph: {runs:?}");
+    let names = ["plain", "bold", "italic", "bold italic"];
+    for i in 0..4 {
+        for j in i + 1..4 {
+            assert_ne!(
+                runs[i], runs[j],
+                "{} draws exactly like {}",
+                names[j], names[i]
+            );
+        }
+    }
+}
+
+const STYLED_PARAGRAPHS: &str = "A\n\n**A**\n\n*A*\n\n***A***";
+
+#[test]
+fn windows_short_file_names_still_find_bold_and_italic_faces() {
+    // Issue #124. Windows names faces with short codes instead of style
+    // words, so the family can only be recognized from the fonts
+    // themselves. The Courier files are another family in the same
+    // directory and must not be picked up.
+    use printpdf::BuiltinFont as B;
+    let fixtures = WeightFixtures::new();
+    let segoe = fixtures.write("segoeui.ttf", B::Helvetica);
+    fixtures.write("segoeuib.ttf", B::HelveticaBold);
+    fixtures.write("segoeuii.ttf", B::HelveticaOblique);
+    fixtures.write("segoeuiz.ttf", B::HelveticaBoldOblique);
+    let times = fixtures.write("times.ttf", B::TimesRoman);
+    fixtures.write("timesbd.ttf", B::TimesBold);
+    fixtures.write("timesi.ttf", B::TimesItalic);
+    fixtures.write("timesbi.ttf", B::TimesBoldItalic);
+    fixtures.write("cour.ttf", B::Courier);
+    fixtures.write("courbd.ttf", B::CourierBold);
+    for (anchor, faces) in [
+        (
+            segoe,
+            [
+                B::Helvetica,
+                B::HelveticaBold,
+                B::HelveticaOblique,
+                B::HelveticaBoldOblique,
+            ],
+        ),
+        (
+            times,
+            [
+                B::TimesRoman,
+                B::TimesBold,
+                B::TimesItalic,
+                B::TimesBoldItalic,
+            ],
+        ),
+    ] {
+        let cfg = FontConfig::new().with_default_font_source(FontSource::file(&anchor));
+        for (md, font) in ["A", "**A**", "*A*", "***A***"].into_iter().zip(faces) {
+            assert_eq!(
+                first_emitted_face(&render_with(md, "", &cfg)),
+                expected_face(font),
+                "{}: {md}",
+                anchor.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn emphasis_stays_visible_when_the_family_has_only_a_regular_face() {
+    // Some fonts ship a single regular file (Geneva on macOS). Bold and
+    // italic must still draw differently from plain text instead of
+    // silently falling back to the regular face.
+    use printpdf::BuiltinFont as B;
+    let fixtures = WeightFixtures::new();
+    let anchor = fixtures.write("Solo.ttf", B::Helvetica);
+    let cfg = FontConfig::new().with_default_font_source(FontSource::file(anchor));
+    assert_styles_are_distinct(&render_with(STYLED_PARAGRAPHS, "", &cfg));
+}
+
+#[test]
+fn default_config_draws_bold_and_italic_differently_from_plain_text() {
+    // Issue #124 end to end: no font configured, so the body font is
+    // whatever the host provides. Whatever that is, emphasis must
+    // survive.
+    let bytes = parse_into_bytes(STYLED_PARAGRAPHS.to_string(), ConfigSource::Default, None)
+        .expect("render must succeed");
+    assert_styles_are_distinct(&bytes);
+}
