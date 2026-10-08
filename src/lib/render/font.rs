@@ -31,8 +31,8 @@ use ttf_parser::Face;
 
 use super::ir::{RunFlags, VariantUsage};
 use crate::fonts::{
-    FontConfig, FontSource, default_body_source, face_meta_from_bytes, find_system_font,
-    normalize_font_name, parse_face_style, read_face_meta, split_face_stem,
+    FontConfig, FontSource, cached_face_meta, default_body_source, face_meta_from_bytes,
+    find_system_font, normalize_font_name, parse_face_style, split_face_stem,
 };
 
 /// The set of built-in PDF fonts the renderer can fall back to when
@@ -927,7 +927,7 @@ impl SiblingFaces {
             .map(normalize_font_name)
             .unwrap_or_default();
         let (family, name_weight, name_italic) = split_face_stem(&stem);
-        let anchor_meta = read_face_meta(anchor);
+        let anchor_meta = cached_face_meta(anchor);
         // A name without a style suffix says nothing about the face.
         let anchor_style = match &anchor_meta {
             Some(meta) if family == stem => (meta.weight, meta.italic),
@@ -971,7 +971,7 @@ impl SiblingFaces {
         }
         if let Some(anchor_meta) = &anchor_meta {
             for path in unnamed {
-                if let Some(meta) = read_face_meta(&path)
+                if let Some(meta) = cached_face_meta(&path)
                     && meta.same_family(anchor_meta)
                 {
                     faces.entry((meta.weight, meta.italic)).or_insert(path);

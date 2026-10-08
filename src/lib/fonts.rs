@@ -511,46 +511,90 @@ fn collect_font_files(
 /// regular face (`NotoSans-Regular.ttf` for `Noto Sans`), then the
 /// shortest stem that starts with the name (`Tahoma Bold.ttf` before
 /// `Tahoma Bold Italic.ttf`). Earlier directories win ties.
+///
+/// When no file name matches, the family name stored in each font is
+/// compared instead, preferring its regular upright face. Windows
+/// stores `Times New Roman` as `times.ttf` and `Consolas` as
+/// `consola.ttf`, which only this second pass can find.
 fn find_system_font_in(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     let wanted: Vec<String> = [name.to_string(), name.replace(" MS", "")]
         .iter()
         .map(|n| normalize_font_name(n))
         .collect();
     let mut seen = std::collections::HashSet::new();
-    let mut best: Option<((u8, usize), PathBuf)> = None;
+    let mut files = Vec::new();
     for dir in dirs {
-        let mut files = Vec::new();
         collect_font_files(dir, FONT_DIR_MAX_DEPTH, &mut seen, &mut files);
-        for path in files {
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            let stem = normalize_font_name(stem);
-            let rank = wanted
-                .iter()
-                .filter_map(|w| {
-                    let suffix = stem.strip_prefix(w.as_str())?;
-                    Some(if suffix.is_empty() {
-                        (0, 0)
-                    } else if parse_face_style(suffix) == Some((400, false)) {
-                        (1, 0)
-                    } else {
-                        (2, stem.len())
-                    })
+    }
+    let mut best: Option<((u8, usize), &PathBuf)> = None;
+    for path in &files {
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let stem = normalize_font_name(stem);
+        let rank = wanted
+            .iter()
+            .filter_map(|w| {
+                let suffix = stem.strip_prefix(w.as_str())?;
+                Some(if suffix.is_empty() {
+                    (0, 0)
+                } else if parse_face_style(suffix) == Some((400, false)) {
+                    (1, 0)
+                } else {
+                    (2, stem.len())
                 })
-                .min();
-            let Some(rank) = rank else {
-                continue;
-            };
-            if rank.0 == 0 {
-                return Some(path);
-            }
-            if best.as_ref().is_none_or(|(r, _)| rank < *r) {
-                best = Some((rank, path));
-            }
+            })
+            .min();
+        let Some(rank) = rank else {
+            continue;
+        };
+        if rank.0 == 0 {
+            return Some(path.clone());
+        }
+        if best.as_ref().is_none_or(|(r, _)| rank < *r) {
+            best = Some((rank, path));
         }
     }
-    best.map(|(_, path)| path)
+    if let Some((_, path)) = best {
+        return Some(path.clone());
+    }
+    files
+        .iter()
+        .filter_map(|path| {
+            let meta = cached_face_meta(path)?;
+            wanted
+                .contains(&meta.family)
+                .then(|| ((meta.italic, meta.weight.abs_diff(400)), path))
+        })
+        .min_by_key(|(rank, _)| *rank)
+        .map(|(_, path)| path.clone())
+}
+
+/// [`read_face_meta`] remembered per file for the life of the process,
+/// so repeated lookups over the same font directories read each header
+/// once. An entry is refreshed when the file's modification time
+/// changes.
+pub(crate) fn cached_face_meta(path: &Path) -> Option<FaceMeta> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::SystemTime;
+
+    type Cache = HashMap<PathBuf, (Option<SystemTime>, Option<FaceMeta>)>;
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Ok(cache) = cache.lock()
+        && let Some((stamp, meta)) = cache.get(path)
+        && *stamp == modified
+        && modified.is_some()
+    {
+        return meta.clone();
+    }
+    let meta = read_face_meta(path);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(path.to_path_buf(), (modified, meta.clone()));
+    }
+    meta
 }
 
 #[cfg(test)]
@@ -701,6 +745,40 @@ mod tests {
             std::os::unix::fs::symlink(&dir, dir.join("fonts/loop")).unwrap();
             assert!(find_system_font_in("Foo", std::slice::from_ref(&dir)).is_some());
             assert!(find_system_font_in("Missing", &[dir]).is_none());
+        });
+    }
+
+    /// Like [`with_font_dir`], but each file holds a real font so its
+    /// metadata can be read.
+    fn with_real_font_dir(files: &[(&str, printpdf::BuiltinFont)], f: impl FnOnce(PathBuf)) {
+        let names: Vec<&str> = files.iter().map(|(name, _)| *name).collect();
+        with_font_dir(&names, |dir| {
+            for (name, font) in files {
+                std::fs::write(dir.join(name), font.get_subset_font().bytes).unwrap();
+            }
+            f(dir);
+        });
+    }
+
+    #[test]
+    fn find_system_font_falls_back_to_the_family_name_inside_the_font() {
+        use printpdf::BuiltinFont as B;
+        let files = [
+            ("timesbd.ttf", B::TimesBold),
+            ("times.ttf", B::TimesRoman),
+            ("timesi.ttf", B::TimesItalic),
+            ("cour.ttf", B::Courier),
+        ];
+        with_real_font_dir(&files, |dir| {
+            let find = |name| {
+                find_system_font_in(name, std::slice::from_ref(&dir))
+                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            };
+            assert_eq!(find("Times New Roman").as_deref(), Some("times.ttf"));
+            assert_eq!(find("courier new").as_deref(), Some("cour.ttf"));
+            // A file name match still wins over metadata.
+            assert_eq!(find("Times").as_deref(), Some("times.ttf"));
+            assert_eq!(find("Georgia"), None);
         });
     }
 
