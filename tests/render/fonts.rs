@@ -644,6 +644,26 @@ fn default_config_draws_bold_and_italic_differently_from_plain_text() {
     assert_styles_are_distinct(&bytes);
 }
 
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn default_body_font_has_real_bold_and_italic_faces() {
+    // The automatically picked body font on Windows (Segoe UI) and
+    // macOS (Arial) ships real bold and italic faces, so none of them
+    // may be synthesized: each style needs its own font, unstroked and
+    // unslanted. Linux is left out because minimal installs such as
+    // Debian's fonts-dejavu-core have no DejaVu Sans oblique.
+    let bytes = parse_into_bytes(STYLED_PARAGRAPHS.to_string(), ConfigSource::Default, None)
+        .expect("render must succeed");
+    let runs = run_styles(&bytes);
+    assert_eq!(runs.len(), 4, "one run per paragraph: {runs:?}");
+    let upright = ["1", "0", "0", "1"].map(String::from);
+    for (font, mode, matrix) in &runs {
+        assert_eq!((*mode, matrix), (0, &upright), "{font} is synthesized");
+    }
+    let fonts: std::collections::BTreeSet<_> = runs.iter().map(|(font, ..)| font).collect();
+    assert_eq!(fonts.len(), 4, "each style needs its own face: {runs:?}");
+}
+
 #[test]
 fn cli_with_default_config_draws_bold_and_italic_differently_from_plain_text() {
     // The binary as users run it, with an empty config so neither a
