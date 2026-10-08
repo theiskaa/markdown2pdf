@@ -32,7 +32,7 @@ use ttf_parser::Face;
 use super::ir::{RunFlags, VariantUsage};
 use crate::fonts::{
     FontConfig, FontSource, default_body_source, find_system_font, normalize_font_name,
-    parse_face_style, split_face_stem,
+    parse_face_style, read_face_meta, split_face_stem,
 };
 
 /// The set of built-in PDF fonts the renderer can fall back to when
@@ -860,7 +860,8 @@ fn load_external_family(
 /// and slant. The configured file always stands in for normal text.
 struct SiblingFaces {
     faces: BTreeMap<(u16, bool), PathBuf>,
-    /// Weight and slant declared by the configured file's own name.
+    /// Weight and slant of the configured file, from its name when the
+    /// name carries a style suffix and from its metadata otherwise.
     anchor: (u16, bool),
 }
 
@@ -873,15 +874,27 @@ impl SiblingFaces {
     /// own style suffixes are removed (`Foo-Bold` for `Foo-Regular`).
     /// The first form wins, so a family name that ends in a weight word
     /// such as `Roman` or `Black` is not cut short.
+    ///
+    /// Files whose names match neither form still join the family when
+    /// their own metadata names the configured file's family. That is
+    /// how Windows faces such as `segoeuib.ttf` next to `segoeui.ttf`
+    /// are found. Name matches take precedence over metadata matches.
     fn discover(anchor: &Path) -> Self {
         let stem = anchor
             .file_stem()
             .and_then(|s| s.to_str())
             .map(normalize_font_name)
             .unwrap_or_default();
-        let (family, anchor_weight, anchor_italic) = split_face_stem(&stem);
+        let (family, name_weight, name_italic) = split_face_stem(&stem);
+        let anchor_meta = read_face_meta(anchor);
+        // A name without a style suffix says nothing about the face.
+        let anchor_style = match &anchor_meta {
+            Some(meta) if family == stem => (meta.weight, meta.italic),
+            _ => (name_weight, name_italic),
+        };
         let mut faces = BTreeMap::new();
         let mut extends_anchor = BTreeSet::new();
+        let mut unnamed = Vec::new();
         let parent = anchor
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -908,15 +921,26 @@ impl SiblingFaces {
                 }
             } else {
                 let (name_family, weight, italic) = split_face_stem(&name);
-                if name_family == family && !extends_anchor.contains(&(weight, italic)) {
+                if name_family != family {
+                    unnamed.push(path);
+                } else if !extends_anchor.contains(&(weight, italic)) {
                     faces.entry((weight, italic)).or_insert(path);
                 }
             }
         }
-        faces.insert((anchor_weight, anchor_italic), anchor.to_path_buf());
+        if let Some(anchor_meta) = &anchor_meta {
+            for path in unnamed {
+                if let Some(meta) = read_face_meta(&path)
+                    && meta.same_family(anchor_meta)
+                {
+                    faces.entry((meta.weight, meta.italic)).or_insert(path);
+                }
+            }
+        }
+        faces.insert(anchor_style, anchor.to_path_buf());
         Self {
             faces,
-            anchor: (anchor_weight, anchor_italic),
+            anchor: anchor_style,
         }
     }
 

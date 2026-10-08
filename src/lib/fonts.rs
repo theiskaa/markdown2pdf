@@ -334,6 +334,126 @@ pub(crate) fn split_face_stem(stem: &str) -> (&str, u16, bool) {
         .unwrap_or((stem, 400, false))
 }
 
+/// Family, weight, and slant a font file declares about itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FaceMeta {
+    /// Family name, normalized by [`normalize_font_name`].
+    pub family: String,
+    pub weight: u16,
+    pub italic: bool,
+    /// OS/2 width class, when the font has an OS/2 table.
+    pub width: Option<u16>,
+}
+
+impl FaceMeta {
+    /// Whether `other` is another face of the same family. Condensed
+    /// and expanded cuts that share a family name are kept apart.
+    pub fn same_family(&self, other: &FaceMeta) -> bool {
+        self.family == other.family
+            && (self.width.is_none() || other.width.is_none() || self.width == other.width)
+    }
+}
+
+/// Read a font's family, weight, and slant from its `name`, `OS/2`, and
+/// `head` tables. Only the table directory and those three tables are
+/// read, so scanning a large font directory doesn't load every file.
+///
+/// Windows names faces with short codes (`segoeuib.ttf`, `arialbd.ttf`),
+/// so file names alone can't tell which files belong to a family.
+///
+/// Weight comes from `usWeightClass`, else the English style name, else
+/// the `macStyle` bold bit. Slant comes from `fsSelection`, else
+/// `macStyle` or the style name. Returns `None` for unreadable files,
+/// collections, and fonts without a family name.
+pub(crate) fn read_face_meta(path: &Path) -> Option<FaceMeta> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut header = [0u8; 12];
+    file.read_exact(&mut header).ok()?;
+    if !matches!(&header[..4], [0, 1, 0, 0] | b"OTTO" | b"true") {
+        return None;
+    }
+    let num_tables = u16::from_be_bytes([header[4], header[5]]) as usize;
+    let mut records = vec![0u8; num_tables * 16];
+    file.read_exact(&mut records).ok()?;
+    let mut table = |tag: &[u8; 4]| -> Option<Vec<u8>> {
+        let record = records.chunks_exact(16).find(|r| &r[..4] == tag)?;
+        let offset = u32::from_be_bytes(record[8..12].try_into().ok()?);
+        let length = u32::from_be_bytes(record[12..16].try_into().ok()?);
+        // Guard against corrupt lengths; real name tables are a few KB.
+        if length > 1 << 20 {
+            return None;
+        }
+        let mut data = vec![0u8; length as usize];
+        file.seek(SeekFrom::Start(offset.into())).ok()?;
+        file.read_exact(&mut data).ok()?;
+        Some(data)
+    };
+    let name = table(b"name")?;
+    let os2 = table(b"OS/2").filter(|t| t.len() >= 64);
+    let head = table(b"head").filter(|t| t.len() >= 46);
+
+    let names = ttf_parser::name::Table::parse(&name)?.names;
+    let english = |id: u16| {
+        let mut fallback = None;
+        for n in names {
+            if n.name_id != id {
+                continue;
+            }
+            let english = match n.platform_id {
+                ttf_parser::PlatformId::Windows => n.language_id == 0x409,
+                ttf_parser::PlatformId::Macintosh => n.language_id == 0,
+                _ => false,
+            };
+            match n.to_string() {
+                Some(s) if english => return Some(s),
+                Some(s) => fallback = fallback.or(Some(s)),
+                None => {}
+            }
+        }
+        fallback
+    };
+    let family = english(ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
+        .or_else(|| english(ttf_parser::name_id::FAMILY))?;
+    let style_name = english(ttf_parser::name_id::TYPOGRAPHIC_SUBFAMILY)
+        .or_else(|| english(ttf_parser::name_id::SUBFAMILY))
+        .and_then(|s| parse_face_style(&normalize_font_name(&s)));
+    let mac_style = head.map(|h| u16::from_be_bytes([h[44], h[45]]));
+
+    let (weight, italic, width) = match os2 {
+        Some(os2) => {
+            let weight = u16::from_be_bytes([os2[4], os2[5]]);
+            let width = u16::from_be_bytes([os2[6], os2[7]]);
+            let selection = u16::from_be_bytes([os2[62], os2[63]]);
+            // Some old fonts use the 1-9 scale from early specs.
+            let weight = if (1..=9).contains(&weight) {
+                weight * 100
+            } else {
+                weight
+            };
+            // Bit 0 is ITALIC, bit 9 is OBLIQUE.
+            (weight, selection & 0x201 != 0, Some(width))
+        }
+        None => {
+            let weight = style_name
+                .map(|(w, _)| w)
+                .filter(|&w| w != 400)
+                .or_else(|| mac_style.filter(|s| s & 1 != 0).map(|_| 700))
+                .unwrap_or(400);
+            let italic = mac_style.is_some_and(|s| s & 2 != 0)
+                || style_name.is_some_and(|(_, italic)| italic);
+            (weight, italic, None)
+        }
+    };
+    Some(FaceMeta {
+        family: normalize_font_name(&family),
+        weight,
+        italic,
+        width,
+    })
+}
+
 /// Collect `.ttf` / `.otf` files below `dir`, at most `depth` levels
 /// down, in sorted order so ties resolve the same way on every run.
 /// Canonical directory paths are tracked so symlink cycles terminate.
@@ -568,6 +688,28 @@ mod tests {
             std::os::unix::fs::symlink(&dir, dir.join("fonts/loop")).unwrap();
             assert!(find_system_font_in("Foo", std::slice::from_ref(&dir)).is_some());
             assert!(find_system_font_in("Missing", &[dir]).is_none());
+        });
+    }
+
+    #[test]
+    fn faces_of_another_width_are_another_family() {
+        let face = |family: &str, width| FaceMeta {
+            family: family.into(),
+            weight: 400,
+            italic: false,
+            width,
+        };
+        assert!(face("arial", Some(5)).same_family(&face("arial", Some(5))));
+        assert!(face("arial", None).same_family(&face("arial", Some(3))));
+        assert!(!face("arial", Some(5)).same_family(&face("arial", Some(3))));
+        assert!(!face("arial", Some(5)).same_family(&face("tahoma", Some(5))));
+    }
+
+    #[test]
+    fn non_font_files_have_no_face_metadata() {
+        with_font_dir(&["empty.ttf"], |dir| {
+            assert_eq!(read_face_meta(&dir.join("empty.ttf")), None);
+            assert_eq!(read_face_meta(&dir.join("missing.ttf")), None);
         });
     }
 
