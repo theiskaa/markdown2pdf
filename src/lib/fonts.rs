@@ -354,17 +354,14 @@ impl FaceMeta {
     }
 }
 
-/// Read a font's family, weight, and slant from its `name`, `OS/2`, and
-/// `head` tables. Only the table directory and those three tables are
-/// read, so scanning a large font directory doesn't load every file.
+/// Read a font file's family, weight, and slant. Only the table
+/// directory and the `name`, `OS/2`, and `head` tables are read, so
+/// scanning a large font directory doesn't load every file.
 ///
 /// Windows names faces with short codes (`segoeuib.ttf`, `arialbd.ttf`),
 /// so file names alone can't tell which files belong to a family.
-///
-/// Weight comes from `usWeightClass`, else the English style name, else
-/// the `macStyle` bold bit. Slant comes from `fsSelection`, else
-/// `macStyle` or the style name. Returns `None` for unreadable files,
-/// collections, and fonts without a family name.
+/// Returns `None` for unreadable files, collections, and fonts without
+/// a family name.
 pub(crate) fn read_face_meta(path: &Path) -> Option<FaceMeta> {
     use std::io::{Read, Seek, SeekFrom};
 
@@ -391,10 +388,24 @@ pub(crate) fn read_face_meta(path: &Path) -> Option<FaceMeta> {
         Some(data)
     };
     let name = table(b"name")?;
-    let os2 = table(b"OS/2").filter(|t| t.len() >= 64);
-    let head = table(b"head").filter(|t| t.len() >= 46);
+    let os2 = table(b"OS/2");
+    let head = table(b"head");
+    face_meta_from_tables(&name, os2.as_deref(), head.as_deref())
+}
 
-    let names = ttf_parser::name::Table::parse(&name)?.names;
+/// [`read_face_meta`] for a font already in memory.
+pub(crate) fn face_meta_from_bytes(bytes: &[u8]) -> Option<FaceMeta> {
+    let raw = ttf_parser::RawFace::parse(bytes, 0).ok()?;
+    let table = |tag: &[u8; 4]| raw.table(ttf_parser::Tag::from_bytes(tag));
+    face_meta_from_tables(table(b"name")?, table(b"OS/2"), table(b"head"))
+}
+
+/// Decode family, weight, and slant from raw `name`, `OS/2`, and `head`
+/// tables. Weight comes from `usWeightClass`, else the English style
+/// name, else the `macStyle` bold bit. Slant comes from `fsSelection`,
+/// else `macStyle` or the style name.
+fn face_meta_from_tables(name: &[u8], os2: Option<&[u8]>, head: Option<&[u8]>) -> Option<FaceMeta> {
+    let names = ttf_parser::name::Table::parse(name)?.names;
     let english = |id: u16| {
         let mut fallback = None;
         for n in names {
@@ -419,9 +430,11 @@ pub(crate) fn read_face_meta(path: &Path) -> Option<FaceMeta> {
     let style_name = english(ttf_parser::name_id::TYPOGRAPHIC_SUBFAMILY)
         .or_else(|| english(ttf_parser::name_id::SUBFAMILY))
         .and_then(|s| parse_face_style(&normalize_font_name(&s)));
-    let mac_style = head.map(|h| u16::from_be_bytes([h[44], h[45]]));
+    let mac_style = head
+        .filter(|h| h.len() >= 46)
+        .map(|h| u16::from_be_bytes([h[44], h[45]]));
 
-    let (weight, italic, width) = match os2 {
+    let (weight, italic, width) = match os2.filter(|t| t.len() >= 64) {
         Some(os2) => {
             let weight = u16::from_be_bytes([os2[4], os2[5]]);
             let width = u16::from_be_bytes([os2[6], os2[7]]);

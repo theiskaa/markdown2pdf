@@ -31,8 +31,8 @@ use ttf_parser::Face;
 
 use super::ir::{RunFlags, VariantUsage};
 use crate::fonts::{
-    FontConfig, FontSource, default_body_source, find_system_font, normalize_font_name,
-    parse_face_style, read_face_meta, split_face_stem,
+    FontConfig, FontSource, default_body_source, face_meta_from_bytes, find_system_font,
+    normalize_font_name, parse_face_style, read_face_meta, split_face_stem,
 };
 
 /// The set of built-in PDF fonts the renderer can fall back to when
@@ -225,6 +225,9 @@ pub struct ExternalFont {
     /// can outline glyphs the math font lacks from the full face —
     /// coverage there must not depend on the subset keep-set.
     source_bytes: Vec<u8>,
+    /// Weight and slant the face declares about itself. Requests this
+    /// face can't satisfy are drawn with synthetic bold or slant.
+    style: (u16, bool),
 }
 
 impl ExternalFont {
@@ -254,6 +257,11 @@ impl ExternalFont {
     /// The original (pre-subset) font file bytes.
     pub(crate) fn source_bytes(&self) -> &[u8] {
         &self.source_bytes
+    }
+
+    /// Whether `flags` ask for bold that this face can't draw.
+    fn lacks_bold(&self, flags: RunFlags) -> bool {
+        flags.font_weight() >= 600 && self.style.0 < 600
     }
 }
 
@@ -328,6 +336,9 @@ pub struct EmitChunk {
     /// `split_for_emit`. Precomputed so the call site doesn't have to
     /// re-walk the codepoints.
     pub width_pt: f32,
+    /// `true` iff the run asks for bold but the chunk's face is not
+    /// bold, so the glyphs must be stroked to thicken them.
+    pub synthetic_bold: bool,
 }
 
 /// Per-codepoint choice of which font slot emits it. Used internally
@@ -540,6 +551,16 @@ impl FontSet {
             .sum()
     }
 
+    /// `true` iff `flags` ask for italic but the primary face for them
+    /// is upright, so the caller must slant the text matrix. Built-in
+    /// fonts always have a real oblique face.
+    pub fn needs_synthetic_italic(&self, flags: RunFlags) -> bool {
+        match self.resolve(flags) {
+            FontResolution::External { font, .. } => flags.italic && !font.style.1,
+            FontResolution::Builtin { .. } => false,
+        }
+    }
+
     /// `true` if the *primary* font for `flags` is a built-in and
     /// emitted text has to pass through `to_win1252`. Note: even when
     /// this returns `true`, individual codepoints may still emit via
@@ -574,7 +595,12 @@ impl FontSet {
         // primary as a single chunk. Identical behavior to the
         // pre-fallback code path.
         if self.fallbacks.is_empty() {
-            return vec![chunk_from_resolution(&primary, text.to_string(), size_pt)];
+            return vec![chunk_from_resolution(
+                &primary,
+                flags,
+                text.to_string(),
+                size_pt,
+            )];
         }
         let mut chunks: Vec<EmitChunk> = Vec::new();
         let mut buf = String::new();
@@ -594,7 +620,13 @@ impl FontSet {
             match current {
                 Some(cur) if cur == pick => buf.push(c),
                 Some(cur) => {
-                    chunks.push(self.build_chunk(cur, std::mem::take(&mut buf), &primary, size_pt));
+                    chunks.push(self.build_chunk(
+                        cur,
+                        flags,
+                        std::mem::take(&mut buf),
+                        &primary,
+                        size_pt,
+                    ));
                     buf.push(c);
                     current = Some(pick);
                 }
@@ -605,7 +637,7 @@ impl FontSet {
             }
         }
         if let Some(cur) = current {
-            chunks.push(self.build_chunk(cur, buf, &primary, size_pt));
+            chunks.push(self.build_chunk(cur, flags, buf, &primary, size_pt));
         }
         chunks
     }
@@ -613,12 +645,13 @@ impl FontSet {
     fn build_chunk(
         &self,
         pick: FontPick,
+        flags: RunFlags,
         text: String,
         primary: &FontResolution<'_>,
         size_pt: f32,
     ) -> EmitChunk {
         match pick {
-            FontPick::Primary => chunk_from_resolution(primary, text, size_pt),
+            FontPick::Primary => chunk_from_resolution(primary, flags, text, size_pt),
             FontPick::Fallback(idx) => {
                 let font = &self.fallbacks[idx];
                 let width_pt = font.measure(&text, size_pt);
@@ -627,6 +660,7 @@ impl FontSet {
                     needs_transliteration: false,
                     text,
                     width_pt,
+                    synthetic_bold: font.lacks_bold(flags),
                 }
             }
         }
@@ -644,7 +678,12 @@ fn primary_covers(primary: &FontResolution<'_>, c: char) -> bool {
     }
 }
 
-fn chunk_from_resolution(primary: &FontResolution<'_>, text: String, size_pt: f32) -> EmitChunk {
+fn chunk_from_resolution(
+    primary: &FontResolution<'_>,
+    flags: RunFlags,
+    text: String,
+    size_pt: f32,
+) -> EmitChunk {
     match primary {
         FontResolution::Builtin { handle, metrics } => {
             let width_pt = metrics.measure(&text, size_pt);
@@ -653,6 +692,7 @@ fn chunk_from_resolution(primary: &FontResolution<'_>, text: String, size_pt: f3
                 needs_transliteration: true,
                 text,
                 width_pt,
+                synthetic_bold: false,
             }
         }
         FontResolution::External { handle, font } => {
@@ -662,6 +702,7 @@ fn chunk_from_resolution(primary: &FontResolution<'_>, text: String, size_pt: f3
                 needs_transliteration: false,
                 text,
                 width_pt,
+                synthetic_bold: font.lacks_bold(flags),
             }
         }
     }
@@ -1048,6 +1089,7 @@ fn parse_and_register(
         }
     };
     let units_per_em = face.units_per_em();
+    let style = face_meta_from_bytes(&bytes).map_or((400, false), |m| (m.weight, m.italic));
     // Union of document codepoints + renderer-injected glyphs.
     // Deliberately *not* the whole BMP — keeping the keep-set small
     // is what makes the subset small.
@@ -1145,6 +1187,7 @@ fn parse_and_register(
         // consults (body regular + fallbacks) — a large CJK font's
         // bytes on every variant would be dead weight.
         source_bytes: if retain_source { bytes } else { Vec::new() },
+        style,
     })
 }
 
