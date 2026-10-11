@@ -34,7 +34,7 @@ env:
 jobs:
   test:
     name: cargo test (${{ matrix.label }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     # Scheduled runs only exist to re-check advisories against unchanged
     # code (see the `audit` job) — skip the test matrix on that trigger.
     if: github.event_name != 'schedule'
@@ -46,15 +46,29 @@ jobs:
         # `fetch` and `svg` gate real code (the `--url` CLI branch, remote
         # image fetching, SVG rasterization) that default-features-only CI
         # would otherwise never compile.
+        #
+        # Windows and macOS run the default features too: font discovery
+        # differs per OS (file naming, bundled fonts), and Linux alone
+        # never exercises those paths.
         include:
-          - features: ""
+          - os: ubuntu-latest
+            features: ""
             label: default
-          - features: "--features fetch"
+          - os: ubuntu-latest
+            features: "--features fetch"
             label: fetch
-          - features: "--features svg"
+          - os: ubuntu-latest
+            features: "--features svg"
             label: svg
-          - features: "--all-features"
+          - os: ubuntu-latest
+            features: "--all-features"
             label: all
+          - os: windows-latest
+            features: ""
+            label: windows
+          - os: macos-latest
+            features: ""
+            label: macos
 
     steps:
       - name: Checkout
@@ -75,17 +89,18 @@ jobs:
         run: cargo test --all-targets --verbose ${{ matrix.features }}
 
       - name: Doc tests
-        # Doesn't vary by feature — only run once, on the default entry.
-        if: matrix.features == ''
+        # Doesn't vary by feature or OS — only run once, on the default
+        # entry.
+        if: matrix.label == 'default'
         run: cargo test --doc --verbose
 
       - name: CommonMark spec — surface full report in CI log
         # Same suite as above, but re-runs the spec target with the
         # per-section breakdown captured in the workflow log so any
         # regression in spec compliance is visible without re-running
-        # CI locally. Doesn't vary by feature — only run once, on the
-        # default entry.
-        if: matrix.features == ''
+        # CI locally. Doesn't vary by feature or OS — only run once, on
+        # the default entry.
+        if: matrix.label == 'default'
         run: cargo test --test commonmark_spec -- --nocapture
 
   fmt:

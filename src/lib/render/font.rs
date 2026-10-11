@@ -31,8 +31,8 @@ use ttf_parser::Face;
 
 use super::ir::{RunFlags, VariantUsage};
 use crate::fonts::{
-    FontConfig, FontSource, default_body_source, find_system_font, normalize_font_name,
-    parse_face_style, split_face_stem,
+    FontConfig, FontSource, cached_face_meta, default_body_source, face_meta_from_bytes,
+    find_system_font, normalize_font_name, parse_face_style, split_face_stem,
 };
 
 /// The set of built-in PDF fonts the renderer can fall back to when
@@ -225,6 +225,9 @@ pub struct ExternalFont {
     /// can outline glyphs the math font lacks from the full face —
     /// coverage there must not depend on the subset keep-set.
     source_bytes: Vec<u8>,
+    /// Weight and slant the face declares about itself. Requests this
+    /// face can't satisfy are drawn with synthetic bold or slant.
+    style: (u16, bool),
 }
 
 impl ExternalFont {
@@ -254,6 +257,11 @@ impl ExternalFont {
     /// The original (pre-subset) font file bytes.
     pub(crate) fn source_bytes(&self) -> &[u8] {
         &self.source_bytes
+    }
+
+    /// Whether `flags` ask for bold that this face can't draw.
+    fn lacks_bold(&self, flags: RunFlags) -> bool {
+        flags.font_weight() >= 600 && self.style.0 < 600
     }
 }
 
@@ -328,6 +336,9 @@ pub struct EmitChunk {
     /// `split_for_emit`. Precomputed so the call site doesn't have to
     /// re-walk the codepoints.
     pub width_pt: f32,
+    /// `true` iff the run asks for bold but the chunk's face is not
+    /// bold, so the glyphs must be stroked to thicken them.
+    pub synthetic_bold: bool,
 }
 
 /// Per-codepoint choice of which font slot emits it. Used internally
@@ -540,6 +551,16 @@ impl FontSet {
             .sum()
     }
 
+    /// `true` iff `flags` ask for italic but the primary face for them
+    /// is upright, so the caller must slant the text matrix. Built-in
+    /// fonts always have a real oblique face.
+    pub fn needs_synthetic_italic(&self, flags: RunFlags) -> bool {
+        match self.resolve(flags) {
+            FontResolution::External { font, .. } => flags.italic && !font.style.1,
+            FontResolution::Builtin { .. } => false,
+        }
+    }
+
     /// `true` if the *primary* font for `flags` is a built-in and
     /// emitted text has to pass through `to_win1252`. Note: even when
     /// this returns `true`, individual codepoints may still emit via
@@ -574,7 +595,12 @@ impl FontSet {
         // primary as a single chunk. Identical behavior to the
         // pre-fallback code path.
         if self.fallbacks.is_empty() {
-            return vec![chunk_from_resolution(&primary, text.to_string(), size_pt)];
+            return vec![chunk_from_resolution(
+                &primary,
+                flags,
+                text.to_string(),
+                size_pt,
+            )];
         }
         let mut chunks: Vec<EmitChunk> = Vec::new();
         let mut buf = String::new();
@@ -594,7 +620,13 @@ impl FontSet {
             match current {
                 Some(cur) if cur == pick => buf.push(c),
                 Some(cur) => {
-                    chunks.push(self.build_chunk(cur, std::mem::take(&mut buf), &primary, size_pt));
+                    chunks.push(self.build_chunk(
+                        cur,
+                        flags,
+                        std::mem::take(&mut buf),
+                        &primary,
+                        size_pt,
+                    ));
                     buf.push(c);
                     current = Some(pick);
                 }
@@ -605,7 +637,7 @@ impl FontSet {
             }
         }
         if let Some(cur) = current {
-            chunks.push(self.build_chunk(cur, buf, &primary, size_pt));
+            chunks.push(self.build_chunk(cur, flags, buf, &primary, size_pt));
         }
         chunks
     }
@@ -613,12 +645,13 @@ impl FontSet {
     fn build_chunk(
         &self,
         pick: FontPick,
+        flags: RunFlags,
         text: String,
         primary: &FontResolution<'_>,
         size_pt: f32,
     ) -> EmitChunk {
         match pick {
-            FontPick::Primary => chunk_from_resolution(primary, text, size_pt),
+            FontPick::Primary => chunk_from_resolution(primary, flags, text, size_pt),
             FontPick::Fallback(idx) => {
                 let font = &self.fallbacks[idx];
                 let width_pt = font.measure(&text, size_pt);
@@ -627,6 +660,7 @@ impl FontSet {
                     needs_transliteration: false,
                     text,
                     width_pt,
+                    synthetic_bold: font.lacks_bold(flags),
                 }
             }
         }
@@ -644,7 +678,12 @@ fn primary_covers(primary: &FontResolution<'_>, c: char) -> bool {
     }
 }
 
-fn chunk_from_resolution(primary: &FontResolution<'_>, text: String, size_pt: f32) -> EmitChunk {
+fn chunk_from_resolution(
+    primary: &FontResolution<'_>,
+    flags: RunFlags,
+    text: String,
+    size_pt: f32,
+) -> EmitChunk {
     match primary {
         FontResolution::Builtin { handle, metrics } => {
             let width_pt = metrics.measure(&text, size_pt);
@@ -653,6 +692,7 @@ fn chunk_from_resolution(primary: &FontResolution<'_>, text: String, size_pt: f3
                 needs_transliteration: true,
                 text,
                 width_pt,
+                synthetic_bold: false,
             }
         }
         FontResolution::External { handle, font } => {
@@ -662,6 +702,7 @@ fn chunk_from_resolution(primary: &FontResolution<'_>, text: String, size_pt: f3
                 needs_transliteration: false,
                 text,
                 width_pt,
+                synthetic_bold: font.lacks_bold(flags),
             }
         }
     }
@@ -860,7 +901,8 @@ fn load_external_family(
 /// and slant. The configured file always stands in for normal text.
 struct SiblingFaces {
     faces: BTreeMap<(u16, bool), PathBuf>,
-    /// Weight and slant declared by the configured file's own name.
+    /// Weight and slant of the configured file, from its name when the
+    /// name carries a style suffix and from its metadata otherwise.
     anchor: (u16, bool),
 }
 
@@ -873,15 +915,27 @@ impl SiblingFaces {
     /// own style suffixes are removed (`Foo-Bold` for `Foo-Regular`).
     /// The first form wins, so a family name that ends in a weight word
     /// such as `Roman` or `Black` is not cut short.
+    ///
+    /// Files whose names match neither form still join the family when
+    /// their own metadata names the configured file's family. That is
+    /// how Windows faces such as `segoeuib.ttf` next to `segoeui.ttf`
+    /// are found. Name matches take precedence over metadata matches.
     fn discover(anchor: &Path) -> Self {
         let stem = anchor
             .file_stem()
             .and_then(|s| s.to_str())
             .map(normalize_font_name)
             .unwrap_or_default();
-        let (family, anchor_weight, anchor_italic) = split_face_stem(&stem);
+        let (family, name_weight, name_italic) = split_face_stem(&stem);
+        let anchor_meta = cached_face_meta(anchor);
+        // A name without a style suffix says nothing about the face.
+        let anchor_style = match &anchor_meta {
+            Some(meta) if family == stem => (meta.weight, meta.italic),
+            _ => (name_weight, name_italic),
+        };
         let mut faces = BTreeMap::new();
         let mut extends_anchor = BTreeSet::new();
+        let mut unnamed = Vec::new();
         let parent = anchor
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -908,15 +962,26 @@ impl SiblingFaces {
                 }
             } else {
                 let (name_family, weight, italic) = split_face_stem(&name);
-                if name_family == family && !extends_anchor.contains(&(weight, italic)) {
+                if name_family != family {
+                    unnamed.push(path);
+                } else if !extends_anchor.contains(&(weight, italic)) {
                     faces.entry((weight, italic)).or_insert(path);
                 }
             }
         }
-        faces.insert((anchor_weight, anchor_italic), anchor.to_path_buf());
+        if let Some(anchor_meta) = &anchor_meta {
+            for path in unnamed {
+                if let Some(meta) = cached_face_meta(&path)
+                    && meta.same_family(anchor_meta)
+                {
+                    faces.entry((meta.weight, meta.italic)).or_insert(path);
+                }
+            }
+        }
+        faces.insert(anchor_style, anchor.to_path_buf());
         Self {
             faces,
-            anchor: (anchor_weight, anchor_italic),
+            anchor: anchor_style,
         }
     }
 
@@ -1024,6 +1089,7 @@ fn parse_and_register(
         }
     };
     let units_per_em = face.units_per_em();
+    let style = face_meta_from_bytes(&bytes).map_or((400, false), |m| (m.weight, m.italic));
     // Union of document codepoints + renderer-injected glyphs.
     // Deliberately *not* the whole BMP — keeping the keep-set small
     // is what makes the subset small.
@@ -1121,6 +1187,7 @@ fn parse_and_register(
         // consults (body regular + fallbacks) — a large CJK font's
         // bytes on every variant would be dead weight.
         source_bytes: if retain_source { bytes } else { Vec::new() },
+        style,
     })
 }
 

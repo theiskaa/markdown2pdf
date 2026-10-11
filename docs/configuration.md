@@ -94,6 +94,9 @@ example, `Foo-Regular.ttf` can select `Foo-Light.ttf`, `Foo-Medium.ttf`,
 `Times New Roman Bold.ttf`. Discovery ignores capitalization, spaces,
 hyphens, and underscores, and accepts `.ttf` and `.otf`. Italic and oblique
 suffixes are supported, including `Foo-LightItalic.ttf` and `Foo-BoldOblique.ttf`.
+Files whose names don't follow this pattern, such as Windows' `segoeuib.ttf`
+next to `segoeui.ttf`, are matched by the family name stored in the font, with
+weight and slant read from the font itself.
 
 The configured file is always the normal face, and other weights are chosen
 relative to it: heavier requests never select a face lighter than the
@@ -103,7 +106,7 @@ configured file, and lighter requests never select a heavier one. So
 
 Selection prefers the requested slant, then the closest available weight;
 equal distances select the lighter face up to 500 and the heavier face above.
-If no italic face exists, an upright face is used. Markdown bold requests at
+If no italic face exists, an upright face is used and slanted. Markdown bold requests at
 least 700, preserving heavier configured weights. This applies to block
 typography and inline code. Inline code with a `normal` `[code_inline]`
 weight inherits the surrounding weight, so code in a heading stays bold; any
@@ -111,7 +114,9 @@ other value sets the weight of all inline code.
 
 Built-in PDF fonts still offer only regular/bold (600 and above selects bold).
 Raw font bytes have no directory for sibling discovery. This is static-file
-selection; variable-font weight axes and synthetic weights are not supported.
+selection; variable-font weight axes are not supported. When a request of 600
+or above finds no face that heavy, the chosen face is drawn with stroked
+outlines as a synthetic bold.
 
 System font names are searched in the platform font directories and their
 subdirectories: `/System/Library/Fonts`, `/Library/Fonts`, and
@@ -119,7 +124,9 @@ subdirectories: `/System/Library/Fonts`, `/Library/Fonts`, and
 `$XDG_DATA_HOME/fonts` (default `~/.local/share/fonts`), and `~/.fonts` on
 Linux; `C:\Windows\Fonts` and `%LOCALAPPDATA%\Microsoft\Windows\Fonts` on
 Windows. Names match file names ignoring case, spaces, hyphens, and
-underscores, so `Noto Sans` finds `NotoSans-Regular.ttf`.
+underscores, so `Noto Sans` finds `NotoSans-Regular.ttf`. When no file name
+matches, the family name stored in each font is compared instead, so
+`Times New Roman` finds Windows' `times.ttf`.
 
 ## Defaults cascade
 
